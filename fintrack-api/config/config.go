@@ -125,11 +125,11 @@ func LoadConfig() (*Config, error) {
 
 	config := &Config{
 		Database: DatabaseConfig{
-			Host:     getEnv("DB_HOST", "8.163.5.7"),
-			Port:     getEnv("DB_PORT", "50432"),
-			User:     getEnv("DB_USER", "user_THtJYy"),
-			Password: getEnv("DB_PASSWORD", "password_CnKYP8"),
-			DBName:   getEnv("DB_NAME", "fintrack"),
+			Host:     getEnv("DB_HOST", "localhost"),
+			Port:     getEnv("DB_PORT", "5432"),
+			User:     getEnv("DB_USER", "postgres"),
+			Password: getEnv("DB_PASSWORD", ""),
+			DBName:   getEnv("DB_NAME", "fintrack_db"),
 			SSLMode:  getEnv("DB_SSLMODE", "disable"),
 		},
 		Server: ServerConfig{

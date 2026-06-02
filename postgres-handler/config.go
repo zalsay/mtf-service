@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 	"log"
 	"os"
+
+	"github.com/joho/godotenv"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func getEnv(key, defaultValue string) string {
@@ -16,14 +18,17 @@ func getEnv(key, defaultValue string) string {
 }
 
 func NewDatabaseHandler() (*DatabaseHandler, error) {
-	dbHost := getEnv("DB_HOST", "8.163.5.7")
-	dbPort := getEnv("DB_PORT", "50432")
-	dbUser := getEnv("DB_USER", "user_THtJYy")
-	dbPassword := getEnv("DB_PASSWORD", "password_CnKYP8")
-	dbName := getEnv("DB_NAME", "fintrack")
+	_ = godotenv.Load()
 
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		dbHost, dbPort, dbUser, dbPassword, dbName)
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPassword := getEnv("DB_PASSWORD", "")
+	dbName := getEnv("DB_NAME", "fintrack")
+	dbSSLMode := getEnv("DB_SSLMODE", "disable")
+
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		dbHost, dbPort, dbUser, dbPassword, dbName, dbSSLMode)
 
 	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
