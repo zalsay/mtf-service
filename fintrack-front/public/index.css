@@ -1,0 +1,166 @@
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/manrope/manrope-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/manrope/manrope-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/manrope/manrope-600.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/manrope/manrope-700.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url("./fonts/manrope/manrope-800.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Noto Sans SC";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/noto-sans-sc/noto-sans-sc-chinese-simplified-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Noto Sans SC";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/noto-sans-sc/noto-sans-sc-chinese-simplified-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Noto Sans SC";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/noto-sans-sc/noto-sans-sc-chinese-simplified-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Material Symbols Outlined";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url("./icons/material-symbols-outlined.woff2") format("woff2");
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "liga";
+}
+
+:root {
+  --premium-gold-card-bg:
+    radial-gradient(circle at top right, rgba(245, 158, 11, 0.16), transparent 34%),
+    #252025;
+  --premium-gold-card-border: rgba(255, 255, 255, 0.10);
+  --premium-gold-card-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+  --premium-gold-soft-bg: rgba(252, 211, 77, 0.14);
+  --premium-gold-soft-border: rgba(253, 230, 138, 0.30);
+  --premium-gold-text: #fef3c7;
+}
+
+.premium-gold-card {
+  background: var(--premium-gold-card-bg);
+  border-color: var(--premium-gold-card-border);
+  box-shadow: var(--premium-gold-card-shadow);
+}
+
+.premium-gold-soft {
+  background: var(--premium-gold-soft-bg);
+  border-color: var(--premium-gold-soft-border);
+  color: var(--premium-gold-text);
+}
+
+@media (max-width: 1023px) {
+  html {
+    font-size: 13px;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  /* 移动端统一收敛 Tailwind 常用字号，贴近主流 App 的信息密度。 */
+  .text-4xl {
+    font-size: 24px !important;
+    line-height: 30px !important;
+  }
+
+  .text-3xl {
+    font-size: 22px !important;
+    line-height: 28px !important;
+  }
+
+  .text-2xl {
+    font-size: 20px !important;
+    line-height: 26px !important;
+  }
+
+  .text-xl {
+    font-size: 18px !important;
+    line-height: 24px !important;
+  }
+
+  .text-lg {
+    font-size: 15px !important;
+    line-height: 21px !important;
+  }
+
+  .text-base {
+    font-size: 13px !important;
+    line-height: 19px !important;
+  }
+
+  .text-sm {
+    font-size: 12px !important;
+    line-height: 17px !important;
+  }
+
+  .text-xs {
+    font-size: 11px !important;
+    line-height: 15px !important;
+  }
+}

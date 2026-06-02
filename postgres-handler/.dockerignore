@@ -1,0 +1,46 @@
+# 排除不必要的文件和目录
+.git
+.gitignore
+*.md
+!README.md
+Dockerfile
+.dockerignore
+
+# 排除构建产物
+postgres-handler
+*.exe
+*.dll
+*.so
+*.dylib
+
+# 排除测试文件
+*_test.go
+test_*.sh
+test_*.go
+
+# 排除日志和临时文件
+*.log
+*.tmp
+*.temp
+logs/
+tmp/
+temp/
+
+# 排除IDE和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 排除操作系统文件
+.DS_Store
+Thumbs.db
+
+# 排除环境配置文件（保留示例文件）
+.env
+!.env.example
+
+# 排除数据目录
+data/
+backup/

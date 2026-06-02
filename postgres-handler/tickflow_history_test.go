@@ -1,0 +1,115 @@
+package main
+
+import (
+	"testing"
+	"time"
+)
+
+func TestNormalizeEastmoneyKlines(t *testing.T) {
+	rows := []string{
+		"2026-05-06,1365.10,1375.00,1379.00,1360.05,47806,6550750940.00,1.37,-0.71,-9.79,0.38",
+	}
+
+	records, err := normalizeEastmoneyKlines(rows, "贵州茅台", "600519.SH")
+	if err != nil {
+		t.Fatalf("normalizeEastmoneyKlines returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.TradeDate != "2026-05-06" {
+		t.Fatalf("TradeDate = %q, want 2026-05-06", record.TradeDate)
+	}
+	if record.Open != 1365.10 || record.Close != 1375.00 || record.High != 1379.00 || record.Low != 1360.05 {
+		t.Fatalf("unexpected OHLC: %#v", record)
+	}
+	if record.Volume != 47806 {
+		t.Fatalf("Volume = %d, want 47806", record.Volume)
+	}
+	if record.PercentageChange != -0.71 || record.AmountChange != -9.79 || record.TurnoverRate != 0.38 {
+		t.Fatalf("unexpected change fields: %#v", record)
+	}
+	if record.Name != "贵州茅台" || record.Symbol != "600519.SH" {
+		t.Fatalf("unexpected identity fields: %#v", record)
+	}
+}
+
+func TestNormalizeBaiduKlinesFiltersDateRange(t *testing.T) {
+	marketData := "1777939200,2026-05-06,1365.10,1375.00,4780600,1379.00,1360.05,6550750940.00,-9.79,-0.71,0.38,1384.79;" +
+		"1778025600,2026-05-07,1375.00,1371.05,4046100,1388.00,1370.01,5573286315.00,-3.95,-0.29,0.32,1375.00"
+	startDate := time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2026, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	records, err := normalizeBaiduKlines(marketData, "600519.SH", startDate, endDate)
+	if err != nil {
+		t.Fatalf("normalizeBaiduKlines returned error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	record := records[0]
+	if record.TradeDate != "2026-05-07" {
+		t.Fatalf("TradeDate = %q, want 2026-05-07", record.TradeDate)
+	}
+	if record.Open != 1375.00 || record.Close != 1371.05 || record.High != 1388.00 || record.Low != 1370.01 {
+		t.Fatalf("unexpected OHLC: %#v", record)
+	}
+	if record.Volume != 4046100 {
+		t.Fatalf("Volume = %d, want 4046100", record.Volume)
+	}
+	if record.PercentageChange != -0.29 || record.AmountChange != -3.95 || record.TurnoverRate != 0.32 {
+		t.Fatalf("unexpected change fields: %#v", record)
+	}
+}
+
+func TestHistoryProviderOrder(t *testing.T) {
+	t.Setenv("HISTORY_PROVIDER_ORDER", "baidu, tickflow, eastmoney, baidu")
+
+	got := historyProviderOrder()
+	want := []string{baiduProviderName, tickflowProviderName, eastmoneyProviderName}
+	if len(got) != len(want) {
+		t.Fatalf("historyProviderOrder len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("historyProviderOrder[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestEastmoneySecIDAndFQT(t *testing.T) {
+	cases := map[string]string{
+		"600519.SH": "1.600519",
+		"sh600519":  "1.600519",
+		"000001.SZ": "0.000001",
+		"sz000001":  "0.000001",
+	}
+	for input, expected := range cases {
+		got, err := eastmoneySecID(input, 1)
+		if err != nil {
+			t.Fatalf("eastmoneySecID(%q) returned error: %v", input, err)
+		}
+		if got != expected {
+			t.Fatalf("eastmoneySecID(%q) = %q, want %q", input, got, expected)
+		}
+	}
+	if eastmoneyFQT("qfq") != "1" || eastmoneyFQT("hfq") != "2" || eastmoneyFQT("none") != "0" {
+		t.Fatalf("unexpected eastmoneyFQT mapping")
+	}
+}
+
+func TestDefaultHistoryProviderOrderDoesNotRequireEnv(t *testing.T) {
+	t.Setenv("HISTORY_PROVIDER_ORDER", "")
+
+	got := historyProviderOrder()
+	want := []string{eastmoneyProviderName, baiduProviderName, tickflowProviderName}
+	if len(got) != len(want) {
+		t.Fatalf("historyProviderOrder len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("historyProviderOrder[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

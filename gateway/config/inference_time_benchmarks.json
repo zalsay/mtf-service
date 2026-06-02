@@ -1,0 +1,187 @@
+{
+  "generated_at": "2026-05-20T16:31:14.706266+08:00",
+  "benchmark_stock_code": "510050",
+  "benchmark_stock_type": 2,
+  "benchmark_years": 15,
+  "time_unit": "seconds",
+  "benchmarks": [
+    {
+      "generated_at": "2026-05-20T16:10:04.413331+08:00",
+      "backend": "rocm",
+      "prediction_type": "non_cov",
+      "estimate_field": "processing_time_sec",
+      "results": [
+        {
+          "context_len": 512,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 23.89379572868347,
+          "http_elapsed_sec": 23.999685287475586,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 512,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 12.370503425598145,
+          "http_elapsed_sec": 12.443114280700684,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 512,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 6.832504987716675,
+          "http_elapsed_sec": 6.893838405609131,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 30.73046898841858,
+          "http_elapsed_sec": 30.909857273101807,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 15.789446592330933,
+          "http_elapsed_sec": 15.865463733673096,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.6"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 8.638622283935547,
+          "http_elapsed_sec": 8.702348947525024,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.6"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 48.563133001327515,
+          "http_elapsed_sec": 48.66913151741028,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 25.15293550491333,
+          "http_elapsed_sec": 25.23011565208435,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.6"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 13.781440019607544,
+          "http_elapsed_sec": 13.918967723846436,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.6"
+        }
+      ]
+    },
+    {
+      "generated_at": "2026-05-20T16:28:59.732098+08:00",
+      "backend": "xpu",
+      "prediction_type": "cov",
+      "estimate_field": "total_elapsed_sec",
+      "results": [
+        {
+          "context_len": 512,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 8.06071925163269,
+          "http_elapsed_sec": 0.2882568836212158,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 512,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 6.046440601348877,
+          "http_elapsed_sec": 0.25720810890197754,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.9"
+        },
+        {
+          "context_len": 512,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 6.039941072463989,
+          "http_elapsed_sec": 0.26275205612182617,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.9"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 12.069602012634277,
+          "http_elapsed_sec": 0.25400400161743164,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 8.04502248764038,
+          "http_elapsed_sec": 0.2990870475769043,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.7"
+        },
+        {
+          "context_len": 1024,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 6.034927845001221,
+          "http_elapsed_sec": 0.2746562957763672,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 7,
+          "estimated_inference_time_sec": 18.07657027244568,
+          "http_elapsed_sec": 0.3129417896270752,
+          "total_chunks": 104,
+          "validation_chunks": 52,
+          "best_prediction_item": "mtf-0.6"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 14,
+          "estimated_inference_time_sec": 10.046512603759766,
+          "http_elapsed_sec": 0.30539417266845703,
+          "total_chunks": 52,
+          "validation_chunks": 26,
+          "best_prediction_item": "mtf-0.5"
+        },
+        {
+          "context_len": 2048,
+          "horizon_len": 28,
+          "estimated_inference_time_sec": 8.041405200958252,
+          "http_elapsed_sec": 0.3131730556488037,
+          "total_chunks": 26,
+          "validation_chunks": 13,
+          "best_prediction_item": "mtf-0.6"
+        }
+      ]
+    }
+  ]
+}

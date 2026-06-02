@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Codex local workspace settings
+.codex/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Data files (large files)
+*.feather
+*.csv
+*.parquet
+*.h5
+*.hdf5
+
+# Model files (large files)
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Logs
+*.log
+logs/
+*.pid
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+*.safetensors
+*.ckpt
+
+*.png
+*.csv
+ai-fucntions/timesfm_inference/timesfm-2p5-functions/timesfm-2.5
+fintrack-ai-front/node_modules
+ai-fucntions/timesfm_inference/timesfm-2p5-functions/timesfm-2.5
+*.txt
+!ai-fucntions/requirements-rocm.txt
+run
+ai-fucntions/timesfm_inference/forecast-results
+
+dependencies/
+.xpu/
+.xpu_cov/
+ai-fucntions/forecast-results/*.json
+ai-fucntions/inference-gateway
+fintrack-api/run
+postgres-handler/postgres-handler
+postgres-handler/postgres-handler-linux-amd64
+
+# Private service repos live outside this public repo.
+ai-fucntions/
+ai-functions/

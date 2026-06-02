@@ -1,0 +1,5 @@
+{
+  "name": "FinTrack AI",
+  "description": "An AI-powered stock tracking application that provides predicted trends, a customizable watchlist, and portfolio management features to help users make smarter investment decisions.",
+  "requestFramePermissions": []
+}
