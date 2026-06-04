@@ -6,6 +6,7 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:59000';
     const devBasePath = '/dev/ai-fin/fintrack-front';
+    const appBasePath = '/ai-fin/fintrack-front';
     return {
       server: {
         port: 3000,
@@ -16,6 +17,11 @@ export default defineConfig(({ mode }) => {
             target: apiProxyTarget,
             changeOrigin: true,
             rewrite: (path) => path.replace(devBasePath, ''),
+          },
+          [`${appBasePath}/api/v1`]: {
+            target: apiProxyTarget,
+            changeOrigin: true,
+            rewrite: (path) => path.replace(appBasePath, ''),
           },
           '/api/v1': {
             target: apiProxyTarget,
