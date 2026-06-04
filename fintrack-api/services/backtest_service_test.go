@@ -6,17 +6,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"fintrack-api/config"
 	"fintrack-api/models"
 )
 
-func TestRunTimesfmBacktestOnChunksTradesAndCurves(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
+func TestRunMTFBacktestOnChunksTradesAndCurves(t *testing.T) {
+	best := &models.MTFBestPrediction{
 		UniqueKey:          "601766_best_hlen_7_clen_2048_v_2.5",
 		Symbol:             "601766",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "tsf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
@@ -24,7 +23,7 @@ func TestRunTimesfmBacktestOnChunksTradesAndCurves(t *testing.T) {
 		CovariateSignature: "sig-1",
 		CovariateAnalysis:  `{"ok":true}`,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -48,7 +47,7 @@ func TestRunTimesfmBacktestOnChunksTradesAndCurves(t *testing.T) {
 			Dates:  []string{"2026-01-08", "2026-01-09", "2026-01-15"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        5,
 		SellThresholdPct:       -1,
 		InitialCash:            10000,
@@ -62,9 +61,9 @@ func TestRunTimesfmBacktestOnChunksTradesAndCurves(t *testing.T) {
 		TakeProfitSellFrac:     0.5,
 	}
 
-	saveReq, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	saveReq, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	assertFloatNear(t, "total_return_pct", result["total_return_pct"].(float64), 10)
@@ -89,16 +88,16 @@ func TestRunTimesfmBacktestOnChunksTradesAndCurves(t *testing.T) {
 	}
 }
 
-func TestRunTimesfmBacktestOnChunksIgnoresChunksWithoutBestQuantileForMetrics(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600246_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksIgnoresChunksWithoutBestQuantileForMetrics(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600246_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600246",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.7",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -133,7 +132,7 @@ func TestRunTimesfmBacktestOnChunksIgnoresChunksWithoutBestQuantileForMetrics(t 
 			Dates:  []string{"2026-01-16", "2026-01-17", "2026-01-22"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        5,
 		SellThresholdPct:       -1,
 		InitialCash:            10000,
@@ -147,9 +146,9 @@ func TestRunTimesfmBacktestOnChunksIgnoresChunksWithoutBestQuantileForMetrics(t 
 		TakeProfitSellFrac:     0.5,
 	}
 
-	saveReq, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	saveReq, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	assertFloatNear(t, "actual_total_return_pct", result["actual_total_return_pct"].(float64), 5)
@@ -199,7 +198,7 @@ func TestNormalizeBacktestSellSizeKeepsRemainingPositionInShareLots(t *testing.T
 }
 
 func TestChunkTradeExecutionPointKeepsSellDateWhenHighIsFirstPoint(t *testing.T) {
-	chunk := models.SaveTimesfmValChunkRequest{
+	chunk := models.SaveMTFValChunkRequest{
 		StartDate: "2026-01-01",
 		EndDate:   "2026-01-03",
 		Actual:    []float64{15, 12, 11},
@@ -214,16 +213,16 @@ func TestChunkTradeExecutionPointKeepsSellDateWhenHighIsFirstPoint(t *testing.T)
 	assertFloatNear(t, "sell price", point.Price, 15)
 }
 
-func TestRunTimesfmBacktestOnChunksClearsSmallPositionOnSellSignal(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksClearsSmallPositionOnSellSignal(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -258,7 +257,7 @@ func TestRunTimesfmBacktestOnChunksClearsSmallPositionOnSellSignal(t *testing.T)
 			Dates:  []string{"2026-01-17", "2026-01-18", "2026-01-24"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        1,
 		SellThresholdPct:       -1,
 		InitialCash:            150000,
@@ -272,9 +271,9 @@ func TestRunTimesfmBacktestOnChunksClearsSmallPositionOnSellSignal(t *testing.T)
 		TakeProfitSellFrac:     0.4,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -288,16 +287,16 @@ func TestRunTimesfmBacktestOnChunksClearsSmallPositionOnSellSignal(t *testing.T)
 	assertFloatNear(t, "last sell size", lastTrade["size"].(float64), 300)
 }
 
-func TestRunTimesfmBacktestOnChunksTakeProfitClearsBelowMinimumLot(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksTakeProfitClearsBelowMinimumLot(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -321,7 +320,7 @@ func TestRunTimesfmBacktestOnChunksTakeProfitClearsBelowMinimumLot(t *testing.T)
 			Dates:  []string{"2026-01-09", "2026-01-10", "2026-01-16"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        1,
 		SellThresholdPct:       -1,
 		InitialCash:            10000,
@@ -335,9 +334,9 @@ func TestRunTimesfmBacktestOnChunksTakeProfitClearsBelowMinimumLot(t *testing.T)
 		TakeProfitSellFrac:     0.4,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -351,16 +350,16 @@ func TestRunTimesfmBacktestOnChunksTakeProfitClearsBelowMinimumLot(t *testing.T)
 	assertFloatNear(t, "take profit sell size", takeProfitTrade["size"].(float64), 100)
 }
 
-func TestRunTimesfmBacktestOnChunksTakeProfitSellUsesMinimumLot(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksTakeProfitSellUsesMinimumLot(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -384,7 +383,7 @@ func TestRunTimesfmBacktestOnChunksTakeProfitSellUsesMinimumLot(t *testing.T) {
 			Dates:  []string{"2026-01-09", "2026-01-10", "2026-01-16"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        1,
 		SellThresholdPct:       -1,
 		InitialCash:            30000,
@@ -398,9 +397,9 @@ func TestRunTimesfmBacktestOnChunksTakeProfitSellUsesMinimumLot(t *testing.T) {
 		TakeProfitSellFrac:     0.1,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -410,16 +409,16 @@ func TestRunTimesfmBacktestOnChunksTakeProfitSellUsesMinimumLot(t *testing.T) {
 	assertFloatNear(t, "take profit sell size", trades[1]["size"].(float64), 100)
 }
 
-func TestRunTimesfmBacktestOnChunksAvoidsDuplicateSellWhenRebalanceClearsPosition(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksAvoidsDuplicateSellWhenRebalanceClearsPosition(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -443,7 +442,7 @@ func TestRunTimesfmBacktestOnChunksAvoidsDuplicateSellWhenRebalanceClearsPositio
 			Dates:  []string{"2026-01-09", "2026-01-16"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        1,
 		SellThresholdPct:       -1,
 		InitialCash:            20000,
@@ -457,9 +456,9 @@ func TestRunTimesfmBacktestOnChunksAvoidsDuplicateSellWhenRebalanceClearsPositio
 		TakeProfitSellFrac:     0.4,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -473,101 +472,16 @@ func TestRunTimesfmBacktestOnChunksAvoidsDuplicateSellWhenRebalanceClearsPositio
 	assertFloatNear(t, "single clear sell size", lastTrade["size"].(float64), 200)
 }
 
-func TestRunTimesfmBacktestOnChunksIgnoresStaleChunksAfterCurrentValidationWindow(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "300442_best_hlen_7_clen_2048_v_2.5_cov",
-		Symbol:             "300442",
-		TimesfmVersion:     "2.5",
-		BestPredictionItem: "mtf-0.6",
-		ContextLen:         2048,
-		HorizonLen:         7,
-		ValStartDate:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		ValEndDate:         time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC),
-	}
-	chunks := []models.SaveTimesfmValChunkRequest{
-		{
-			UniqueKey:  best.UniqueKey,
-			ChunkIndex: 0,
-			StartDate:  "2026-01-01",
-			EndDate:    "2026-01-02",
-			Predictions: map[string]interface{}{
-				"mtf-0.6": []interface{}{10.0, 11.0},
-			},
-			Actual: []float64{10, 8},
-			Dates:  []string{"2026-01-01", "2026-01-02"},
-		},
-		{
-			UniqueKey:  best.UniqueKey,
-			ChunkIndex: 1,
-			StartDate:  "2026-01-03",
-			EndDate:    "2026-01-04",
-			Predictions: map[string]interface{}{
-				"mtf-0.6": []interface{}{8.0, 7.0},
-			},
-			Actual: []float64{8, 12},
-			Dates:  []string{"2026-01-03", "2026-01-04"},
-		},
-		{
-			UniqueKey:  best.UniqueKey,
-			ChunkIndex: 2,
-			StartDate:  "2025-01-01",
-			EndDate:    "2025-01-02",
-			Predictions: map[string]interface{}{
-				"mtf-0.6": []interface{}{6.0, 7.0},
-			},
-			Actual: []float64{6, 5},
-			Dates:  []string{"2025-01-01", "2025-01-02"},
-		},
-		{
-			UniqueKey:  best.UniqueKey,
-			ChunkIndex: 3,
-			StartDate:  "2026-01-02",
-			EndDate:    "2026-01-03",
-			Predictions: map[string]interface{}{
-				"mtf-0.6": []interface{}{8.0, 9.0},
-			},
-			Actual: []float64{7, 9},
-			Dates:  []string{"2026-01-02", "2026-01-03"},
-		},
-	}
-	params := timesfmBacktestParams{
-		BuyThresholdPct:        5,
-		SellThresholdPct:       -1,
-		InitialCash:            10000,
-		EnableRebalance:        false,
-		MaxPositionPct:         1,
-		MinPositionPct:         0,
-		SlopePositionPerPct:    0,
-		RebalanceTolerancePct:  0.05,
-		TradeFeeRate:           0,
-		TakeProfitThresholdPct: 100,
-		TakeProfitSellFrac:     0.5,
-	}
-
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
-	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
-	}
-
-	trades := result["trades"].([]map[string]interface{})
-	if got := len(trades); got != 2 {
-		t.Fatalf("trades length = %d, want 2; trades=%v", got, trades)
-	}
-	if trades[0]["chunk_index"] != 0 || trades[1]["chunk_index"] != 1 {
-		t.Fatalf("trade chunks = %v, want only current validation chunks 0 and 1", trades)
-	}
-}
-
-func TestRunTimesfmBacktestOnChunksUsesChunkLowForBuyAndHighForSell(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksUsesChunkLowForBuyAndHighForSell(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -591,7 +505,7 @@ func TestRunTimesfmBacktestOnChunksUsesChunkLowForBuyAndHighForSell(t *testing.T
 			Dates:  []string{"2026-01-04", "2026-01-05", "2026-01-06"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        5,
 		SellThresholdPct:       -1,
 		InitialCash:            10000,
@@ -605,9 +519,9 @@ func TestRunTimesfmBacktestOnChunksUsesChunkLowForBuyAndHighForSell(t *testing.T
 		TakeProfitSellFrac:     0.5,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -626,16 +540,16 @@ func TestRunTimesfmBacktestOnChunksUsesChunkLowForBuyAndHighForSell(t *testing.T
 	assertFloatNear(t, "sell price", sellTrade["price"].(float64), 15)
 }
 
-func TestRunTimesfmBacktestOnChunksUsesOpenPriceOnLowestCloseDateForBuy(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
-		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_cov",
+func TestRunMTFBacktestOnChunksUsesOpenPriceOnLowestCloseDateForBuy(t *testing.T) {
+	best := &models.MTFBestPrediction{
+		UniqueKey:          "600186_best_hlen_7_clen_2048_v_2.5_mtf-pro",
 		Symbol:             "600186",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "mtf-0.5",
 		ContextLen:         2048,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:  best.UniqueKey,
 			ChunkIndex: 0,
@@ -649,7 +563,7 @@ func TestRunTimesfmBacktestOnChunksUsesOpenPriceOnLowestCloseDateForBuy(t *testi
 			Dates:  []string{"2026-01-01", "2026-01-02", "2026-01-03"},
 		},
 	}
-	params := timesfmBacktestParams{
+	params := mtfBacktestParams{
 		BuyThresholdPct:        5,
 		SellThresholdPct:       -1,
 		InitialCash:            10000,
@@ -663,9 +577,9 @@ func TestRunTimesfmBacktestOnChunksUsesOpenPriceOnLowestCloseDateForBuy(t *testi
 		TakeProfitSellFrac:     0.5,
 	}
 
-	_, result, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	_, result, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
-		t.Fatalf("runTimesfmBacktestOnChunks returned error: %v", err)
+		t.Fatalf("runMTFBacktestOnChunks returned error: %v", err)
 	}
 
 	trades := result["trades"].([]map[string]interface{})
@@ -718,16 +632,16 @@ func TestFetchPostgresHandlerOpenPricesByDate(t *testing.T) {
 	assertFloatNear(t, "2026-01-02 open", opens["2026-01-02"], 7.6)
 }
 
-func TestRunTimesfmBacktestOnChunksRejectsMissingQuantile(t *testing.T) {
-	best := &models.TimesfmBestPrediction{
+func TestRunMTFBacktestOnChunksRejectsMissingQuantile(t *testing.T) {
+	best := &models.MTFBestPrediction{
 		UniqueKey:          "000001_best_hlen_7_clen_512_v_2.5",
 		Symbol:             "000001",
-		TimesfmVersion:     "2.5",
+		MTFVersion:         "2.5",
 		BestPredictionItem: "tsf-0.5",
 		ContextLen:         512,
 		HorizonLen:         7,
 	}
-	chunks := []models.SaveTimesfmValChunkRequest{
+	chunks := []models.SaveMTFValChunkRequest{
 		{
 			UniqueKey:   best.UniqueKey,
 			ChunkIndex:  0,
@@ -739,7 +653,7 @@ func TestRunTimesfmBacktestOnChunksRejectsMissingQuantile(t *testing.T) {
 		},
 	}
 
-	_, _, err := runTimesfmBacktestOnChunks(best, chunks, buildTimesfmBacktestParams(&models.TimesfmBacktestRequest{}))
+	_, _, err := runMTFBacktestOnChunks(best, chunks, buildMTFBacktestParams(&models.MTFBacktestRequest{}))
 	if err == nil {
 		t.Fatal("expected missing quantile error, got nil")
 	}

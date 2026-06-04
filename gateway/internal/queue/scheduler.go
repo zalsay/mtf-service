@@ -397,7 +397,7 @@ func (s *Scheduler) shouldOrchestrateCovJob(job *models.Job, endpoint backend.En
 	if job == nil {
 		return false
 	}
-	if job.PredictionType != "cov" {
+	if !models.PredictionTypeUsesCovariates(job.PredictionType) {
 		return false
 	}
 	if endpoint.SupportsDirectCov {
@@ -435,7 +435,7 @@ func (s *Scheduler) runOrchestratedCovJob(ctx context.Context, job *models.Job, 
 	mainPath, finalizePath, ok := covOrchestrationPaths(job)
 	if !ok {
 		releaseMain()
-		s.completeJob(job.ID, 0, nil, fmt.Errorf("unsupported cov orchestration target: %s", job.TargetPath))
+		s.completeJob(job.ID, 0, nil, fmt.Errorf("unsupported mtf-pro orchestration target: %s", job.TargetPath))
 		return
 	}
 
@@ -475,7 +475,7 @@ func (s *Scheduler) runOrchestratedCovJob(ctx context.Context, job *models.Job, 
 
 	xregBackend := s.acquireBackendForStage(ctx, models.BackendRoleXReg, job)
 	if xregBackend == nil {
-		s.completeJob(job.ID, 0, nil, fmt.Errorf("no xreg backend available for cov finalize stage"))
+		s.completeJob(job.ID, 0, nil, fmt.Errorf("no xreg backend available for mtf-pro finalize stage"))
 		return
 	}
 	defer s.finishBackendSlot(xregBackend)
@@ -503,7 +503,7 @@ func (s *Scheduler) runOrchestratedCovJob(ctx context.Context, job *models.Job, 
 		return
 	}
 	if stageName != "complete" {
-		s.completeJob(job.ID, finalizeStatusCode, finalizeBody, fmt.Errorf("cov finalize stage returned no final result"))
+		s.completeJob(job.ID, finalizeStatusCode, finalizeBody, fmt.Errorf("mtf-pro finalize stage returned no final result"))
 		return
 	}
 	s.completeJob(job.ID, finalizeStatusCode, finalizeBody, nil)
@@ -602,14 +602,14 @@ func backendMatchesJob(endpoint backend.Endpoint, job *models.Job) bool {
 		return false
 	}
 
-	predictionType := job.PredictionType
+	predictionType := models.NormalizePredictionType(job.PredictionType)
 	if predictionType == "" {
-		predictionType = "non_cov"
+		predictionType = models.PredictionTypeMTFLite
 	}
 	switch predictionType {
-	case "cov":
+	case models.PredictionTypeMTFPro:
 		return endpoint.SupportsCov
-	case "non_cov":
+	case models.PredictionTypeMTFLite:
 		return endpoint.SupportsNonCov
 	default:
 		return endpoint.SupportsCov || endpoint.SupportsNonCov

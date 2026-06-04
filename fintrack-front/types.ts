@@ -45,14 +45,17 @@ export interface StockData {
   prediction?: StockPrediction;
 }
 
-export interface TimesfmBest {
+export interface MTFBest {
   unique_key: string;
   symbol: string;
-  timesfm_version: string;
+  mtf_version: string;
   best_prediction_item: string;
   best_metrics: string | Record<string, unknown>;
   prediction_type?: string;
+  mtf_lite_unique_key?: string;
+  mtf_pro_unique_key?: string;
   non_cov_unique_key?: string;
+  cov_unique_key?: string;
   covariate_signature?: string;
   covariate_config?: string | Record<string, unknown> | null;
   covariate_analysis?: string | Record<string, unknown> | null;
@@ -64,7 +67,7 @@ export interface TimesfmBest {
   updated_at?: string;
 }
 
-export interface TimesfmChunk {
+export interface MTFChunk {
   unique_key: string;
   chunk_index: number;
   start_date: string;
@@ -81,8 +84,8 @@ export interface TimesfmChunk {
 }
 
 export interface PublicPredictionItem {
-  best: TimesfmBest;
-  chunks: TimesfmChunk[];
+  best: MTFBest;
+  chunks: MTFChunk[];
   max_deviation_percent?: number;
 }
 

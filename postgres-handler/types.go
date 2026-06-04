@@ -66,7 +66,7 @@ type IndexDailyData struct {
 
 func (IndexDailyData) TableName() string { return "index_daily" }
 
-type TimesfmForecast struct {
+type MTFForecast struct {
 	Symbol          string    `json:"symbol" gorm:"column:symbol"`
 	Ds              time.Time `json:"ds" gorm:"column:ds"`
 	Tsf             float64   `json:"tsf" gorm:"column:tsf"`
@@ -93,7 +93,7 @@ type TimesfmForecast struct {
 	HorizonLen      int       `json:"horizon_len" gorm:"column:horizon_len"`
 }
 
-func (TimesfmForecast) TableName() string { return "timesfm_forecast" }
+func (MTFForecast) TableName() string { return "mtf_forecast" }
 
 type StockCommentDaily struct {
 	Code                     string    `json:"code" gorm:"column:code;primaryKey"`
@@ -144,7 +144,7 @@ type StrategyParams struct {
 	UpdatedAt              time.Time `json:"updated_at" gorm:"column:updated_at"`
 }
 
-func (StrategyParams) TableName() string { return "timesfm_strategy_params" }
+func (StrategyParams) TableName() string { return "mtf_strategy_params" }
 
 type LlmTokenUsage struct {
 	ID               int       `json:"id" gorm:"column:id;primaryKey"`

@@ -3,9 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"fintrack-api/models"
 	"fintrack-api/services"
@@ -19,6 +21,51 @@ type WatchlistHandler struct {
 
 func NewWatchlistHandler(watchlistService *services.WatchlistService) *WatchlistHandler {
 	return &WatchlistHandler{watchlistService: watchlistService}
+}
+
+func extractPaymentCredential(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	lower := strings.ToLower(header)
+	if strings.HasPrefix(lower, "alipay-ai-pay ") {
+		return strings.TrimSpace(header[len("alipay-ai-pay "):])
+	}
+	if strings.HasPrefix(lower, "bearer ") {
+		return strings.TrimSpace(header[len("bearer "):])
+	}
+	return header
+}
+
+func (h *WatchlistHandler) writePaymentRequired(c *gin.Context) {
+	cfg := h.watchlistService.Config()
+	payCfg := cfg.AlipayService
+	resourceID := payCfg.ResourceID
+	if strings.TrimSpace(resourceID) == "" {
+		resourceID = "mtf.predict.once"
+	}
+	resourceName := payCfg.ResourceName
+	if strings.TrimSpace(resourceName) == "" {
+		resourceName = "MTF 单次预测"
+	}
+	c.JSON(http.StatusPaymentRequired, gin.H{
+		"error": "payment required",
+		"payment": gin.H{
+			"status_code": http.StatusPaymentRequired,
+			"protocol":    "alipay-ai-pay-402",
+			"product": gin.H{
+				"resource_id":  resourceID,
+				"name":         resourceName,
+				"amount_cents": payCfg.AmountCents,
+				"currency":     payCfg.Currency,
+			},
+			"payee": gin.H{
+				"merchant_id":   payCfg.MerchantID,
+				"merchant_name": payCfg.MerchantName,
+			},
+		},
+	})
 }
 
 func (h *WatchlistHandler) AddToWatchlist(c *gin.Context) {
@@ -42,6 +89,15 @@ func (h *WatchlistHandler) AddToWatchlist(c *gin.Context) {
 		}
 		if err.Error() == services.ErrDuplicateSymbol.Error() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "duplicate symbol"})
+			return
+		}
+		var limitErr services.WatchlistLimitExceededError
+		if errors.As(err, &limitErr) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "watchlist limit exceeded",
+				"limit": limitErr.Limit,
+				"count": limitErr.Count,
+			})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -228,15 +284,15 @@ func (h *WatchlistHandler) LookupStockName(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"symbol": symbol, "name": name})
 }
 
-// 查询某用户的TimesFM最佳分位预测列表
-func (h *WatchlistHandler) ListTimesfmBestByUser(c *gin.Context) {
+// 查询某用户的MTF最佳分位预测列表
+func (h *WatchlistHandler) ListMTFBestByUser(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
 
-	results, err := h.watchlistService.ListTimesfmBestByUserID(userID.(int))
+	results, err := h.watchlistService.ListMTFBestByUserID(userID.(int))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -248,15 +304,15 @@ func (h *WatchlistHandler) ListTimesfmBestByUser(c *gin.Context) {
 	})
 }
 
-// 按 unique_key 查询单条 TimesFM 最佳分位预测（公开）
-func (h *WatchlistHandler) GetTimesfmBestByUniqueKey(c *gin.Context) {
+// 按 unique_key 查询单条 MTF 最佳分位预测（公开）
+func (h *WatchlistHandler) GetMTFBestByUniqueKey(c *gin.Context) {
 	uniqueKey := c.Query("unique_key")
 	if uniqueKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
 		return
 	}
 
-	item, err := h.watchlistService.GetTimesfmBestByUniqueKey(uniqueKey)
+	item, err := h.watchlistService.GetMTFBestByUniqueKey(uniqueKey)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -269,7 +325,7 @@ func (h *WatchlistHandler) GetTimesfmBestByUniqueKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"prediction": item})
 }
 
-func (h *WatchlistHandler) GetTimesfmBestUniqueKeysByConfig(c *gin.Context) {
+func (h *WatchlistHandler) GetMTFBestUniqueKeysByConfig(c *gin.Context) {
 	symbol := c.Query("symbol")
 	if symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
@@ -288,7 +344,7 @@ func (h *WatchlistHandler) GetTimesfmBestUniqueKeysByConfig(c *gin.Context) {
 		return
 	}
 
-	item, err := h.watchlistService.GetTimesfmBestUniqueKeysByConfig(symbol, horizonLen, contextLen, c.Query("timesfm_version"))
+	item, err := h.watchlistService.GetMTFBestUniqueKeysByConfig(symbol, horizonLen, contextLen, "")
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -301,15 +357,15 @@ func (h *WatchlistHandler) GetTimesfmBestUniqueKeysByConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"prediction": item})
 }
 
-// 按 unique_key 查询单条 TimesFM 回测结果
-func (h *WatchlistHandler) GetTimesfmBacktestByUniqueKey(c *gin.Context) {
+// 按 unique_key 查询单条 MTF 回测结果
+func (h *WatchlistHandler) GetMTFBacktestByUniqueKey(c *gin.Context) {
 	uniqueKey := c.Query("unique_key")
 	if uniqueKey == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
 		return
 	}
 
-	item, err := h.watchlistService.GetTimesfmBacktestByUniqueKey(uniqueKey)
+	item, err := h.watchlistService.GetMTFBacktestByUniqueKey(uniqueKey)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -365,7 +421,7 @@ func (h *WatchlistHandler) GetStrategyParamsByUniqueKey(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
-func (h *WatchlistHandler) buildTimesfmBestWithValidationResponse(items []models.TimesfmBestPrediction) ([]gin.H, error) {
+func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTFBestPrediction) ([]gin.H, error) {
 	keys := make([]string, 0, len(items))
 	for _, item := range items {
 		keys = append(keys, item.UniqueKey)
@@ -500,8 +556,8 @@ func (h *WatchlistHandler) buildTimesfmBestWithValidationResponse(items []models
 	return result, nil
 }
 
-// 公开查询：返回 is_public = 1 的 timesfm-best，并联查对应的验证分块数据
-func (h *WatchlistHandler) ListPublicTimesfmBestWithValidation(c *gin.Context) {
+// 公开查询：返回 is_public = 1 的 mtf-best，并联查对应的验证分块数据
+func (h *WatchlistHandler) ListPublicMTFBestWithValidation(c *gin.Context) {
 	horizonLen := 0
 	if hStr := c.Query("horizon_len"); hStr != "" {
 		if val, err := strconv.Atoi(hStr); err == nil {
@@ -512,13 +568,13 @@ func (h *WatchlistHandler) ListPublicTimesfmBestWithValidation(c *gin.Context) {
 	isAdmin, _ := c.Get("is_admin")
 	includePrivate, _ := isAdmin.(bool)
 
-	items, err := h.watchlistService.ListPublicTimesfmBest(horizonLen, symbol, includePrivate)
+	items, err := h.watchlistService.ListPublicMTFBest(horizonLen, symbol, includePrivate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := h.buildTimesfmBestWithValidationResponse(items)
+	result, err := h.buildMTFBestWithValidationResponse(items)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -527,7 +583,7 @@ func (h *WatchlistHandler) ListPublicTimesfmBestWithValidation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": result, "count": len(result)})
 }
 
-func (h *WatchlistHandler) ListAccessibleTimesfmBestWithValidation(c *gin.Context) {
+func (h *WatchlistHandler) ListAccessibleMTFBestWithValidation(c *gin.Context) {
 	userIDValue, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
@@ -544,13 +600,13 @@ func (h *WatchlistHandler) ListAccessibleTimesfmBestWithValidation(c *gin.Contex
 	isAdmin, _ := c.Get("is_admin")
 	includePrivate, _ := isAdmin.(bool)
 
-	items, err := h.watchlistService.ListAccessibleTimesfmBest(userIDValue.(int), horizonLen, symbol, includePrivate)
+	items, err := h.watchlistService.ListAccessibleMTFBest(userIDValue.(int), horizonLen, symbol, includePrivate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := h.buildTimesfmBestWithValidationResponse(items)
+	result, err := h.buildMTFBestWithValidationResponse(items)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -605,28 +661,28 @@ func (h *WatchlistHandler) GetLatestValidationChunk(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": item})
 }
 
-// 保存 TimesFM 回测结果
-func (h *WatchlistHandler) SaveTimesfmBacktest(c *gin.Context) {
-	var req models.SaveTimesfmBacktestRequest
+// 保存 MTF 回测结果
+func (h *WatchlistHandler) SaveMTFBacktest(c *gin.Context) {
+	var req models.SaveMTFBacktestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := h.watchlistService.SaveTimesfmBacktest(&req); err != nil {
+	if err := h.watchlistService.SaveMTFBacktest(&req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "unique_key": req.UniqueKey})
 }
 
-func (h *WatchlistHandler) TriggerTimesfmPredict(c *gin.Context) {
-	var req models.TimesfmPredictRequest
+func (h *WatchlistHandler) TriggerMTFPredict(c *gin.Context) {
+	var req models.MTFPredictRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	status, body, err := h.watchlistService.TriggerTimesfmPredict(&req)
+	status, body, err := h.watchlistService.TriggerMTFPredict(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -634,7 +690,7 @@ func (h *WatchlistHandler) TriggerTimesfmPredict(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-func (h *WatchlistHandler) TriggerTimesfmPredictBestAuthorized(c *gin.Context) {
+func (h *WatchlistHandler) TriggerMTFPredictBestAuthorized(c *gin.Context) {
 	userValue, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
@@ -647,19 +703,19 @@ func (h *WatchlistHandler) TriggerTimesfmPredictBestAuthorized(c *gin.Context) {
 		return
 	}
 
-	var req models.TimesfmBestTrainRequest
+	var req models.MTFBestTrainRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	normalizedReq, err := services.NormalizeTimesfmBestTrainRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
+	normalizedReq, err := services.NormalizeMTFBestTrainRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
-	status, body, err := h.watchlistService.TriggerTimesfmPredict(normalizedReq)
+	status, body, err := h.watchlistService.TriggerMTFPredict(normalizedReq)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -667,7 +723,7 @@ func (h *WatchlistHandler) TriggerTimesfmPredictBestAuthorized(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-func (h *WatchlistHandler) TriggerTimesfmPredictOnce(c *gin.Context) {
+func (h *WatchlistHandler) TriggerMTFPredictOnce(c *gin.Context) {
 	userValue, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
@@ -680,19 +736,19 @@ func (h *WatchlistHandler) TriggerTimesfmPredictOnce(c *gin.Context) {
 		return
 	}
 
-	var req models.TimesfmPredictRequest
+	var req models.MTFPredictRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	normalizedReq, err := services.NormalizeTimesfmPredictOnceRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
+	normalizedReq, err := services.NormalizeMTFPredictOnceRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 
-	status, body, err := h.watchlistService.TriggerTimesfmPredictOnce(normalizedReq)
+	status, body, err := h.watchlistService.TriggerMTFPredictOnce(normalizedReq)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -700,7 +756,76 @@ func (h *WatchlistHandler) TriggerTimesfmPredictOnce(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-func (h *WatchlistHandler) GetTimesfmPredictOnceCached(c *gin.Context) {
+func (h *WatchlistHandler) TriggerPaidMTFPredictOnce(c *gin.Context) {
+	credential := extractPaymentCredential(c.GetHeader("Authorization"))
+	if credential == "" {
+		h.writePaymentRequired(c)
+		return
+	}
+	var req models.MTFPredictRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	cfg := h.watchlistService.Config()
+	resourceID := cfg.AlipayService.ResourceID
+	if resourceID == "" {
+		resourceID = "mtf.predict.once"
+	}
+	verifyClient := services.NewAlipayServiceClient(cfg.AlipayService)
+	verifyResult, err := verifyClient.Verify(c.Request.Context(), services.AlipayVerifyRequest{
+		Credential: credential,
+		ResourceID: resourceID,
+		OrderID:    c.GetHeader("X-Alipay-Order-Id"),
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	if !verifyResult.Valid {
+		h.writePaymentRequired(c)
+		return
+	}
+	orderID := strings.TrimSpace(c.GetHeader("X-Alipay-Order-Id"))
+	if orderID == "" {
+		orderID = strings.TrimSpace(verifyResult.OrderID)
+	}
+	if req.UserID == nil {
+		userID := 0
+		req.UserID = &userID
+	}
+	record := services.PaidPredictOnceRecord{
+		ResourceID: resourceID,
+		OrderID:    orderID,
+		Credential: credential,
+		Request:    &req,
+	}
+	run, err := h.watchlistService.BeginPaidPredictOnce(c.Request.Context(), record)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if run.InProgress {
+		c.JSON(http.StatusConflict, gin.H{"error": "paid prediction is already processing"})
+		return
+	}
+	if !run.ShouldRun {
+		c.JSON(run.Status, run.Body)
+		return
+	}
+	status, body, err := h.watchlistService.TriggerMTFPredictOnce(&req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.watchlistService.CompletePaidPredictOnce(c.Request.Context(), record, status, body); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(status, body)
+}
+
+func (h *WatchlistHandler) GetMTFPredictOnceCached(c *gin.Context) {
 	userValue, exists := c.Get("user")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
@@ -712,18 +837,18 @@ func (h *WatchlistHandler) GetTimesfmPredictOnceCached(c *gin.Context) {
 		return
 	}
 
-	var req models.TimesfmPredictRequest
+	var req models.MTFPredictRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	normalizedReq, err := services.NormalizeTimesfmPredictOnceRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
+	normalizedReq, err := services.NormalizeMTFPredictOnceRequest(&req, user.MembershipLevel, user.ID, user.IsAdmin)
 	if err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
-	status, body, err := h.watchlistService.GetTimesfmPredictOnceCached(normalizedReq)
+	status, body, err := h.watchlistService.GetMTFPredictOnceCached(normalizedReq)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -731,13 +856,13 @@ func (h *WatchlistHandler) GetTimesfmPredictOnceCached(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-func (h *WatchlistHandler) GetTimesfmJobStatus(c *gin.Context) {
+func (h *WatchlistHandler) GetMTFJobStatus(c *gin.Context) {
 	jobID := c.Param("jobID")
 	if jobID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "jobID is required"})
 		return
 	}
-	status, body, err := h.watchlistService.GetTimesfmJobStatus(jobID)
+	status, body, err := h.watchlistService.GetMTFJobStatus(jobID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -745,8 +870,8 @@ func (h *WatchlistHandler) GetTimesfmJobStatus(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-func (h *WatchlistHandler) RunTimesfmBacktestProxy(c *gin.Context) {
-	var req models.TimesfmBacktestRequest
+func (h *WatchlistHandler) RunMTFBacktestProxy(c *gin.Context) {
+	var req models.MTFBacktestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -757,7 +882,7 @@ func (h *WatchlistHandler) RunTimesfmBacktestProxy(c *gin.Context) {
 			req.UserID = &u
 		}
 	}
-	status, body, err := h.watchlistService.RunTimesfmBacktest(&req)
+	status, body, err := h.watchlistService.RunMTFBacktest(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -765,28 +890,28 @@ func (h *WatchlistHandler) RunTimesfmBacktestProxy(c *gin.Context) {
 	c.JSON(status, body)
 }
 
-// SaveTimesfmBest
-func (h *WatchlistHandler) SaveTimesfmBest(c *gin.Context) {
-	var req models.SaveTimesfmBestRequest
+// SaveMTFBest
+func (h *WatchlistHandler) SaveMTFBest(c *gin.Context) {
+	var req models.SaveMTFBestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.watchlistService.SaveTimesfmBest(&req); err != nil {
+	if err := h.watchlistService.SaveMTFBest(&req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "unique_key": req.UniqueKey})
 }
 
-// SaveTimesfmValChunk
-func (h *WatchlistHandler) SaveTimesfmValChunk(c *gin.Context) {
-	var req models.SaveTimesfmValChunkRequest
+// SaveMTFValChunk
+func (h *WatchlistHandler) SaveMTFValChunk(c *gin.Context) {
+	var req models.SaveMTFValChunkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.watchlistService.SaveTimesfmValChunk(&req); err != nil {
+	if err := h.watchlistService.SaveMTFValChunk(&req); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

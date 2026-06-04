@@ -23,17 +23,17 @@ func TestBackendMatchesJobForMainRole(t *testing.T) {
 		SupportsNonCov:    false,
 	}
 
-	if !backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: "non_cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected xpu endpoint to accept non_cov main-stage job")
+	if !backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFLite, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected xpu endpoint to accept mtf-lite main-stage job")
 	}
-	if backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: "cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected xpu endpoint to reject cov main-stage job")
+	if backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFPro, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected xpu endpoint to reject mtf-pro main-stage job")
 	}
-	if !backendMatchesJob(rocmEndpoint, &models.Job{PredictionType: "cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected rocm endpoint to accept cov main-stage job")
+	if !backendMatchesJob(rocmEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFPro, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected rocm endpoint to accept mtf-pro main-stage job")
 	}
-	if backendMatchesJob(rocmEndpoint, &models.Job{PredictionType: "non_cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected rocm endpoint to reject non_cov main-stage job")
+	if backendMatchesJob(rocmEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFLite, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected rocm endpoint to reject mtf-lite main-stage job")
 	}
 }
 
@@ -45,11 +45,11 @@ func TestBackendMatchesJobRejectsCovOnNonCovOnlyMainEndpoint(t *testing.T) {
 		SupportsNonCov: true,
 	}
 
-	if backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: "cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected xpu endpoint to reject cov main-stage job")
+	if backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFPro, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected xpu endpoint to reject mtf-pro main-stage job")
 	}
-	if !backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: "non_cov", CurrentStage: models.BackendRoleMain}) {
-		t.Fatalf("expected xpu endpoint to accept non_cov main-stage job")
+	if !backendMatchesJob(xpuEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFLite, CurrentStage: models.BackendRoleMain}) {
+		t.Fatalf("expected xpu endpoint to accept mtf-lite main-stage job")
 	}
 }
 
@@ -61,13 +61,13 @@ func TestBackendMatchesJobRejectsWrongRoleOrPredictionType(t *testing.T) {
 		SupportsNonCov: false,
 	}
 
-	if backendMatchesJob(xregEndpoint, &models.Job{PredictionType: "cov", CurrentStage: models.BackendRoleMain}) {
+	if backendMatchesJob(xregEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFPro, CurrentStage: models.BackendRoleMain}) {
 		t.Fatalf("expected xreg endpoint to reject main-stage job")
 	}
-	if backendMatchesJob(xregEndpoint, &models.Job{PredictionType: "non_cov", CurrentStage: models.BackendRoleXReg}) {
-		t.Fatalf("expected xreg endpoint to reject non_cov xreg-stage job")
+	if backendMatchesJob(xregEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFLite, CurrentStage: models.BackendRoleXReg}) {
+		t.Fatalf("expected xreg endpoint to reject mtf-lite xreg-stage job")
 	}
-	if !backendMatchesJob(xregEndpoint, &models.Job{PredictionType: "cov", CurrentStage: models.BackendRoleXReg}) {
+	if !backendMatchesJob(xregEndpoint, &models.Job{PredictionType: models.PredictionTypeMTFPro, CurrentStage: models.BackendRoleXReg}) {
 		t.Fatalf("expected xreg endpoint to accept cov xreg-stage job")
 	}
 }
@@ -131,58 +131,58 @@ func TestShouldOrchestrateCovJob(t *testing.T) {
 
 	if schedulerWithXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_once_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:              "rocm",
 		Role:              models.BackendRoleMain,
 		SupportsCov:       true,
 		SupportsDirectCov: true,
 	}) {
-		t.Fatalf("expected direct cov backend to bypass staged orchestration")
+		t.Fatalf("expected direct mtf-pro backend to bypass staged orchestration")
 	}
 	if schedulerWithXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:              "rocm",
 		Role:              models.BackendRoleMain,
 		SupportsCov:       true,
 		SupportsDirectCov: true,
 	}) {
-		t.Fatalf("expected direct cov backend to bypass staged orchestration for predict_for_best")
+		t.Fatalf("expected direct mtf-pro backend to bypass staged orchestration for predict_for_best")
 	}
 	if schedulerWithoutXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_once_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:           "xpu",
 		Role:           models.BackendRoleMain,
 		SupportsCov:    true,
 		SupportsNonCov: true,
 	}) {
-		t.Fatalf("expected cov predict_once job to stay single-stage without xreg backend")
+		t.Fatalf("expected mtf-pro predict_once job to stay single-stage without xreg backend")
 	}
 	if schedulerWithXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_once_sync",
-		PredictionType: "non_cov",
+		PredictionType: models.PredictionTypeMTFLite,
 	}, backend.Endpoint{
 		Name:           "xpu",
 		Role:           models.BackendRoleMain,
 		SupportsCov:    true,
 		SupportsNonCov: true,
 	}) {
-		t.Fatalf("expected non_cov job to skip staged orchestration")
+		t.Fatalf("expected mtf-lite job to skip staged orchestration")
 	}
 	if schedulerWithXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_once_cached_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:           "xpu",
 		Role:           models.BackendRoleMain,
 		SupportsCov:    true,
 		SupportsNonCov: true,
 	}) {
-		t.Fatalf("expected unsupported cov target to skip staged orchestration")
+		t.Fatalf("expected unsupported mtf-pro target to skip staged orchestration")
 	}
 }
 
@@ -209,7 +209,7 @@ func TestShouldOrchestrateCovJobWhenOnlyStagedCovBackendExists(t *testing.T) {
 
 	if !scheduler.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:              "xpu",
 		Role:              models.BackendRoleMain,
@@ -217,7 +217,7 @@ func TestShouldOrchestrateCovJobWhenOnlyStagedCovBackendExists(t *testing.T) {
 		SupportsDirectCov: false,
 		SupportsNonCov:    true,
 	}) {
-		t.Fatalf("expected staged cov backend to use orchestration when no direct cov backend exists")
+		t.Fatalf("expected staged mtf-pro backend to use orchestration when no direct cov backend exists")
 	}
 }
 
@@ -251,7 +251,7 @@ func TestShouldOrchestrateCovJobWhenSelectedBackendIsStagedEvenIfDirectFallbackE
 
 	if !scheduler.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:              "xpu",
 		Role:              models.BackendRoleMain,
@@ -259,11 +259,11 @@ func TestShouldOrchestrateCovJobWhenSelectedBackendIsStagedEvenIfDirectFallbackE
 		SupportsDirectCov: false,
 		SupportsNonCov:    true,
 	}) {
-		t.Fatalf("expected selected staged cov backend to orchestrate even when direct fallback exists")
+		t.Fatalf("expected selected staged mtf-pro backend to orchestrate even when direct fallback exists")
 	}
 	if scheduler.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 	}, backend.Endpoint{
 		Name:              "rocm",
 		Role:              models.BackendRoleMain,
@@ -271,7 +271,7 @@ func TestShouldOrchestrateCovJobWhenSelectedBackendIsStagedEvenIfDirectFallbackE
 		SupportsDirectCov: true,
 		SupportsNonCov:    false,
 	}) {
-		t.Fatalf("expected selected direct cov backend to skip orchestration")
+		t.Fatalf("expected selected direct mtf-pro backend to skip orchestration")
 	}
 }
 
@@ -300,7 +300,7 @@ func TestSelectBackendForCovPrefersXpuSplitAndFallsBackToRocm(t *testing.T) {
 	)
 
 	job := &models.Job{
-		PredictionType: "cov",
+		PredictionType: models.PredictionTypeMTFPro,
 		CurrentStage:   models.BackendRoleMain,
 	}
 	selected := scheduler.selectBackendForJobLocked(job)

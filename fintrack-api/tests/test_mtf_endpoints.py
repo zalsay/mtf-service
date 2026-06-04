@@ -37,14 +37,14 @@ def login(base_url, email, password):
 
 def test_predict(base_url):
     url = base_url + "/predict_for_best"
-    payload = {"stock_code": "sh510300", "stock_type": 2, "horizon_len": 7, "context_len": 4096, "timesfm_version": "2.5", "user_id": 1}
+    payload = {"stock_code": "sh510300", "stock_type": 2, "horizon_len": 7, "context_len": 4096, "prediction_type": "mtf-lite", "user_id": 1}
     status, js, raw = http_post_json(url, payload)
     print("predict status:", status)
     print("predict body:", js if js is not None else raw)
     return status, js, raw
 
 def test_backtest(base_url, token):
-    url = base_url + "/api/v1/timesfm/backtest"
+    url = base_url + "/api/v1/mtf/backtest"
     payload = {"symbol": "sh510300", "stock_type": 2, "horizon_len": 7, "context_len": 4096, "buy_threshold_pct": 3.0, "sell_threshold_pct": -1.0, "trade_fee_rate": 0.006}
     headers = {"Authorization": "Bearer " + token}
     status, js, raw = http_post_json(url, payload, headers=headers)

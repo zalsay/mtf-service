@@ -182,7 +182,7 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onAdd })
                     </div>
 
                     {/* Error Message */}
-                    {error && (!resolvedName || (error && error.includes('duplicate symbol'))) && (
+                    {error && (!resolvedName || error.includes('duplicate symbol') || error.includes('watchlist limit exceeded')) && (
                         <div className="p-2 bg-red-500/10 border border-red-500/20 rounded-lg">
                             <p className="text-red-400 text-xs">
                                 {(() => {
@@ -194,6 +194,9 @@ const AddStockModal: React.FC<AddStockModalProps> = ({ isOpen, onClose, onAdd })
                                     }
                                     if (error.includes('duplicate symbol')) {
                                         return t('addStock.errorDuplicate');
+                                    }
+                                    if (error.includes('watchlist limit exceeded')) {
+                                        return t('addStock.errorLimitExceeded');
                                     }
                                     return error;
                                 })()}

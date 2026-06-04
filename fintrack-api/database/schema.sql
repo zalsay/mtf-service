@@ -1,8 +1,8 @@
 -- Drop existing tables to ensure schema compatibility
-DROP TABLE IF EXISTS timesfm_backtests CASCADE;
-DROP TABLE IF EXISTS timesfm_best_validation_chunks CASCADE;
-DROP TABLE IF EXISTS timesfm_best_predictions CASCADE;
-DROP TABLE IF EXISTS timesfm_strategy_params CASCADE;
+DROP TABLE IF EXISTS mtf_backtests CASCADE;
+DROP TABLE IF EXISTS mtf_best_validation_chunks CASCADE;
+DROP TABLE IF EXISTS mtf_best_predictions CASCADE;
+DROP TABLE IF EXISTS mtf_strategy_params CASCADE;
 DROP TABLE IF EXISTS uzi_reports CASCADE;
 DROP TABLE IF EXISTS user_ai_model_configs CASCADE;
 DROP TABLE IF EXISTS user_watchlist CASCADE;
@@ -10,6 +10,8 @@ DROP TABLE IF EXISTS stock_prices CASCADE;
 DROP TABLE IF EXISTS stocks CASCADE;
 DROP TABLE IF EXISTS user_sessions CASCADE;
 DROP TABLE IF EXISTS membership_invite_codes CASCADE;
+DROP TABLE IF EXISTS open_api_audit_logs CASCADE;
+DROP TABLE IF EXISTS open_api_keys CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
 -- Users table
@@ -137,7 +139,7 @@ CREATE TABLE IF NOT EXISTS user_watchlist (
 );
 
 -- Strategy params must exist before backtests
-CREATE TABLE IF NOT EXISTS timesfm_strategy_params (
+CREATE TABLE IF NOT EXISTS mtf_strategy_params (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -158,14 +160,14 @@ CREATE TABLE IF NOT EXISTS timesfm_strategy_params (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_best_predictions (
+CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     symbol VARCHAR(20) NOT NULL,
-    timesfm_version VARCHAR(20) NOT NULL,
+    mtf_version VARCHAR(20) NOT NULL,
     best_prediction_item VARCHAR(50) NOT NULL,
     best_metrics JSONB NOT NULL,
-    prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+    prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
@@ -183,9 +185,9 @@ CREATE TABLE IF NOT EXISTS timesfm_best_predictions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
+CREATE TABLE IF NOT EXISTS mtf_best_validation_chunks (
     id SERIAL PRIMARY KEY,
-    unique_key VARCHAR(255) NOT NULL REFERENCES timesfm_best_predictions(unique_key) ON DELETE CASCADE,
+    unique_key VARCHAR(255) NOT NULL REFERENCES mtf_best_predictions(unique_key) ON DELETE CASCADE,
     chunk_index INTEGER NOT NULL,
     user_id INTEGER,
     symbol VARCHAR(20),
@@ -198,7 +200,7 @@ CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
     change_base_value DOUBLE PRECISION,
     change_base_date DATE,
     dates JSONB NOT NULL,
-    prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+    prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
@@ -207,13 +209,13 @@ CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
     UNIQUE(unique_key, chunk_index)
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_backtests (
+CREATE TABLE IF NOT EXISTS mtf_backtests (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    strategy_params_id INTEGER REFERENCES timesfm_strategy_params(id) ON DELETE SET NULL,
+    strategy_params_id INTEGER REFERENCES mtf_strategy_params(id) ON DELETE SET NULL,
     symbol VARCHAR(20) NOT NULL,
-    timesfm_version VARCHAR(20) NOT NULL,
+    mtf_version VARCHAR(20) NOT NULL,
     context_len INTEGER NOT NULL,
     horizon_len INTEGER NOT NULL,
     covariate_config JSONB,
@@ -266,6 +268,35 @@ CREATE TABLE IF NOT EXISTS uzi_reports (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS open_api_keys (
+    id SERIAL PRIMARY KEY,
+    key_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scopes TEXT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP WITH TIME ZONE,
+    rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP WITH TIME ZONE,
+    CHECK (status IN ('active', 'disabled')),
+    CHECK (rate_limit_per_minute > 0)
+);
+
+CREATE TABLE IF NOT EXISTS open_api_audit_logs (
+    id SERIAL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    key_id INTEGER REFERENCES open_api_keys(id) ON DELETE SET NULL,
+    fintrack_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    scope TEXT,
+    status_code INTEGER,
+    latency_ms INTEGER,
+    error_code TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -283,20 +314,23 @@ CREATE INDEX IF NOT EXISTS idx_prices_stock ON stock_prices(stock_id);
 CREATE INDEX IF NOT EXISTS idx_prices_recorded ON stock_prices(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON user_watchlist(symbol);
-CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON timesfm_strategy_params(user_id);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_predictions_symbol ON timesfm_best_predictions(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_user_id ON timesfm_best_validation_chunks(user_id);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_symbol ON timesfm_best_validation_chunks(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_symbol ON timesfm_backtests(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_strategy_params_id ON timesfm_backtests(strategy_params_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON mtf_strategy_params(user_id);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_predictions_symbol ON mtf_best_predictions(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_user_id ON mtf_best_validation_chunks(user_id);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_symbol ON mtf_best_validation_chunks(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_backtests_symbol ON mtf_backtests(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_backtests_strategy_params_id ON mtf_backtests(strategy_params_id);
 CREATE INDEX IF NOT EXISTS idx_uzi_reports_user_ticker_updated ON uzi_reports(user_id, ticker, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uzi_reports_user_deleted ON uzi_reports(user_id, deleted_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_uzi_reports_user_path_active
 ON uzi_reports(user_id, report_relative_path)
 WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_open_api_keys_hash ON open_api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_open_api_keys_user ON open_api_keys(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_open_api_audit_logs_key_created ON open_api_audit_logs(key_id, created_at DESC);
 
 -- 官方推荐策略预设。保留 unique_key，避免影响已绑定策略。
-INSERT INTO timesfm_strategy_params (
+INSERT INTO mtf_strategy_params (
     unique_key, name, is_public, user_id,
     buy_threshold_pct, sell_threshold_pct, initial_cash,
     enable_rebalance, max_position_pct, min_position_pct,

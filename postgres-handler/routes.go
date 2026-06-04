@@ -42,24 +42,24 @@ func RegisterRoutes(r *gin.Engine, handler *DatabaseHandler, apiToken string) {
 		api.POST("/index/daily/:code", handler.getIndexDailyHandler)
 		api.POST("/index/daily/:code/range", handler.getIndexDailyByDateRangeHandler)
 
-		api.POST("/timesfm/forecast/batch", handler.batchInsertTimesfmForecastHandler)
-		api.POST("/timesfm/forecast/query", handler.getTimesfmForecastBySymbolVersionHorizon)
+		api.POST("/mtf/forecast/batch", handler.batchInsertMTFForecastHandler)
+		api.POST("/mtf/forecast/query", handler.getMTFForecastBySymbolVersionHorizon)
 
 		api.POST("/stock/comment/daily/batch", handler.batchInsertAStockCommentDailyHandler)
 		api.POST("/stock/comment/daily/search/name", handler.getAStockCommentDailyByNameHandler)
 		api.POST("/stock/comment/daily/search/code", handler.getAStockCommentDailyByCodeHandler)
 
-		// 同步 fintrack-api 路由：保存 TimesFM 最佳分位、验证块、查询以及回测
-		api.POST("/save-predictions/mtf-best", handler.saveTimesfmBestHandler)
-		api.POST("/save-predictions/mtf-best/val-chunk", handler.saveTimesfmValChunkHandler)
-		api.GET("/save-predictions/mtf-best/by-unique", handler.getTimesfmBestByUniqueKeyHandler)
-		api.GET("/save-predictions/mtf-best/by-config", handler.getTimesfmBestKeysByConfigHandler)
-		api.GET("/save-predictions/mtf-best/val-chunk/latest", handler.getLatestTimesfmValChunkHandler)
-		api.GET("/save-predictions/mtf-best/val-chunk/list", handler.getTimesfmValChunkListHandler)
-		api.POST("/save-predictions/mtf-direct", handler.saveTimesfmDirectHandler)
-		api.GET("/save-predictions/mtf-direct/by-request", handler.getTimesfmDirectByRequestHandler)
+		// 同步 fintrack-api 路由：保存 MTF 最佳分位、验证块、查询以及回测
+		api.POST("/save-predictions/mtf-best", handler.saveMTFBestHandler)
+		api.POST("/save-predictions/mtf-best/val-chunk", handler.saveMTFValChunkHandler)
+		api.GET("/save-predictions/mtf-best/by-unique", handler.getMTFBestByUniqueKeyHandler)
+		api.GET("/save-predictions/mtf-best/by-config", handler.getMTFBestKeysByConfigHandler)
+		api.GET("/save-predictions/mtf-best/val-chunk/latest", handler.getLatestMTFValChunkHandler)
+		api.GET("/save-predictions/mtf-best/val-chunk/list", handler.getMTFValChunkListHandler)
+		api.POST("/save-predictions/mtf-direct", handler.saveMTFDirectHandler)
+		api.GET("/save-predictions/mtf-direct/by-request", handler.getMTFDirectByRequestHandler)
 
-		api.POST("/save-predictions/backtest", handler.saveTimesfmBacktestHandler)
+		api.POST("/save-predictions/backtest", handler.saveMTFBacktestHandler)
 
 		api.POST("/strategy/params", handler.saveStrategyParamsHandler)
 		api.GET("/strategy/params/by-user-unique", handler.getStrategyParamsByUniqueKeyHandler)
@@ -96,7 +96,7 @@ func RegisterRoutes(r *gin.Engine, handler *DatabaseHandler, apiToken string) {
 	log.Printf("  POST /api/v1/index/daily/:code/range - Query index daily data by date range (JSON body: {start_date, end_date})")
 	log.Printf("  POST /api/v1/stock/comment/daily/batch - Batch upsert A-stock comment daily metrics")
 	log.Printf("  POST /api/v1/stock/comment/daily/search - Query A-stock comment daily by name (JSON body: {name, limit, offset})")
-	log.Printf("  POST /api/v1/timesfm/forecast/batch - Batch insert TimesFM forecast")
+	log.Printf("  POST /api/v1/mtf/forecast/batch - Batch insert MTF forecast")
 	log.Printf("  GET  /health - Health check")
 }
 

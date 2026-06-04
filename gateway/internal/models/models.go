@@ -14,40 +14,43 @@ import (
 type JobStatus string
 
 const (
-	JobQueued                        JobStatus = "queued"
-	JobRunning                       JobStatus = "running"
-	JobSucceeded                     JobStatus = "succeeded"
-	JobFailed                        JobStatus = "failed"
-	SupportedTimesFMVersion                    = "2.5"
-	JobKindInference                           = "inference"
-	JobKindUZI                                 = "uzi"
-	JobQueuePriorityBackground                 = "background"
-	BackendRoleMain                            = "main"
-	BackendRoleXReg                            = "xreg"
-	BackendRoleUZI                             = "uzi"
-	CovariatePresetMarketV1                    = "market_cov_v1"
-	LegacyCovariatePresetTimesFMXReg           = "market_cov_v1_timesfm_xreg"
-	XRegModeTimesFMPlusXReg                    = "timesfm + xreg"
-	XRegModeXRegPlusTimesFM                    = "xreg + timesfm"
+	JobQueued                    JobStatus = "queued"
+	JobRunning                   JobStatus = "running"
+	JobSucceeded                 JobStatus = "succeeded"
+	JobFailed                    JobStatus = "failed"
+	JobKindInference                       = "inference"
+	JobKindUZI                             = "uzi"
+	JobQueuePriorityBackground             = "background"
+	BackendRoleMain                        = "main"
+	BackendRoleXReg                        = "xreg"
+	BackendRoleUZI                         = "uzi"
+	CovariatePresetMarketV1                = "market_cov_v1"
+	LegacyCovariatePresetMTFXReg           = "market_cov_v1_mtf_xreg"
+	XRegModeMTFPlusXReg                    = "mtf + xreg"
+	XRegModeXRegPlusMTF                    = "xreg + mtf"
+	PredictionTypeMTFLite                  = "mtf-lite"
+	PredictionTypeMTFPro                   = "mtf-pro"
+	LegacyPredictionTypeNonCov             = "non_cov"
+	LegacyPredictionTypeCov                = "cov"
 )
 
 type InferenceRequest struct {
-	StockCode       string `json:"stock_code"`
-	StockType       any    `json:"stock_type,omitempty"`
-	TimeStep        any    `json:"time_step,omitempty"`
-	Years           any    `json:"years,omitempty"`
-	StartDate       any    `json:"start_date,omitempty"`
-	EndDate         any    `json:"end_date,omitempty"`
-	HorizonLen      any    `json:"horizon_len,omitempty"`
-	ContextLen      any    `json:"context_len,omitempty"`
-	TimesFMVersion  any    `json:"timesfm_version,omitempty"`
-	UserID          any    `json:"user_id,omitempty"`
-	ForceEnqueue    any    `json:"force_enqueue,omitempty"`
-	QueuePriority   string `json:"queue_priority,omitempty"`
-	RefreshReason   string `json:"refresh_reason,omitempty"`
-	CovariatePreset string `json:"covariate_preset,omitempty"`
-	CovariateConfig any    `json:"covariate_config,omitempty"`
-	Covariates      any    `json:"covariates,omitempty"`
+	StockCode           string `json:"stock_code"`
+	StockType           any    `json:"stock_type,omitempty"`
+	TimeStep            any    `json:"time_step,omitempty"`
+	Years               any    `json:"years,omitempty"`
+	StartDate           any    `json:"start_date,omitempty"`
+	EndDate             any    `json:"end_date,omitempty"`
+	HorizonLen          any    `json:"horizon_len,omitempty"`
+	ContextLen          any    `json:"context_len,omitempty"`
+	UserID              any    `json:"user_id,omitempty"`
+	ForceEnqueue        any    `json:"force_enqueue,omitempty"`
+	QueuePriority       string `json:"queue_priority,omitempty"`
+	RefreshReason       string `json:"refresh_reason,omitempty"`
+	PredictionTypeValue string `json:"prediction_type,omitempty"`
+	CovariatePreset     string `json:"covariate_preset,omitempty"`
+	CovariateConfig     any    `json:"covariate_config,omitempty"`
+	Covariates          any    `json:"covariates,omitempty"`
 }
 
 type UZIAnalyzeRequest struct {
@@ -128,6 +131,9 @@ func (r InferenceRequest) RequestKey() (string, error) {
 }
 
 func (r InferenceRequest) PredictionType() string {
+	if explicit := NormalizePredictionType(r.PredictionTypeValue); explicit != "" {
+		return explicit
+	}
 	covariateConfig, _ := CanonicalizeCovariateRouting(r.effectiveCovariateConfig(), r.CovariatePreset)
 	return predictionTypeFromCovariateConfig(covariateConfig)
 }
@@ -182,9 +188,26 @@ func CovariatePresetSupportsXPUSplit(preset string) bool {
 
 func predictionTypeFromCovariateConfig(raw any) string {
 	if covariatesEnabled(raw) {
-		return "cov"
+		return PredictionTypeMTFPro
 	}
-	return "non_cov"
+	return PredictionTypeMTFLite
+}
+
+func NormalizePredictionType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case PredictionTypeMTFLite, "mtf_lite", LegacyPredictionTypeNonCov, "non-cov", "lite":
+		return PredictionTypeMTFLite
+	case PredictionTypeMTFPro, "mtf_pro", LegacyPredictionTypeCov, "pro":
+		return PredictionTypeMTFPro
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func PredictionTypeUsesCovariates(value string) bool {
+	return NormalizePredictionType(value) == PredictionTypeMTFPro
 }
 
 func normalizedCovariateSignature(raw any) string {
@@ -224,7 +247,7 @@ func covariatesEnabled(raw any) bool {
 
 func CanonicalizeCovariateRouting(raw any, preset string) (any, string) {
 	normalizedPreset := strings.TrimSpace(preset)
-	if normalizedPreset == LegacyCovariatePresetTimesFMXReg {
+	if normalizedPreset == LegacyCovariatePresetMTFXReg {
 		normalizedPreset = CovariatePresetMarketV1
 	}
 
@@ -255,8 +278,8 @@ func CanonicalizeCovariateRouting(raw any, preset string) (any, string) {
 	if normalizedPreset == CovariatePresetMarketV1 {
 		if rawMode, ok := config["xreg_mode"]; ok {
 			mode := strings.TrimSpace(fmt.Sprintf("%v", rawMode))
-			if mode == "" || mode == XRegModeTimesFMPlusXReg {
-				config["xreg_mode"] = XRegModeXRegPlusTimesFM
+			if mode == "" || mode == XRegModeMTFPlusXReg {
+				config["xreg_mode"] = XRegModeXRegPlusMTF
 			}
 		}
 	}
@@ -294,9 +317,9 @@ type BackendSnapshot struct {
 	Capacity          int    `json:"capacity"`
 	InFlight          int    `json:"in_flight"`
 	Available         int    `json:"available"`
-	SupportsCov       bool   `json:"supports_cov,omitempty"`
+	SupportsCov       bool   `json:"supports_mtf_pro,omitempty"`
 	SupportsDirectCov bool   `json:"supports_direct_cov,omitempty"`
-	SupportsNonCov    bool   `json:"supports_non_cov,omitempty"`
+	SupportsNonCov    bool   `json:"supports_mtf_lite,omitempty"`
 	SupportsUZI       bool   `json:"supports_uzi,omitempty"`
 }
 
@@ -466,24 +489,6 @@ func normalizeBoolValue(value any, fallback bool) bool {
 		return typed != 0
 	}
 	return fallback
-}
-
-func NormalizeTimesFMVersion(value any) string {
-	if value == nil {
-		return SupportedTimesFMVersion
-	}
-	switch typed := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if trimmed == "" {
-			return SupportedTimesFMVersion
-		}
-		return trimmed
-	case json.Number:
-		return typed.String()
-	default:
-		return fmt.Sprintf("%v", value)
-	}
 }
 
 func normalizeDateValue(value any) string {

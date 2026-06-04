@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS user_watchlist (
     UNIQUE(user_id, symbol)
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_strategy_params (
+CREATE TABLE IF NOT EXISTS mtf_strategy_params (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -142,14 +142,14 @@ CREATE TABLE IF NOT EXISTS timesfm_strategy_params (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_best_predictions (
+CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     symbol VARCHAR(20) NOT NULL,
-    timesfm_version VARCHAR(20) NOT NULL,
+    mtf_version VARCHAR(20) NOT NULL,
     best_prediction_item VARCHAR(50) NOT NULL,
     best_metrics JSONB NOT NULL,
-    prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+    prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
@@ -167,9 +167,9 @@ CREATE TABLE IF NOT EXISTS timesfm_best_predictions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
+CREATE TABLE IF NOT EXISTS mtf_best_validation_chunks (
     id SERIAL PRIMARY KEY,
-    unique_key VARCHAR(255) NOT NULL REFERENCES timesfm_best_predictions(unique_key) ON DELETE CASCADE,
+    unique_key VARCHAR(255) NOT NULL REFERENCES mtf_best_predictions(unique_key) ON DELETE CASCADE,
     chunk_index INTEGER NOT NULL,
     user_id INTEGER,
     symbol VARCHAR(20),
@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
     change_base_value DOUBLE PRECISION,
     change_base_date DATE,
     dates JSONB NOT NULL,
-    prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+    prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
@@ -191,13 +191,13 @@ CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
     UNIQUE(unique_key, chunk_index)
 );
 
-CREATE TABLE IF NOT EXISTS timesfm_backtests (
+CREATE TABLE IF NOT EXISTS mtf_backtests (
     id SERIAL PRIMARY KEY,
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    strategy_params_id INTEGER REFERENCES timesfm_strategy_params(id) ON DELETE SET NULL,
+    strategy_params_id INTEGER REFERENCES mtf_strategy_params(id) ON DELETE SET NULL,
     symbol VARCHAR(20) NOT NULL,
-    timesfm_version VARCHAR(20) NOT NULL,
+    mtf_version VARCHAR(20) NOT NULL,
     context_len INTEGER NOT NULL,
     horizon_len INTEGER NOT NULL,
     covariate_config JSONB,
@@ -250,6 +250,58 @@ CREATE TABLE IF NOT EXISTS uzi_reports (
     deleted_at TIMESTAMP WITH TIME ZONE
 );
 
+CREATE TABLE IF NOT EXISTS ai_payment_records (
+    id SERIAL PRIMARY KEY,
+    resource_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    credential_hash TEXT NOT NULL,
+    request_signature TEXT NOT NULL,
+    period_key DATE NOT NULL,
+    payment_status TEXT NOT NULL DEFAULT 'paid',
+    fulfillment_status TEXT NOT NULL DEFAULT 'processing',
+    response_status INTEGER,
+    response_body JSONB,
+    paid_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    fulfilled_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_ai_payment_records_once
+        UNIQUE (resource_id, order_id, request_signature, period_key),
+    CONSTRAINT ai_payment_records_payment_status_check
+        CHECK (payment_status IN ('paid', 'unpaid', 'refunded')),
+    CONSTRAINT ai_payment_records_fulfillment_status_check
+        CHECK (fulfillment_status IN ('processing', 'fulfilled', 'failed'))
+);
+
+CREATE TABLE IF NOT EXISTS open_api_keys (
+    id SERIAL PRIMARY KEY,
+    key_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    scopes TEXT[] NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'active',
+    expires_at TIMESTAMP WITH TIME ZONE,
+    rate_limit_per_minute INTEGER NOT NULL DEFAULT 60,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP WITH TIME ZONE,
+    CHECK (status IN ('active', 'disabled')),
+    CHECK (rate_limit_per_minute > 0)
+);
+
+CREATE TABLE IF NOT EXISTS open_api_audit_logs (
+    id SERIAL PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    key_id INTEGER REFERENCES open_api_keys(id) ON DELETE SET NULL,
+    fintrack_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    scope TEXT,
+    status_code INTEGER,
+    latency_ms INTEGER,
+    error_code TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 ALTER TABLE users ADD COLUMN IF NOT EXISTS membership_level INT DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS membership_expires_at TIMESTAMP WITH TIME ZONE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
@@ -300,24 +352,24 @@ ALTER TABLE mtf_agent_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WIT
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS symbol VARCHAR(20);
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS stock_type SMALLINT NOT NULL DEFAULT 1;
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS strategy_unique_key VARCHAR(255);
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS short_name VARCHAR(255);
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'non_cov';
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB;
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
-ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'non_cov';
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_config JSONB;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION;
-ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE;
-ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_config JSONB;
-ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
-ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
-ALTER TABLE timesfm_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS short_name VARCHAR(255);
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite';
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite';
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_config JSONB;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE;
+ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_config JSONB;
+ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
+ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
+ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS depth VARCHAR(16);
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'succeeded';
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS directory_name VARCHAR(255);
@@ -329,6 +381,26 @@ ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS duration_seconds DOUBLE PRECISI
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS stdout_tail TEXT;
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS stderr_tail TEXT;
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS resource_id TEXT;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS order_id TEXT;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS credential_hash TEXT;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS request_signature TEXT;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS period_key DATE;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid';
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS fulfillment_status TEXT NOT NULL DEFAULT 'processing';
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS response_status INTEGER;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS response_body JSONB;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE ai_payment_records ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS key_hash TEXT;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT 'default';
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS scopes TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS rate_limit_per_minute INTEGER NOT NULL DEFAULT 60;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE open_api_keys ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMP WITH TIME ZONE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_dsa_user_id
 ON users(daily_stock_analysis_user_id)
@@ -348,20 +420,27 @@ CREATE INDEX IF NOT EXISTS idx_prices_stock ON stock_prices(stock_id);
 CREATE INDEX IF NOT EXISTS idx_prices_recorded ON stock_prices(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON user_watchlist(symbol);
-CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON timesfm_strategy_params(user_id);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_predictions_symbol ON timesfm_best_predictions(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_user_id ON timesfm_best_validation_chunks(user_id);
-CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_symbol ON timesfm_best_validation_chunks(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_symbol ON timesfm_backtests(symbol);
-CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_strategy_params_id ON timesfm_backtests(strategy_params_id);
+CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON mtf_strategy_params(user_id);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_predictions_symbol ON mtf_best_predictions(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_user_id ON mtf_best_validation_chunks(user_id);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_symbol ON mtf_best_validation_chunks(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_backtests_symbol ON mtf_backtests(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_backtests_strategy_params_id ON mtf_backtests(strategy_params_id);
 CREATE INDEX IF NOT EXISTS idx_uzi_reports_user_ticker_updated ON uzi_reports(user_id, ticker, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_uzi_reports_user_deleted ON uzi_reports(user_id, deleted_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_uzi_reports_user_path_active
 ON uzi_reports(user_id, report_relative_path)
 WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_ai_payment_records_order
+ON ai_payment_records(resource_id, order_id, period_key);
+CREATE INDEX IF NOT EXISTS idx_ai_payment_records_status
+ON ai_payment_records(fulfillment_status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_open_api_keys_hash ON open_api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_open_api_keys_user ON open_api_keys(owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_open_api_audit_logs_key_created ON open_api_audit_logs(key_id, created_at DESC);
 
 -- 官方推荐策略预设。保留 unique_key，避免影响已绑定策略。
-INSERT INTO timesfm_strategy_params (
+INSERT INTO mtf_strategy_params (
     unique_key, name, is_public, user_id,
     buy_threshold_pct, sell_threshold_pct, initial_cash,
     enable_rebalance, max_position_pct, min_position_pct,

@@ -1,4 +1,4 @@
-import { PredictionChartData, PublicPredictionItem, StockData, TimesfmChunk } from '../types';
+import { PredictionChartData, PublicPredictionItem, StockData, MTFChunk } from '../types';
 
 const PRIMARY_MODEL_LABEL = 'mtf-1.5-lite';
 const PRO_MODEL_LABEL = 'mtf-1.5-pro';
@@ -46,16 +46,17 @@ const selectLatestItem = (
 const isCovPrediction = (item: PublicPredictionItem): boolean => {
     const predictionType = String(item.best.prediction_type || '').trim().toLowerCase();
     if (predictionType) {
-        return predictionType === 'cov';
+        return predictionType === 'mtf-pro' || predictionType === 'cov';
     }
-    return String(item.best.unique_key || '').includes('_cov');
+    const uniqueKey = String(item.best.unique_key || '');
+    return uniqueKey.includes('_mtf-pro') || uniqueKey.includes('_mtf_pro');
 };
 
 const buildPredictionGroupKey = (item: PublicPredictionItem): string => {
     return [
         item.best.symbol,
         item.best.horizon_len ?? '',
-        item.best.timesfm_version ?? '',
+        item.best.mtf_version ?? '',
     ].join('|');
 };
 
@@ -99,7 +100,7 @@ const inferStockType = (symbol: string, companyName?: string): 1 | 2 => {
 };
 
 const extractSeriesFromChunks = (
-    chunks: TimesfmChunk[] | undefined,
+    chunks: MTFChunk[] | undefined,
     bestItemKey: string,
 ): PredictionChartData | null => {
     if (!bestItemKey || !chunks?.length) {

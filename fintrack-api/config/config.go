@@ -22,6 +22,7 @@ type Config struct {
 	PostgresHandler PostgresHandlerConfig
 	DSABridge       DSABridgeConfig
 	MTFAgent        MTFAgentConfig
+	AlipayService   AlipayServiceConfig
 }
 
 type DatabaseConfig struct {
@@ -119,6 +120,18 @@ type MTFAgentConfig struct {
 	DefaultModel string
 }
 
+type AlipayServiceConfig struct {
+	BaseURL      string
+	APIToken     string
+	ResourceID   string
+	ResourceName string
+	AmountCents  int
+	Currency     string
+	MerchantID   string
+	MerchantName string
+	Timeout      int
+}
+
 func LoadConfig() (*Config, error) {
 	// 尝试加载.env文件
 	godotenv.Load()
@@ -205,6 +218,17 @@ func LoadConfig() (*Config, error) {
 			Timeout:      getEnvAsInt("MTF_AGENT_TIMEOUT", 120),
 			RuntimeToken: getEnv("MTF_AGENT_RUNTIME_TOKEN", ""),
 			DefaultModel: getEnv("MTF_AGENT_MODEL", "deepseek-v4-pro"),
+		},
+		AlipayService: AlipayServiceConfig{
+			BaseURL:      strings.TrimRight(getEnv("ALIPAY_SERVICE_URL", "http://127.0.0.1:59100"), "/"),
+			APIToken:     getEnv("ALIPAY_SERVICE_TOKEN", ""),
+			ResourceID:   getEnv("ALIPAY_RESOURCE_ID", "mtf.predict.once"),
+			ResourceName: getEnv("ALIPAY_RESOURCE_NAME", "MTF 单次预测"),
+			AmountCents:  getEnvAsInt("ALIPAY_AI_PAY_AMOUNT_CENTS", 199),
+			Currency:     getEnv("ALIPAY_AI_PAY_CURRENCY", "CNY"),
+			MerchantID:   getEnv("ALIPAY_MERCHANT_ID", "dev-merchant"),
+			MerchantName: getEnv("ALIPAY_MERCHANT_NAME", "FinTrack"),
+			Timeout:      getEnvAsInt("ALIPAY_SERVICE_TIMEOUT", 10),
 		},
 	}
 

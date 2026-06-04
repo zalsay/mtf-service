@@ -96,6 +96,7 @@ const translations = {
     'addStock.errorNotFound': 'Code not found, please use full format e.g. sz000001 or sh600519',
     'addStock.errorAuth': 'Please login first',
     'addStock.errorDuplicate': 'Already in watchlist',
+    'addStock.errorLimitExceeded': 'Watchlist limit reached for your current membership.',
     'addStock.errorGeneric': 'Failed to add',
 
     // Modal Common
@@ -135,7 +136,8 @@ const translations = {
     'watchlist.emptyTitle': 'Your watchlist is empty',
     'watchlist.emptySubtitle': 'Use the search bar above to find and add your first stock.',
     'watchlist.noPredictionData': 'No prediction data available.',
-
+    'watchlist.overLimitBadge': 'Paused',
+    'watchlist.overLimitHint': 'Over current membership limit. Delete other items or upgrade to enable predictions.',
     // Single Prediction
     'singlePrediction.title': 'MTF Prediction',
     'singlePrediction.submit': 'Run Prediction',
@@ -149,7 +151,7 @@ const translations = {
     'singlePrediction.backend': 'Backend',
     'singlePrediction.stockType': 'Stock Type',
     'singlePrediction.latestPrice': 'Latest Price',
-    'singlePrediction.timesfmVersion': 'TimesFM Version',
+    'singlePrediction.mtfVersion': 'MTF Version',
     'singlePrediction.defaultYears': 'History Years',
     'singlePrediction.bestItem': 'Best Quantile',
     'singlePrediction.latestDataDate': 'Latest Data Date',
@@ -427,6 +429,7 @@ const translations = {
     'addStock.errorNotFound': '未找到该代码，请使用完整代码格式，例如：sz000001 或 sh600519',
     'addStock.errorAuth': '请先登录',
     'addStock.errorDuplicate': '该代码已添加关注',
+    'addStock.errorLimitExceeded': '已达到当前会员等级的关注上限。',
     'addStock.errorGeneric': '添加失败',
 
     // Modal Common
@@ -466,7 +469,8 @@ const translations = {
     'watchlist.emptyTitle': '您的关注列表为空',
     'watchlist.emptySubtitle': '使用上方的搜索栏查找并添加您的第一只股票。',
     'watchlist.noPredictionData': '暂无预测数据',
-
+    'watchlist.overLimitBadge': '已暂停',
+    'watchlist.overLimitHint': '超出当前会员等级上限。删除其他关注或升级会员后可继续预测。',
     // Single Prediction
     'singlePrediction.title': 'MTF 预测',
     'singlePrediction.submit': '发起预测',
@@ -480,7 +484,7 @@ const translations = {
     'singlePrediction.backend': '执行后端',
     'singlePrediction.stockType': '资产类型',
     'singlePrediction.latestPrice': '最新价格',
-    'singlePrediction.timesfmVersion': 'TimesFM 版本',
+    'singlePrediction.mtfVersion': 'MTF 版本',
     'singlePrediction.defaultYears': '历史年数',
     'singlePrediction.bestItem': '最佳分位',
     'singlePrediction.latestDataDate': '最新数据日期',

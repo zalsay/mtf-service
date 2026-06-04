@@ -1,7 +1,7 @@
 -- 优化官方推荐策略参数：保留 unique_key，避免影响已绑定策略。
-ALTER TABLE timesfm_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
 
-INSERT INTO timesfm_strategy_params (
+INSERT INTO mtf_strategy_params (
     unique_key, name, is_public, user_id,
     buy_threshold_pct, sell_threshold_pct, initial_cash,
     enable_rebalance, max_position_pct, min_position_pct,

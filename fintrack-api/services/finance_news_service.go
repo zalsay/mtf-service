@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -19,10 +18,9 @@ const (
 	financeNewsStockSearchURL  = "https://search-api-web.eastmoney.com/search/jsonp"
 	financeNewsAnnouncementURL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
 	financeNewsLHBURL          = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-	financeNewsHotETFURL       = "https://etf.imlam.com/"
+	financeNewsHotETFURL       = "https://ai.meetlife.top/hot-etf/latest"
+	financeNewsHotETFCachePath = "data/hot-etf/latest.html"
 )
-
-var hotETFRowPattern = regexp.MustCompile(`(?m)([^\s\d][^\n]*?)\s+(\d{6})\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([^\s]+)`)
 
 type FinanceNewsService struct {
 	client          *http.Client
@@ -31,7 +29,7 @@ type FinanceNewsService struct {
 	announcementURL string
 	lhbURL          string
 	hotETFURL       string
-	hotETFCacheDir  string
+	hotETFCachePath string
 }
 
 type FinanceNewsQuery struct {
@@ -61,13 +59,34 @@ type FinanceNewsItem struct {
 	Symbol      string `json:"symbol,omitempty"`
 	StockName   string `json:"stock_name,omitempty"`
 	Category    string `json:"category,omitempty"`
-	ETFRPS      string `json:"etf_rps,omitempty"`
-	ETFMonth    string `json:"etf_month,omitempty"`
-	ETFWeek     string `json:"etf_week,omitempty"`
-	ETFDay      string `json:"etf_day,omitempty"`
-	ETFStopLoss string `json:"etf_stop_loss,omitempty"`
-	ETFScore    string `json:"etf_score,omitempty"`
-	ETFStatus   string `json:"etf_status,omitempty"`
+}
+
+type HotETFResponse struct {
+	Status string       `json:"status"`
+	Source string       `json:"source"`
+	Count  int          `json:"count"`
+	Items  []HotETFItem `json:"items"`
+}
+
+type HotETFItem struct {
+	Code          string       `json:"code"`
+	Name          string       `json:"name"`
+	RiskRPS       float64      `json:"risk_rps"`
+	RadarPriority float64      `json:"radar_priority"`
+	Grade         string       `json:"grade,omitempty"`
+	Trend         string       `json:"trend,omitempty"`
+	Month         HotETFSignal `json:"month"`
+	Week          HotETFSignal `json:"week"`
+	Day           HotETFSignal `json:"day"`
+	StopPrice     string       `json:"stop_price,omitempty"`
+	StopDistance  string       `json:"stop_distance,omitempty"`
+	TotalScore    float64      `json:"total_score"`
+	Status        string       `json:"status"`
+}
+
+type HotETFSignal struct {
+	Score float64 `json:"score"`
+	Text  string  `json:"text"`
 }
 
 func NewFinanceNewsService(client *http.Client) *FinanceNewsService {
@@ -80,8 +99,8 @@ func NewFinanceNewsService(client *http.Client) *FinanceNewsService {
 		stockSearchURL:  financeNewsStockSearchURL,
 		announcementURL: financeNewsAnnouncementURL,
 		lhbURL:          financeNewsLHBURL,
-		hotETFURL:       hotETFConfiguredURL(),
-		hotETFCacheDir:  hotETFConfiguredCacheDir(),
+		hotETFURL:       financeNewsHotETFURL,
+		hotETFCachePath: financeNewsHotETFCachePath,
 	}
 }
 
@@ -94,8 +113,6 @@ func (s *FinanceNewsService) List(ctx context.Context, query FinanceNewsQuery) (
 		return s.listAnnouncements(ctx, query)
 	case "lhb":
 		return s.listDragonTigerBoard(ctx, query)
-	case "hot_etf":
-		return s.listHotETF(ctx, query)
 	case "market", "global":
 		return s.listColumnNews(ctx, query)
 	default:
@@ -103,144 +120,42 @@ func (s *FinanceNewsService) List(ctx context.Context, query FinanceNewsQuery) (
 	}
 }
 
-func (s *FinanceNewsService) listHotETF(ctx context.Context, query FinanceNewsQuery) (FinanceNewsResponse, error) {
-	items, err := s.hotETFItems(ctx)
+func (s *FinanceNewsService) ListHotETF(ctx context.Context) (HotETFResponse, error) {
+	body, err := s.loadHotETFHTML(ctx)
 	if err != nil {
-		return FinanceNewsResponse{}, err
+		return HotETFResponse{}, err
 	}
-	filtered := make([]FinanceNewsItem, 0, len(items))
-	for _, item := range items {
-		if query.Keyword != "" && !financeNewsContains(item.Title+item.Summary+item.Symbol+item.StockName+item.ETFStatus, query.Keyword) {
-			continue
-		}
-		filtered = append(filtered, item)
+	items, err := parseHotETFHTML(body)
+	if err != nil {
+		return HotETFResponse{}, err
 	}
-	return financeNewsResponse(query, "imlam_etf", paginateFinanceNewsItems(filtered, query.Page, query.Limit)), nil
+	return HotETFResponse{
+		Status: "ok",
+		Source: "meetlife_hot_etf",
+		Count:  len(items),
+		Items:  items,
+	}, nil
 }
 
-func (s *FinanceNewsService) hotETFItems(ctx context.Context) ([]FinanceNewsItem, error) {
-	cachePath := s.hotETFCachePath(time.Now())
-	if items, ok := readHotETFCache(cachePath); ok {
-		return items, nil
+func (s *FinanceNewsService) loadHotETFHTML(ctx context.Context) (string, error) {
+	cachePath := strings.TrimSpace(s.hotETFCachePath)
+	if cachePath == "" {
+		cachePath = financeNewsHotETFCachePath
+	}
+	if raw, err := os.ReadFile(cachePath); err == nil && len(raw) > 0 {
+		return string(raw), nil
 	}
 	body, err := s.getText(ctx, s.hotETFURL, nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	items := hotETFItemsFromHTML(body)
-	_ = writeHotETFCache(cachePath, items)
-	return items, nil
-}
-
-func (s *FinanceNewsService) hotETFCachePath(now time.Time) string {
-	if s.hotETFCacheDir == "" {
-		return ""
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return "", fmt.Errorf("cache hot ETF html: create dir: %w", err)
 	}
-	return filepath.Join(s.hotETFCacheDir, fmt.Sprintf("hot_etf_%s.json", now.Format("2006-01-02")))
-}
-
-func hotETFItemsFromHTML(body string) []FinanceNewsItem {
-	text := normalizeHotETFText(body)
-	matches := hotETFRowPattern.FindAllStringSubmatch(text, -1)
-	items := make([]FinanceNewsItem, 0, len(matches))
-	seen := make(map[string]bool, len(matches))
-	for _, match := range matches {
-		name := strings.TrimSpace(match[1])
-		code := strings.TrimSpace(match[2])
-		if code == "" || name == "" || seen[code] {
-			continue
-		}
-		seen[code] = true
-		item := FinanceNewsItem{
-			ID:          "hot-etf-" + code,
-			Title:       strings.TrimSpace(fmt.Sprintf("%s %s", code, name)),
-			Summary:     fmt.Sprintf("RPS %s，月评分 %s，周评分 %s，日评分 %s，防守止损 %s，加权总分 %s，状态 %s。", match[3], match[4], match[5], match[6], match[7], match[8], match[9]),
-			Source:      "ETF imlam",
-			URL:         financeNewsHotETFURL,
-			Symbol:      code,
-			StockName:   name,
-			Category:    "hot_etf",
-			ETFRPS:      match[3],
-			ETFMonth:    match[4],
-			ETFWeek:     match[5],
-			ETFDay:      match[6],
-			ETFStopLoss: match[7],
-			ETFScore:    match[8],
-			ETFStatus:   match[9],
-		}
-		items = append(items, item)
+	if err := os.WriteFile(cachePath, []byte(body), 0o644); err != nil {
+		return "", fmt.Errorf("cache hot ETF html: write file: %w", err)
 	}
-	return items
-}
-
-func readHotETFCache(path string) ([]FinanceNewsItem, bool) {
-	if path == "" {
-		return nil, false
-	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, false
-	}
-	var payload struct {
-		Items []FinanceNewsItem `json:"items"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, false
-	}
-	return payload.Items, true
-}
-
-func writeHotETFCache(path string, items []FinanceNewsItem) error {
-	if path == "" {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	payload := struct {
-		FetchedAt string            `json:"fetched_at"`
-		Source    string            `json:"source"`
-		Items     []FinanceNewsItem `json:"items"`
-	}{
-		FetchedAt: time.Now().Format(time.RFC3339),
-		Source:    "imlam_etf_snapshot",
-		Items:     items,
-	}
-	body, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, body, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
-}
-
-func hotETFConfiguredURL() string {
-	if value := strings.TrimSpace(os.Getenv("HOT_ETF_SNAPSHOT_URL")); value != "" {
-		return value
-	}
-	return financeNewsHotETFURL
-}
-
-func hotETFConfiguredCacheDir() string {
-	if value := strings.TrimSpace(os.Getenv("HOT_ETF_CACHE_DIR")); value != "" {
-		return value
-	}
-	return filepath.Join(os.TempDir(), "fintrack-hot-etf-cache")
-}
-
-func paginateFinanceNewsItems(items []FinanceNewsItem, page int, limit int) []FinanceNewsItem {
-	start := (page - 1) * limit
-	if start >= len(items) {
-		return []FinanceNewsItem{}
-	}
-	end := start + limit
-	if end > len(items) {
-		end = len(items)
-	}
-	return items[start:end]
+	return body, nil
 }
 
 func normalizeFinanceNewsQuery(query FinanceNewsQuery) FinanceNewsQuery {
@@ -402,7 +317,6 @@ func (s *FinanceNewsService) getText(ctx context.Context, rawURL string, params 
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; FinTrack/1.0; +https://etf.imlam.com/)")
 	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("provider_error: %w", err)

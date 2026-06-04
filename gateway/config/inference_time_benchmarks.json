@@ -8,7 +8,7 @@
     {
       "generated_at": "2026-05-20T16:10:04.413331+08:00",
       "backend": "rocm",
-      "prediction_type": "non_cov",
+      "prediction_type": "mtf-lite",
       "estimate_field": "processing_time_sec",
       "results": [
         {
@@ -97,7 +97,7 @@
     {
       "generated_at": "2026-05-20T16:28:59.732098+08:00",
       "backend": "xpu",
-      "prediction_type": "cov",
+      "prediction_type": "mtf-pro",
       "estimate_field": "total_elapsed_sec",
       "results": [
         {

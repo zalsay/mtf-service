@@ -76,6 +76,8 @@ export interface WatchlistItem {
   stock_type?: number;
   strategy_unique_key?: string;
   strategy_name?: string;
+  is_over_limit?: boolean;
+  watchlist_limit?: number;
 }
 
 export interface WatchlistResponse {
@@ -146,6 +148,34 @@ export interface FinanceNewsResponse {
   };
   count: number;
   items: FinanceNewsItem[];
+}
+
+export interface HotETFSignal {
+  score: number;
+  text: string;
+}
+
+export interface HotETFItem {
+  code: string;
+  name: string;
+  risk_rps: number;
+  radar_priority: number;
+  grade?: string;
+  trend?: string;
+  month: HotETFSignal;
+  week: HotETFSignal;
+  day: HotETFSignal;
+  stop_price?: string;
+  stop_distance?: string;
+  total_score: number;
+  status: string;
+}
+
+export interface HotETFResponse {
+  status: string;
+  source: string;
+  count: number;
+  items: HotETFItem[];
 }
 
 export interface UZIAnalyzeRequest {
@@ -947,6 +977,9 @@ export const financeNewsAPI = {
     const suffix = query.toString();
     return apiRequest(`/finance-news${suffix ? `?${suffix}` : ''}`, { method: 'GET' });
   },
+  hotETF: async (): Promise<HotETFResponse> => {
+    return apiRequest('/finance-news/hot-etf', { method: 'GET' });
+  },
 };
 
 export const getPublicPredictions = async (
@@ -981,30 +1014,28 @@ export const getAccessiblePredictions = async (
   return apiRequest<PublicPredictionResponse>(url, { method: 'GET' });
 };
 
-export interface TimesfmBestKeysByConfig {
+export interface MTFBestKeysByConfig {
   symbol: string;
-  timesfm_version: string;
+  mtf_version: string;
   horizon_len: number;
   context_len: number;
-  non_cov_unique_key: string;
-  cov_unique_key: string;
+  mtf_lite_unique_key: string;
+  mtf_pro_unique_key: string;
+  non_cov_unique_key?: string;
+  cov_unique_key?: string;
 }
 
-export const getTimesfmBestKeysByConfig = async (
+export const getMTFBestKeysByConfig = async (
   symbol: string,
   horizonLen: number,
   contextLen: number,
-  timesfmVersion?: string,
-): Promise<{ prediction: TimesfmBestKeysByConfig }> => {
+): Promise<{ prediction: MTFBestKeysByConfig }> => {
   const params = new URLSearchParams({
     symbol,
     horizon_len: String(horizonLen),
     context_len: String(contextLen),
   });
-  if (timesfmVersion) {
-    params.set('timesfm_version', timesfmVersion);
-  }
-  return apiRequest<{ prediction: TimesfmBestKeysByConfig }>(
+  return apiRequest<{ prediction: MTFBestKeysByConfig }>(
     `/save-predictions/mtf-best/by-config?${params.toString()}`,
     { method: 'GET' },
   );
@@ -1025,7 +1056,7 @@ export const getFuturePredictions = async (uniqueKey: string): Promise<FuturePre
   return apiRequest<FuturePredictionsResponse>(`/get-predictions/mtf-best/future?${params.toString()}`, { method: 'GET' });
 };
 
-export interface TimesfmQueueBackendStatus {
+export interface MTFQueueBackendStatus {
   name: string;
   url: string;
   capacity: number;
@@ -1033,9 +1064,9 @@ export interface TimesfmQueueBackendStatus {
   available: number;
 }
 
-export interface TimesfmQueueStatus {
+export interface MTFQueueStatus {
   queue_depth: number;
-  backends?: TimesfmQueueBackendStatus[];
+  backends?: MTFQueueBackendStatus[];
   jobs?: Record<string, number>;
 }
 
@@ -1063,7 +1094,7 @@ export interface DirectPredictionResult {
   unique_key: string;
   stock_code: string;
   stock_type: number;
-  timesfm_version: string;
+  mtf_version: string;
   context_len: number;
   horizon_len: number;
   request_end_date?: string | null;
@@ -1077,15 +1108,14 @@ export interface DirectPredictionResult {
   cache_hit?: boolean;
 }
 
-export interface TimesfmPredictOnceRequest {
+export interface MTFPredictOnceRequest {
   stock_code: string;
   stock_type: string | number;
-  prediction_type?: 'non_cov' | 'cov';
+  prediction_type?: 'mtf-lite' | 'mtf-pro';
   time_step?: number;
   years?: number;
   horizon_len?: number;
   context_len?: number;
-  timesfm_version?: string;
   user_id?: number;
   force_enqueue?: boolean;
   covariate_preset?: string;
@@ -1094,14 +1124,13 @@ export interface TimesfmPredictOnceRequest {
   covariates?: Record<string, unknown> | boolean | null;
 }
 
-export interface TimesfmPredictBestRequest {
+export interface MTFPredictBestRequest {
   stock_code: string;
   stock_type: string | number;
-  prediction_type?: 'non_cov' | 'cov';
+  prediction_type?: 'mtf-lite' | 'mtf-pro';
   years?: number;
   horizon_len: number;
   context_len: number;
-  timesfm_version?: string;
   force_enqueue?: boolean;
   covariate_preset?: string;
   covariate_signature?: string;
@@ -1109,7 +1138,7 @@ export interface TimesfmPredictBestRequest {
   covariates?: Record<string, unknown> | boolean | null;
 }
 
-export interface TimesfmPredictAcceptedResponse {
+export interface MTFPredictAcceptedResponse {
   success: boolean;
   message: string;
   reused?: boolean;
@@ -1117,19 +1146,19 @@ export interface TimesfmPredictAcceptedResponse {
   status: string;
   stock_code: string;
   force_enqueue?: boolean;
-  prediction_type?: 'non_cov' | 'cov' | string;
+  prediction_type?: 'mtf-lite' | 'mtf-pro' | string;
   covariate_signature?: string;
   current_stage?: string;
   request_key?: string;
   created_at?: string;
   status_url?: string;
   target_path?: string;
-  queue_status?: TimesfmQueueStatus;
+  queue_status?: MTFQueueStatus;
   estimated_inference_time_sec?: number;
   estimated_inference_time_source?: string;
 }
 
-export type TimesfmJobResultPayload = {
+export type MTFJobResultPayload = {
   success?: boolean;
   stock_code?: string;
   gpu_id?: string;
@@ -1141,12 +1170,12 @@ export type TimesfmJobResultPayload = {
   response?: DirectPredictionResult | Record<string, unknown>;
 } & Record<string, unknown>;
 
-export interface TimesfmJobStatusResponse {
+export interface MTFJobStatusResponse {
   job_id: string;
   status: string;
   force_enqueue?: boolean;
   stock_code?: string;
-  prediction_type?: 'non_cov' | 'cov' | string;
+  prediction_type?: 'mtf-lite' | 'mtf-pro' | string;
   covariate_signature?: string;
   current_stage?: string;
   target_path?: string;
@@ -1157,10 +1186,10 @@ export interface TimesfmJobStatusResponse {
   created_at?: string;
   started_at?: string;
   finished_at?: string;
-  result?: TimesfmJobResultPayload | DirectPredictionResult;
+  result?: MTFJobResultPayload | DirectPredictionResult;
 }
 
-export interface TimesfmPredictOnceCachedResponse {
+export interface MTFPredictOnceCachedResponse {
   success: boolean;
   stock_code?: string;
   gpu_id?: string;
@@ -1169,20 +1198,20 @@ export interface TimesfmPredictOnceCachedResponse {
   data?: DirectPredictionResult;
 }
 
-export const timesfmAPI = {
-  predictBest: async (params: TimesfmPredictBestRequest): Promise<TimesfmPredictAcceptedResponse> => {
+export const mtfAPI = {
+  predictBest: async (params: MTFPredictBestRequest): Promise<MTFPredictAcceptedResponse> => {
     return apiRequest('/mtf/predict-best', {
       method: 'POST',
       body: JSON.stringify(params),
     });
   },
-  predictOnce: async (params: TimesfmPredictOnceRequest): Promise<TimesfmPredictAcceptedResponse> => {
+  predictOnce: async (params: MTFPredictOnceRequest): Promise<MTFPredictAcceptedResponse> => {
     return apiRequest('/mtf/predict-once', {
       method: 'POST',
       body: JSON.stringify(params),
     });
   },
-  getPredictOnceCached: async (params: TimesfmPredictOnceRequest): Promise<TimesfmPredictOnceCachedResponse | null> => {
+  getPredictOnceCached: async (params: MTFPredictOnceRequest): Promise<MTFPredictOnceCachedResponse | null> => {
     const url = buildAPIURL('/mtf/predict-once/cached');
     const token = getAuthToken();
     const headers: Record<string, string> = {
@@ -1207,7 +1236,7 @@ export const timesfmAPI = {
     }
     return response.json();
   },
-  getJobStatus: async (jobId: string): Promise<TimesfmJobStatusResponse> => {
+  getJobStatus: async (jobId: string): Promise<MTFJobStatusResponse> => {
     return apiRequest(`/mtf/jobs/${jobId}`, { method: 'GET' });
   },
 };

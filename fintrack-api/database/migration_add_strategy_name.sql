@@ -1,1 +1,1 @@
-ALTER TABLE timesfm_strategy_params ADD COLUMN IF NOT EXISTS name VARCHAR(255);
+ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS name VARCHAR(255);

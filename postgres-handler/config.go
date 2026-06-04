@@ -185,7 +185,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
 	}
 
 	createForecastTableSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_forecast (
+    CREATE TABLE IF NOT EXISTS mtf_forecast (
         id SERIAL PRIMARY KEY,
         symbol VARCHAR(20) NOT NULL,
         ds TIMESTAMP NOT NULL,
@@ -214,11 +214,11 @@ func (h *DatabaseHandler) initializeDatabase() error {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );`
 	if err := h.db.Exec(createForecastTableSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_forecast table: %v", err)
+		return fmt.Errorf("failed to create mtf_forecast table: %v", err)
 	}
 
 	createStrategyParamsSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_strategy_params (
+    CREATE TABLE IF NOT EXISTS mtf_strategy_params (
         id SERIAL PRIMARY KEY,
         unique_key VARCHAR(255) NOT NULL,
         user_id INTEGER,
@@ -235,38 +235,38 @@ func (h *DatabaseHandler) initializeDatabase() error {
         take_profit_sell_frac DOUBLE PRECISION,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT uni_timesfm_strategy_params_unique_key UNIQUE (unique_key)
+        CONSTRAINT uni_mtf_strategy_params_unique_key UNIQUE (unique_key)
     );
-    CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON timesfm_strategy_params(user_id);
+    CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON mtf_strategy_params(user_id);
     `
 	if err := h.db.Exec(createStrategyParamsSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_strategy_params table: %v", err)
+		return fmt.Errorf("failed to create mtf_strategy_params table: %v", err)
 	}
 	// 为已存在的表补充唯一约束（如果缺失）
 	ensureUniqueConstraintSQL := `
     DO $$
     BEGIN
         IF NOT EXISTS (
-            SELECT 1 FROM pg_constraint WHERE conname = 'uni_timesfm_strategy_params_unique_key'
+            SELECT 1 FROM pg_constraint WHERE conname = 'uni_mtf_strategy_params_unique_key'
         ) THEN
-            ALTER TABLE timesfm_strategy_params
-            ADD CONSTRAINT uni_timesfm_strategy_params_unique_key UNIQUE (unique_key);
+            ALTER TABLE mtf_strategy_params
+            ADD CONSTRAINT uni_mtf_strategy_params_unique_key UNIQUE (unique_key);
         END IF;
     END
     $$;`
 	_ = h.db.Exec(ensureUniqueConstraintSQL).Error
-	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_timesfm_forecast_symbol_ds ON timesfm_forecast (symbol, ds);`).Error
-	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_timesfm_forecast_svhl_ds ON timesfm_forecast (symbol, version, horizon_len, ds);`).Error
+	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_forecast_symbol_ds ON mtf_forecast (symbol, ds);`).Error
+	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_forecast_svhl_ds ON mtf_forecast (symbol, version, horizon_len, ds);`).Error
 
-	createTimesfmBestSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_best_predictions (
+	createMTFBestSQL := `
+    CREATE TABLE IF NOT EXISTS mtf_best_predictions (
         id SERIAL PRIMARY KEY,
         unique_key TEXT NOT NULL UNIQUE,
         symbol VARCHAR(20) NOT NULL,
-        timesfm_version VARCHAR(20) NOT NULL,
+        mtf_version VARCHAR(20) NOT NULL,
         best_prediction_item VARCHAR(50) NOT NULL,
         best_metrics JSONB NOT NULL,
-        prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+        prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
         covariate_config JSONB,
         covariate_signature TEXT,
         covariate_analysis JSONB,
@@ -284,20 +284,21 @@ func (h *DatabaseHandler) initializeDatabase() error {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE INDEX IF NOT EXISTS idx_timesfm_best_predictions_symbol ON timesfm_best_predictions(symbol);
+    CREATE INDEX IF NOT EXISTS idx_mtf_best_predictions_symbol ON mtf_best_predictions(symbol);
     `
-	if err := h.db.Exec(createTimesfmBestSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_best_predictions table: %v", err)
+	if err := h.db.Exec(createMTFBestSQL).Error; err != nil {
+		return fmt.Errorf("failed to create mtf_best_predictions table: %v", err)
 	}
 	// 为已存在的表补充缺失列（如果缺失）
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS stock_type INTEGER`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'non_cov'`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS stock_type INTEGER`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite'`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ALTER COLUMN prediction_type SET DEFAULT 'mtf-lite'`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
 
-	createTimesfmValChunksSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_best_validation_chunks (
+	createMTFValChunksSQL := `
+    CREATE TABLE IF NOT EXISTS mtf_best_validation_chunks (
         id SERIAL PRIMARY KEY,
         unique_key TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
@@ -312,7 +313,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
         change_base_value DOUBLE PRECISION,
         change_base_date DATE,
         dates JSONB NOT NULL,
-        prediction_type TEXT NOT NULL DEFAULT 'non_cov',
+        prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
         covariate_config JSONB,
         covariate_signature TEXT,
         covariate_analysis JSONB,
@@ -320,36 +321,37 @@ func (h *DatabaseHandler) initializeDatabase() error {
         stock_type INTEGER,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT fk_timesfm_best FOREIGN KEY (unique_key)
-            REFERENCES timesfm_best_predictions (unique_key) ON DELETE CASCADE,
-        CONSTRAINT uq_timesfm_best_chunk UNIQUE (unique_key, chunk_index)
+        CONSTRAINT fk_mtf_best FOREIGN KEY (unique_key)
+            REFERENCES mtf_best_predictions (unique_key) ON DELETE CASCADE,
+        CONSTRAINT uq_mtf_best_chunk UNIQUE (unique_key, chunk_index)
     );
-    CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_user_id ON timesfm_best_validation_chunks(user_id);
-    CREATE INDEX IF NOT EXISTS idx_timesfm_best_validation_chunks_symbol ON timesfm_best_validation_chunks(symbol);
+    CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_user_id ON mtf_best_validation_chunks(user_id);
+    CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_symbol ON mtf_best_validation_chunks(symbol);
     `
-	if err := h.db.Exec(createTimesfmValChunksSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_best_validation_chunks table: %v", err)
+	if err := h.db.Exec(createMTFValChunksSQL).Error; err != nil {
+		return fmt.Errorf("failed to create mtf_best_validation_chunks table: %v", err)
 	}
 	// 为已存在的表补充缺失列（如果缺失）
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS stock_name TEXT`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS stock_type INTEGER`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'non_cov'`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS stock_name TEXT`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS stock_type INTEGER`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite'`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ALTER COLUMN prediction_type SET DEFAULT 'mtf-lite'`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE`).Error
 
-	createTimesfmBacktestsSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_backtests (
+	createMTFBacktestsSQL := `
+    CREATE TABLE IF NOT EXISTS mtf_backtests (
         id SERIAL PRIMARY KEY,
         unique_key VARCHAR(255) NOT NULL UNIQUE,
         user_id INTEGER,
         strategy_params_id INTEGER,
         symbol VARCHAR(20) NOT NULL,
-        timesfm_version VARCHAR(20) NOT NULL,
+        mtf_version VARCHAR(20) NOT NULL,
         context_len INTEGER NOT NULL,
         horizon_len INTEGER NOT NULL,
         covariate_config JSONB,
@@ -382,36 +384,36 @@ func (h *DatabaseHandler) initializeDatabase() error {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
     `
-	if err := h.db.Exec(createTimesfmBacktestsSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_backtests table: %v", err)
+	if err := h.db.Exec(createMTFBacktestsSQL).Error; err != nil {
+		return fmt.Errorf("failed to create mtf_backtests table: %v", err)
 	}
-	_ = h.db.Exec(`ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS strategy_params_id INTEGER`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_backtests ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS strategy_params_id INTEGER`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
 	_ = h.db.Exec(`DO $$ BEGIN
         IF NOT EXISTS (
             SELECT 1
             FROM pg_constraint
             WHERE conname = 'fk_backtests_strategy_params'
         ) THEN
-            ALTER TABLE timesfm_backtests
+            ALTER TABLE mtf_backtests
             ADD CONSTRAINT fk_backtests_strategy_params
             FOREIGN KEY (strategy_params_id)
-            REFERENCES timesfm_strategy_params(id)
+            REFERENCES mtf_strategy_params(id)
             ON DELETE SET NULL;
         END IF;
     END $$;`).Error
-	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_strategy_params_id ON timesfm_backtests(strategy_params_id)`).Error
-	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_timesfm_backtests_strategy_params_unique ON timesfm_backtests(strategy_params_id, unique_key)`).Error
+	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_backtests_strategy_params_id ON mtf_backtests(strategy_params_id)`).Error
+	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_backtests_strategy_params_unique ON mtf_backtests(strategy_params_id, unique_key)`).Error
 
-	createTimesfmDirectSQL := `
-    CREATE TABLE IF NOT EXISTS timesfm_direct_predictions (
+	createMTFDirectSQL := `
+    CREATE TABLE IF NOT EXISTS mtf_direct_predictions (
         id SERIAL PRIMARY KEY,
         unique_key TEXT NOT NULL UNIQUE,
         symbol VARCHAR(20) NOT NULL,
         stock_type INTEGER NOT NULL DEFAULT 1,
-        timesfm_version VARCHAR(20) NOT NULL,
+        mtf_version VARCHAR(20) NOT NULL,
         context_len INTEGER NOT NULL,
         horizon_len INTEGER NOT NULL,
         future_dates_key TEXT NOT NULL,
@@ -430,33 +432,33 @@ func (h *DatabaseHandler) initializeDatabase() error {
         user_id INTEGER,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT uq_timesfm_direct_prediction_key UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)
+        CONSTRAINT uq_mtf_direct_prediction_key UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)
     );
-    CREATE INDEX IF NOT EXISTS idx_timesfm_direct_predictions_symbol ON timesfm_direct_predictions(symbol);
-    CREATE INDEX IF NOT EXISTS idx_timesfm_direct_predictions_lookup ON timesfm_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature);
+    CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_symbol ON mtf_direct_predictions(symbol);
+    CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_lookup ON mtf_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature);
     `
-	if err := h.db.Exec(createTimesfmDirectSQL).Error; err != nil {
-		return fmt.Errorf("failed to create timesfm_direct_predictions table: %v", err)
+	if err := h.db.Exec(createMTFDirectSQL).Error; err != nil {
+		return fmt.Errorf("failed to create mtf_direct_predictions table: %v", err)
 	}
-	_ = h.db.Exec(`ALTER TABLE timesfm_direct_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_direct_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_direct_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
-	_ = h.db.Exec(`UPDATE timesfm_direct_predictions SET covariate_signature = '' WHERE covariate_signature IS NULL`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_direct_predictions ALTER COLUMN covariate_signature SET DEFAULT ''`).Error
-	_ = h.db.Exec(`ALTER TABLE timesfm_direct_predictions ALTER COLUMN covariate_signature SET NOT NULL`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
+	_ = h.db.Exec(`UPDATE mtf_direct_predictions SET covariate_signature = '' WHERE covariate_signature IS NULL`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET DEFAULT ''`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET NOT NULL`).Error
 	_ = h.db.Exec(`DO $$ BEGIN
         IF EXISTS (
             SELECT 1 FROM pg_constraint
-            WHERE conname = 'uq_timesfm_direct_prediction_key'
+            WHERE conname = 'uq_mtf_direct_prediction_key'
         ) THEN
-            ALTER TABLE timesfm_direct_predictions DROP CONSTRAINT uq_timesfm_direct_prediction_key;
+            ALTER TABLE mtf_direct_predictions DROP CONSTRAINT uq_mtf_direct_prediction_key;
         END IF;
-        ALTER TABLE timesfm_direct_predictions
-        ADD CONSTRAINT uq_timesfm_direct_prediction_key
+        ALTER TABLE mtf_direct_predictions
+        ADD CONSTRAINT uq_mtf_direct_prediction_key
         UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature);
     END $$;`).Error
-	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_timesfm_direct_predictions_lookup_cov ON timesfm_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)`).Error
-	if err := h.db.AutoMigrate(&EtfDailyData{}, &IndexInfo{}, &IndexDailyData{}, &StockCommentDaily{}, &TimesfmForecast{}); err != nil {
+	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_lookup_cov ON mtf_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)`).Error
+	if err := h.db.AutoMigrate(&EtfDailyData{}, &IndexInfo{}, &IndexDailyData{}, &StockCommentDaily{}, &MTFForecast{}); err != nil {
 		log.Printf("AutoMigrate warning: %v", err)
 	}
 	return nil

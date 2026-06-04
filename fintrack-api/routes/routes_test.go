@@ -61,12 +61,62 @@ func TestSetupRouterRegistersFinanceNewsRoute(t *testing.T) {
 	cfg := &config.Config{}
 	router := SetupRouter(cfg, nil)
 
+	foundList := false
+	foundHotETF := false
 	for _, route := range router.Routes() {
 		if route.Method == http.MethodGet && route.Path == "/api/v1/finance-news" {
-			return
+			foundList = true
+		}
+		if route.Method == http.MethodGet && route.Path == "/api/v1/finance-news/hot-etf" {
+			foundHotETF = true
 		}
 	}
-	t.Fatal("missing finance news route GET /api/v1/finance-news")
+	if !foundList {
+		t.Fatal("missing finance news route GET /api/v1/finance-news")
+	}
+	if !foundHotETF {
+		t.Fatal("missing finance news route GET /api/v1/finance-news/hot-etf")
+	}
+}
+
+func TestSetupRouterRegistersOpenAPIRoutes(t *testing.T) {
+	cfg := &config.Config{}
+	router := SetupRouter(cfg, nil)
+
+	wantRoutes := map[string]string{
+		"POST /api/open/v1/auth/api-key":               "",
+		"GET /api/open/v1/etf/hot":                     "",
+		"POST /api/open/v1/etf/quotes":                 "",
+		"GET /api/open/v1/etf/lookup":                  "",
+		"GET /api/open/v1/mtf/best":                    "",
+		"GET /api/open/v1/mtf/best/by-config":          "",
+		"GET /api/open/v1/mtf/future":                  "",
+		"POST /api/open/v1/mtf/predict-once":           "",
+		"POST /api/open/v1/mtf/predict-best":           "",
+		"POST /api/open/v1/mtf/backtest":               "",
+		"GET /api/open/v1/mtf/jobs/:jobID":             "",
+		"GET /api/open/v1/strategy/list":               "",
+		"POST /api/open/v1/strategy/params":            "",
+		"GET /api/open/v1/watchlist":                   "",
+		"POST /api/open/v1/watchlist":                  "",
+		"POST /api/open/v1/watchlist/bind-strategy":    "",
+		"POST /api/open/v1/agent/messages":             "",
+		"GET /api/open/v1/agent/skills/history-trends": "",
+		"GET /api/open/v1/agent/skills/uzi-reports":    "",
+	}
+
+	for _, route := range router.Routes() {
+		key := route.Method + " " + route.Path
+		if _, ok := wantRoutes[key]; ok {
+			wantRoutes[key] = route.Handler
+		}
+	}
+
+	for route, handler := range wantRoutes {
+		if handler == "" {
+			t.Fatalf("missing Open API route %s", route)
+		}
+	}
 }
 
 func TestSetupRouterRegistersAdminGatewayQueueRoute(t *testing.T) {

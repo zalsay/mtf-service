@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark gateway cov predict_for_best runtimes for a context/horizon grid."""
+"""Benchmark gateway mtf-pro predict_for_best runtimes for a context/horizon grid."""
 
 from __future__ import annotations
 
@@ -97,7 +97,6 @@ def main() -> None:
                 "years": args.years,
                 "context_len": context_len,
                 "horizon_len": horizon_len,
-                "timesfm_version": "2.5",
                 "covariate_config": {"enabled": True},
                 "covariate_preset": "market_cov_v1",
                 "force_enqueue": True,
@@ -164,7 +163,7 @@ def main() -> None:
                 "stock_code": args.stock_code,
                 "stock_type": args.stock_type,
                 "years": args.years,
-                "prediction_type": "cov",
+                "prediction_type": "mtf-pro",
                 "backend": "xpu",
                 "gateway_url": gateway_url,
                 "time_unit": "seconds",

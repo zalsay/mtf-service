@@ -10,6 +10,8 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -36,11 +38,68 @@ func NewWatchlistService(db *database.DB, cfg *config.Config) *WatchlistService 
 	return &WatchlistService{db: db, config: cfg}
 }
 
+func (s *WatchlistService) Config() *config.Config {
+	return s.config
+}
+
 var ErrSymbolNotFound = errors.New("symbol not found")
 
-const timesfmBestStaleRefreshAfter = 180 * 24 * time.Hour
+const mtfBestStaleRefreshAfter = 180 * 24 * time.Hour
 
 var ErrDuplicateSymbol = errors.New("duplicate symbol")
+
+type WatchlistLimitExceededError struct {
+	Limit int
+	Count int
+}
+
+func (e WatchlistLimitExceededError) Error() string {
+	return "watchlist limit exceeded"
+}
+
+func newWatchlistLimitExceededError(limit int, count int) WatchlistLimitExceededError {
+	return WatchlistLimitExceededError{Limit: limit, Count: count}
+}
+
+func watchlistLimitForMembershipLevel(level int) int {
+	switch {
+	case level >= 3:
+		return 50
+	case level == 2:
+		return 10
+	default:
+		return 3
+	}
+}
+
+func applyWatchlistOverflow(items []models.WatchlistItem, limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	type itemOrder struct {
+		index   int
+		id      int
+		addedAt time.Time
+	}
+	order := make([]itemOrder, 0, len(items))
+	for i := range items {
+		items[i].WatchlistLimit = limit
+		order = append(order, itemOrder{
+			index:   i,
+			id:      items[i].ID,
+			addedAt: items[i].AddedAt,
+		})
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		if order[i].addedAt.Equal(order[j].addedAt) {
+			return order[i].id < order[j].id
+		}
+		return order[i].addedAt.Before(order[j].addedAt)
+	})
+	for position, entry := range order {
+		items[entry.index].IsOverLimit = position >= limit
+	}
+}
 
 func newPythonServiceHTTPClient(timeoutSeconds int) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -90,14 +149,10 @@ func marshalOptionalJSONObject(value interface{}) (string, error) {
 }
 
 func normalizedPredictionType(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "non_cov"
-	}
-	return trimmed
+	return normalizeTrainPredictionType(value)
 }
 
-func normalizeTimesfmSymbolReadKey(symbol string) string {
+func normalizeMTFSymbolReadKey(symbol string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(symbol))
 	if trimmed == "" {
 		return ""
@@ -116,7 +171,7 @@ func normalizeTimesfmSymbolReadKey(symbol string) string {
 	return trimmed
 }
 
-func timesfmCanonicalSymbolExpr(column string) string {
+func mtfCanonicalSymbolExpr(column string) string {
 	return fmt.Sprintf(
 		"CASE WHEN regexp_replace(lower(trim(%[1]s)), '[^0-9]', '', 'g') <> '' THEN regexp_replace(lower(trim(%[1]s)), '[^0-9]', '', 'g') ELSE lower(trim(%[1]s)) END",
 		column,
@@ -163,6 +218,24 @@ func (s *WatchlistService) lookupDisplayName(symbol string) string {
 	return ""
 }
 
+func (s *WatchlistService) getUserMembershipLevel(userID int) (int, error) {
+	var level int
+	err := s.db.Conn.QueryRow(`SELECT COALESCE(membership_level, 0) FROM users WHERE id = $1`, userID).Scan(&level)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get user membership level: %v", err)
+	}
+	return level, nil
+}
+
+func (s *WatchlistService) watchlistCount(userID int) (int, error) {
+	var count int
+	err := s.db.Conn.QueryRow(`SELECT COUNT(*) FROM user_watchlist WHERE user_id = $1`, userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count watchlist: %v", err)
+	}
+	return count, nil
+}
+
 func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlistRequest) error {
 	stockType := 1
 	if req.StockType != nil {
@@ -179,6 +252,18 @@ func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlist
 	if exists {
 		return ErrDuplicateSymbol
 	}
+	membershipLevel, err := s.getUserMembershipLevel(userID)
+	if err != nil {
+		return err
+	}
+	limit := watchlistLimitForMembershipLevel(membershipLevel)
+	count, err := s.watchlistCount(userID)
+	if err != nil {
+		return err
+	}
+	if count >= limit {
+		return newWatchlistLimitExceededError(limit, count)
+	}
 	candidates := symbolNameLookupCandidates(symLower)
 	var table string
 	if stockType == 2 {
@@ -187,7 +272,7 @@ func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlist
 		table = "a_stock_comment_daily"
 	}
 	query := fmt.Sprintf("SELECT COALESCE(name, '') FROM %s WHERE code = ANY($1) ORDER BY trading_date DESC LIMIT 1", table)
-	err := s.db.Conn.QueryRow(query, pq.Array(candidates)).Scan(&name)
+	err = s.db.Conn.QueryRow(query, pq.Array(candidates)).Scan(&name)
 	if err == sql.ErrNoRows {
 		return ErrSymbolNotFound
 	}
@@ -537,19 +622,23 @@ func (s *WatchlistService) LookupStockName(symbol string, stockType int) (string
 }
 
 func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, error) {
+	membershipLevel, err := s.getUserMembershipLevel(userID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.Conn.Query(`
 		SELECT 
 			uw.id, uw.symbol, uw.added_at, uw.notes, COALESCE(uw.stock_type, 1),
 			COALESCE(s.company_name, ''),
 			COALESCE(tbp.unique_key, ''),
-			COALESCE(tbp.timesfm_version, ''),
+			COALESCE(tbp.mtf_version, ''),
 			COALESCE(uw.strategy_unique_key, ''),
 			COALESCE(tsp.name, '')
 		FROM user_watchlist uw
 		LEFT JOIN stocks s ON uw.symbol = s.symbol
 		LEFT JOIN LATERAL (
-			SELECT unique_key, timesfm_version
-			FROM timesfm_best_predictions
+			SELECT unique_key, mtf_version
+			FROM mtf_best_predictions
 			WHERE CASE
 				WHEN regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g') <> ''
 				THEN regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g')
@@ -562,7 +651,7 @@ func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, err
 			ORDER BY created_at DESC
 			LIMIT 1
 		) tbp ON true
-		LEFT JOIN timesfm_strategy_params tsp ON uw.strategy_unique_key = tsp.unique_key
+		LEFT JOIN mtf_strategy_params tsp ON uw.strategy_unique_key = tsp.unique_key
 		WHERE uw.user_id = $1
 		ORDER BY uw.added_at DESC
 	`, userID)
@@ -600,6 +689,7 @@ func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, err
 		items = append(items, item)
 	}
 
+	applyWatchlistOverflow(items, watchlistLimitForMembershipLevel(membershipLevel))
 	return items, nil
 }
 
@@ -607,7 +697,7 @@ func (s *WatchlistService) BindStrategy(userID int, req *models.BindStrategyRequ
 	// Check if strategy exists
 	var exists bool
 	err := s.db.Conn.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM timesfm_strategy_params WHERE unique_key = $1 AND (user_id = $2 OR user_id IS NULL))
+		SELECT EXISTS(SELECT 1 FROM mtf_strategy_params WHERE unique_key = $1 AND (user_id = $2 OR user_id IS NULL))
 	`, req.StrategyUniqueKey, userID).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("failed to check strategy existence: %v", err)
@@ -787,7 +877,7 @@ func (s *WatchlistService) SyncStockData(symbol string) {
 	log.Printf("Successfully triggered stock data sync for %s (type: %d)", cleanSymbol, stockType)
 }
 
-type timesfmMembershipTrainPolicy struct {
+type mtfMembershipTrainPolicy struct {
 	AllowedPredictionTypes map[string]struct{}
 	AllowedContextLens     map[int]struct{}
 	AllowedHorizonLens     map[int]struct{}
@@ -809,29 +899,29 @@ func newStringSet(values ...string) map[string]struct{} {
 	return out
 }
 
-func getTimesfmMembershipTrainPolicy(level int) timesfmMembershipTrainPolicy {
+func getMTFMembershipTrainPolicy(level int) mtfMembershipTrainPolicy {
 	switch level {
 	case 3:
-		return timesfmMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("non_cov", "cov"),
+		return mtfMembershipTrainPolicy{
+			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
 			AllowedContextLens:     newIntSet(256, 512, 1024, 2048),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	case 2:
-		return timesfmMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("non_cov", "cov"),
+		return mtfMembershipTrainPolicy{
+			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
 			AllowedContextLens:     newIntSet(256, 512, 1024),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	case 1:
-		return timesfmMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("non_cov", "cov"),
+		return mtfMembershipTrainPolicy{
+			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
 			AllowedContextLens:     newIntSet(256, 512),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	default:
-		return timesfmMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("non_cov"),
+		return mtfMembershipTrainPolicy{
+			AllowedPredictionTypes: newStringSet("mtf-lite"),
 			AllowedContextLens:     newIntSet(256),
 			AllowedHorizonLens:     newIntSet(7),
 		}
@@ -839,26 +929,33 @@ func getTimesfmMembershipTrainPolicy(level int) timesfmMembershipTrainPolicy {
 }
 
 func normalizeTrainPredictionType(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	if normalized == "" {
-		return "non_cov"
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "non_cov", "non-cov", "lite", "mtf_lite", "mtf-lite":
+		return "mtf-lite"
+	case "cov", "pro", "mtf_pro", "mtf-pro":
+		return "mtf-pro"
+	default:
+		return strings.TrimSpace(value)
 	}
-	return normalized
+}
+
+func predictionTypeUsesCovariates(value string) bool {
+	return normalizeTrainPredictionType(value) == "mtf-pro"
 }
 
 func buildMarketCovariateConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"enabled":   true,
-		"xreg_mode": "timesfm + xreg",
+		"xreg_mode": "mtf + xreg",
 	}
 }
 
-func NormalizeTimesfmBestTrainRequest(req *models.TimesfmBestTrainRequest, membershipLevel int, userID int, isAdmin bool) (*models.TimesfmPredictRequest, error) {
+func NormalizeMTFBestTrainRequest(req *models.MTFBestTrainRequest, membershipLevel int, userID int, isAdmin bool) (*models.MTFPredictRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
 
-	policy := getTimesfmMembershipTrainPolicy(membershipLevel)
+	policy := getMTFMembershipTrainPolicy(membershipLevel)
 	predictionType := normalizeTrainPredictionType(req.PredictionType)
 	if _, ok := policy.AllowedPredictionTypes[predictionType]; !ok {
 		return nil, fmt.Errorf("membership level %d does not support prediction_type=%s", membershipLevel, predictionType)
@@ -871,29 +968,23 @@ func NormalizeTimesfmBestTrainRequest(req *models.TimesfmBestTrainRequest, membe
 		years = *req.Years
 	}
 
-	version := "2.5"
-	if req.TimesfmVersion != nil && strings.TrimSpace(*req.TimesfmVersion) != "" {
-		version = strings.TrimSpace(*req.TimesfmVersion)
-	}
-
 	horizonLen := req.HorizonLen
 	contextLen := req.ContextLen
 	uid := userID
 	forceEnqueue := isAdmin
-	normalized := &models.TimesfmPredictRequest{
+	normalized := &models.MTFPredictRequest{
 		StockCode:      req.StockCode,
 		StockType:      req.StockType,
 		PredictionType: predictionType,
 		Years:          &years,
 		HorizonLen:     &horizonLen,
 		ContextLen:     &contextLen,
-		TimesfmVersion: &version,
 		UserID:         &uid,
 	}
 	if isAdmin {
 		normalized.ForceEnqueue = &forceEnqueue
 	}
-	if predictionType == "cov" {
+	if predictionTypeUsesCovariates(predictionType) {
 		covariatePreset := "market_cov_v1"
 		normalized.CovariatePreset = &covariatePreset
 		normalized.CovariateConfig = buildMarketCovariateConfig()
@@ -902,12 +993,12 @@ func NormalizeTimesfmBestTrainRequest(req *models.TimesfmBestTrainRequest, membe
 	return normalized, nil
 }
 
-func NormalizeTimesfmPredictOnceRequest(req *models.TimesfmPredictRequest, membershipLevel int, userID int, isAdmin bool) (*models.TimesfmPredictRequest, error) {
+func NormalizeMTFPredictOnceRequest(req *models.MTFPredictRequest, membershipLevel int, userID int, isAdmin bool) (*models.MTFPredictRequest, error) {
 	if req == nil {
 		return nil, fmt.Errorf("request is required")
 	}
 
-	policy := getTimesfmMembershipTrainPolicy(membershipLevel)
+	policy := getMTFMembershipTrainPolicy(membershipLevel)
 	predictionType := normalizeTrainPredictionType(req.PredictionType)
 	if _, ok := policy.AllowedPredictionTypes[predictionType]; !ok {
 		return nil, fmt.Errorf("membership level %d does not support prediction_type=%s", membershipLevel, predictionType)
@@ -931,7 +1022,7 @@ func NormalizeTimesfmPredictOnceRequest(req *models.TimesfmPredictRequest, membe
 	return &normalized, nil
 }
 
-func normalizeTimesfmPredictStockType(value interface{}) int {
+func normalizeMTFPredictStockType(value interface{}) int {
 	switch typed := value.(type) {
 	case nil:
 		return 1
@@ -967,7 +1058,7 @@ func intValueOrDefault(value *int, fallback int) int {
 	return fallback
 }
 
-func (s *WatchlistService) TriggerTimesfmPredict(req *models.TimesfmPredictRequest) (int, map[string]interface{}, error) {
+func (s *WatchlistService) TriggerMTFPredict(req *models.MTFPredictRequest) (int, map[string]interface{}, error) {
 	payload := map[string]interface{}{
 		"stock_code": req.StockCode,
 	}
@@ -988,9 +1079,6 @@ func (s *WatchlistService) TriggerTimesfmPredict(req *models.TimesfmPredictReque
 	}
 	if req.ContextLen != nil {
 		payload["context_len"] = *req.ContextLen
-	}
-	if req.TimesfmVersion != nil {
-		payload["timesfm_version"] = *req.TimesfmVersion
 	}
 	if req.UserID != nil {
 		payload["user_id"] = *req.UserID
@@ -1035,11 +1123,11 @@ func (s *WatchlistService) TriggerTimesfmPredict(req *models.TimesfmPredictReque
 	return resp.StatusCode, body, nil
 }
 
-func (s *WatchlistService) triggerStaleTimesfmBestRefresh(item models.TimesfmBestPrediction) error {
+func (s *WatchlistService) triggerStaleMTFBestRefresh(item models.MTFBestPrediction) error {
 	if s == nil || s.config == nil || strings.TrimSpace(s.config.PythonService.BaseURL) == "" {
 		return nil
 	}
-	if item.UpdatedAt.IsZero() || time.Since(item.UpdatedAt) <= timesfmBestStaleRefreshAfter {
+	if item.UpdatedAt.IsZero() || time.Since(item.UpdatedAt) <= mtfBestStaleRefreshAfter {
 		return nil
 	}
 
@@ -1047,7 +1135,7 @@ func (s *WatchlistService) triggerStaleTimesfmBestRefresh(item models.TimesfmBes
 	if stockType != 1 && stockType != 2 {
 		stockType = inferLookupStockTypes(item.Symbol)[0]
 	}
-	request := &models.TimesfmPredictRequest{
+	request := &models.MTFPredictRequest{
 		StockCode:      item.Symbol,
 		StockType:      stockType,
 		PredictionType: normalizedPredictionType(item.PredictionType),
@@ -1055,10 +1143,6 @@ func (s *WatchlistService) triggerStaleTimesfmBestRefresh(item models.TimesfmBes
 		ContextLen:     &item.ContextLen,
 		QueuePriority:  "background",
 		RefreshReason:  "stale_180d",
-	}
-	if strings.TrimSpace(item.TimesfmVersion) != "" {
-		timesfmVersion := strings.TrimSpace(item.TimesfmVersion)
-		request.TimesfmVersion = &timesfmVersion
 	}
 	if strings.TrimSpace(item.CovariateConfig) != "" && item.CovariateConfig != "{}" {
 		var covariateConfig map[string]interface{}
@@ -1069,37 +1153,17 @@ func (s *WatchlistService) triggerStaleTimesfmBestRefresh(item models.TimesfmBes
 	if strings.TrimSpace(item.CovariateSignature) != "" {
 		request.CovariateSignature = strings.TrimSpace(item.CovariateSignature)
 	}
-	if request.PredictionType == "cov" && request.CovariateConfig == nil {
+	if predictionTypeUsesCovariates(request.PredictionType) && request.CovariateConfig == nil {
 		request.CovariateConfig = buildMarketCovariateConfig()
 		preset := "market_cov_v1"
 		request.CovariatePreset = &preset
 	}
 
-	_, _, err := s.TriggerTimesfmPredict(request)
+	_, _, err := s.TriggerMTFPredict(request)
 	return err
 }
 
-func (s *WatchlistService) TriggerTimesfmPredictOnce(req *models.TimesfmPredictRequest) (int, map[string]interface{}, error) {
-	payload := buildTimesfmPredictPayload(req)
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return 0, nil, fmt.Errorf("marshal predict once payload: %v", err)
-	}
-	url := fmt.Sprintf("%s/predict_once", s.config.PythonService.BaseURL)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
-	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return 0, nil, fmt.Errorf("call python predict once: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := readPythonJSONResponse(resp, url, "decode python predict once response")
-	if err != nil {
-		return resp.StatusCode, nil, err
-	}
-	return resp.StatusCode, body, nil
-}
-
-func buildTimesfmPredictPayload(req *models.TimesfmPredictRequest) map[string]interface{} {
+func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) (int, map[string]interface{}, error) {
 	payload := map[string]interface{}{
 		"stock_code": req.StockCode,
 	}
@@ -1120,9 +1184,6 @@ func buildTimesfmPredictPayload(req *models.TimesfmPredictRequest) map[string]in
 	}
 	if req.ContextLen != nil {
 		payload["context_len"] = *req.ContextLen
-	}
-	if req.TimesfmVersion != nil {
-		payload["timesfm_version"] = *req.TimesfmVersion
 	}
 	if req.UserID != nil {
 		payload["user_id"] = *req.UserID
@@ -1145,12 +1206,28 @@ func buildTimesfmPredictPayload(req *models.TimesfmPredictRequest) map[string]in
 	if req.Covariates != nil {
 		payload["covariates"] = req.Covariates
 	}
-	return payload
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return 0, nil, fmt.Errorf("marshal predict once payload: %v", err)
+	}
+	url := fmt.Sprintf("%s/predict_once", s.config.PythonService.BaseURL)
+	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return 0, nil, fmt.Errorf("call python predict once: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := readPythonJSONResponse(resp, url, "decode python predict once response")
+	if err != nil {
+		return resp.StatusCode, nil, err
+	}
+	return resp.StatusCode, body, nil
 }
 
-func (s *WatchlistService) GetTimesfmPredictOnceCached(req *models.TimesfmPredictRequest) (int, map[string]interface{}, error) {
-	if s == nil || s.config == nil || strings.TrimSpace(s.config.PythonService.BaseURL) == "" {
-		return 0, nil, fmt.Errorf("python service is not configured")
+func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest) (int, map[string]interface{}, error) {
+	if s == nil || s.config == nil || strings.TrimSpace(s.config.PostgresHandler.BaseURL) == "" {
+		return 0, nil, fmt.Errorf("postgres handler is not configured")
 	}
 	if req == nil {
 		return http.StatusBadRequest, map[string]interface{}{
@@ -1159,27 +1236,88 @@ func (s *WatchlistService) GetTimesfmPredictOnceCached(req *models.TimesfmPredic
 		}, nil
 	}
 
-	payload := buildTimesfmPredictPayload(req)
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return 0, nil, fmt.Errorf("marshal predict once cached payload: %v", err)
+	stockCode := strings.TrimSpace(req.StockCode)
+	horizonLen := intValueOrDefault(req.HorizonLen, 7)
+	contextLen := intValueOrDefault(req.ContextLen, 2048)
+	baseURL := strings.TrimRight(strings.TrimSpace(s.config.PostgresHandler.BaseURL), "/")
+	query := url.Values{}
+	query.Set("symbol", normalizeMTFSymbolReadKey(stockCode))
+	query.Set("stock_type", strconv.Itoa(normalizeMTFPredictStockType(req.StockType)))
+	query.Set("horizon_len", strconv.Itoa(horizonLen))
+	query.Set("context_len", strconv.Itoa(contextLen))
+	query.Set("prediction_type", normalizeTrainPredictionType(req.PredictionType))
+	if signature := strings.TrimSpace(req.CovariateSignature); signature != "" {
+		query.Set("covariate_signature", signature)
 	}
-	requestURL := fmt.Sprintf("%s/predict_once_cached", s.config.PythonService.BaseURL)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
-	resp, err := client.Post(requestURL, "application/json", bytes.NewBuffer(jsonData))
+	requestURL := fmt.Sprintf("%s/api/v1/save-predictions/mtf-direct/by-request?%s", baseURL, query.Encode())
+
+	httpReq, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
-		return 0, nil, fmt.Errorf("call python predict once cached: %v", err)
+		return 0, nil, fmt.Errorf("build postgres direct prediction request: %v", err)
+	}
+	if token := strings.TrimSpace(s.config.PostgresHandler.APIToken); token != "" {
+		httpReq.Header.Set("X-Token", token)
+	}
+
+	timeout := s.config.PostgresHandler.Timeout
+	if timeout <= 0 {
+		timeout = 10
+	}
+	client := newPythonServiceHTTPClient(timeout)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return 0, nil, fmt.Errorf("query postgres direct prediction cache: %v", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := readPythonJSONResponse(resp, requestURL, "decode python predict once cached response")
-	if err != nil {
-		return resp.StatusCode, nil, err
+	var decoded postgresHandlerDirectPredictionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("decode postgres direct prediction cache response: %v", err)
 	}
-	return resp.StatusCode, body, nil
+	if resp.StatusCode == http.StatusNotFound {
+		return http.StatusNotFound, map[string]interface{}{
+			"success":    false,
+			"stock_code": stockCode,
+			"message":    "未找到单次预测缓存",
+			"error":      "prediction cache not found",
+		}, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(decoded.Error)
+		if message == "" {
+			message = strings.TrimSpace(decoded.Message)
+		}
+		if message == "" {
+			message = fmt.Sprintf("postgres direct prediction cache returned status %d", resp.StatusCode)
+		}
+		return resp.StatusCode, map[string]interface{}{
+			"success": false,
+			"message": message,
+			"error":   message,
+		}, nil
+	}
+	if decoded.Data == nil {
+		return http.StatusNotFound, map[string]interface{}{
+			"success":    false,
+			"stock_code": stockCode,
+			"message":    "未找到单次预测缓存",
+			"error":      "prediction cache not found",
+		}, nil
+	}
+	decoded.Data["cache_hit"] = true
+	body := map[string]interface{}{
+		"success":    true,
+		"stock_code": stockCode,
+		"message":    "单次预测缓存命中",
+		"data":       decoded.Data,
+	}
+	if gpuID := strings.TrimSpace(fmt.Sprint(decoded.Data["gpu_id"])); gpuID != "" && gpuID != "<nil>" {
+		body["gpu_id"] = gpuID
+	}
+	return http.StatusOK, body, nil
 }
 
-func (s *WatchlistService) GetTimesfmJobStatus(jobID string) (int, map[string]interface{}, error) {
+func (s *WatchlistService) GetMTFJobStatus(jobID string) (int, map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/jobs/%s", s.config.PythonService.BaseURL, jobID)
 	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
 	resp, err := client.Get(url)
@@ -1194,8 +1332,8 @@ func (s *WatchlistService) GetTimesfmJobStatus(jobID string) (int, map[string]in
 	return resp.StatusCode, body, nil
 }
 
-// 保存TimesFM最佳分位预测结果到PG（UPSERT by unique_key）
-func (s *WatchlistService) SaveTimesfmBest(req *models.SaveTimesfmBestRequest) error {
+// 保存MTF最佳分位预测结果到PG（UPSERT by unique_key）
+func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
 	// 解析日期字符串为DATE由SQL处理
 	metricsJSON, err := json.Marshal(req.BestMetrics)
 	if err != nil {
@@ -1215,12 +1353,12 @@ func (s *WatchlistService) SaveTimesfmBest(req *models.SaveTimesfmBestRequest) e
 		covSignatureArg = req.CovariateSignature
 	}
 
-	// TimesFM best 结果统一公开，便于不同用户复用历史走势。
+	// MTF best 结果统一公开，便于不同用户复用历史走势。
 	isPublic := 1
 
 	_, err = s.db.Conn.Exec(`
-        INSERT INTO timesfm_best_predictions (
-            unique_key, symbol, timesfm_version, best_prediction_item, best_metrics,
+        INSERT INTO mtf_best_predictions (
+            unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
             prediction_type, covariate_config, covariate_signature, covariate_analysis,
             is_public,
             train_start_date, train_end_date,
@@ -1254,7 +1392,7 @@ func (s *WatchlistService) SaveTimesfmBest(req *models.SaveTimesfmBestRequest) e
             horizon_len = EXCLUDED.horizon_len,
             updated_at = CURRENT_TIMESTAMP
     `,
-		req.UniqueKey, req.Symbol, req.TimesfmVersion, req.BestPredictionItem, string(metricsJSON),
+		req.UniqueKey, req.Symbol, req.MTFVersion, req.BestPredictionItem, string(metricsJSON),
 		predictionType, covConfigJSON, covSignatureArg, covAnalysisJSON,
 		isPublic,
 		req.TrainStartDate, req.TrainEndDate,
@@ -1264,16 +1402,16 @@ func (s *WatchlistService) SaveTimesfmBest(req *models.SaveTimesfmBestRequest) e
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to upsert timesfm_best_predictions: %v", err)
+		return fmt.Errorf("failed to upsert mtf_best_predictions: %v", err)
 	}
 	return nil
 }
 
-// 按 unique_key 查询单条 TimesFM 最佳分位预测记录
-func (s *WatchlistService) GetTimesfmBestByUniqueKey(uniqueKey string) (*models.TimesfmBestPrediction, error) {
+// 按 unique_key 查询单条 MTF 最佳分位预测记录
+func (s *WatchlistService) GetMTFBestByUniqueKey(uniqueKey string) (*models.MTFBestPrediction, error) {
 	row := s.db.Conn.QueryRow(`
         SELECT 
-            id, unique_key, symbol, timesfm_version, best_prediction_item, best_metrics::text,
+            id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics::text,
             prediction_type, COALESCE(covariate_config, '{}'::jsonb)::text,
             COALESCE(covariate_signature, ''),
             COALESCE(covariate_analysis, '{}'::jsonb)::text,
@@ -1283,14 +1421,14 @@ func (s *WatchlistService) GetTimesfmBestByUniqueKey(uniqueKey string) (*models.
             val_start_date, val_end_date,
             context_len, horizon_len,
             created_at, updated_at
-        FROM timesfm_best_predictions
+        FROM mtf_best_predictions
         WHERE unique_key = $1
         LIMIT 1
     `, uniqueKey)
 
-	var item models.TimesfmBestPrediction
+	var item models.MTFBestPrediction
 	err := row.Scan(
-		&item.ID, &item.UniqueKey, &item.Symbol, &item.TimesfmVersion, &item.BestPredictionItem, &item.BestMetrics,
+		&item.ID, &item.UniqueKey, &item.Symbol, &item.MTFVersion, &item.BestPredictionItem, &item.BestMetrics,
 		&item.PredictionType,
 		&item.CovariateConfig, &item.CovariateSignature, &item.CovariateAnalysis,
 		&item.IsPublic,
@@ -1304,15 +1442,15 @@ func (s *WatchlistService) GetTimesfmBestByUniqueKey(uniqueKey string) (*models.
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}
-		return nil, fmt.Errorf("failed to get timesfm_best_predictions by unique_key: %v", err)
+		return nil, fmt.Errorf("failed to get mtf_best_predictions by unique_key: %v", err)
 	}
 
 	return &item, nil
 }
 
-func (s *WatchlistService) GetTimesfmBestUniqueKeysByConfig(symbol string, horizonLen int, contextLen int, timesfmVersion string) (*models.TimesfmBestUniqueKeysByConfig, error) {
-	normalizedSymbol := normalizeTimesfmSymbolReadKey(symbol)
-	canonicalSymbolExpr := timesfmCanonicalSymbolExpr("symbol")
+func (s *WatchlistService) GetMTFBestUniqueKeysByConfig(symbol string, horizonLen int, contextLen int, mtfVersion string) (*models.MTFBestUniqueKeysByConfig, error) {
+	normalizedSymbol := normalizeMTFSymbolReadKey(symbol)
+	canonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
 
 	rows, err := s.db.Conn.Query(fmt.Sprintf(`
         SELECT prediction_type, unique_key
@@ -1322,29 +1460,29 @@ func (s *WatchlistService) GetTimesfmBestUniqueKeysByConfig(symbol string, horiz
                 unique_key,
                 updated_at,
                 id
-            FROM timesfm_best_predictions
+            FROM mtf_best_predictions
             WHERE %s = $1
               AND horizon_len = $2
               AND context_len = $3
-              AND ($4 = '' OR timesfm_version = $4)
+              AND ($4 = '' OR mtf_version = $4)
             ORDER BY prediction_type,
                      CASE WHEN %s = lower(trim(symbol)) THEN 0 ELSE 1 END,
                      updated_at DESC,
                      id DESC
         ) latest
-    `, canonicalSymbolExpr, canonicalSymbolExpr), normalizedSymbol, horizonLen, contextLen, strings.TrimSpace(timesfmVersion))
+    `, canonicalSymbolExpr, canonicalSymbolExpr), normalizedSymbol, horizonLen, contextLen, strings.TrimSpace(mtfVersion))
 	if err != nil {
-		return nil, fmt.Errorf("failed to query timesfm_best_predictions by config: %v", err)
+		return nil, fmt.Errorf("failed to query mtf_best_predictions by config: %v", err)
 	}
 	defer rows.Close()
 
-	result := &models.TimesfmBestUniqueKeysByConfig{
-		Symbol:          normalizedSymbol,
-		TimesfmVersion:  strings.TrimSpace(timesfmVersion),
-		HorizonLen:      horizonLen,
-		ContextLen:      contextLen,
-		NonCovUniqueKey: "",
-		CovUniqueKey:    "",
+	result := &models.MTFBestUniqueKeysByConfig{
+		Symbol:           normalizedSymbol,
+		MTFVersion:       strings.TrimSpace(mtfVersion),
+		HorizonLen:       horizonLen,
+		ContextLen:       contextLen,
+		MTFLiteUniqueKey: "",
+		MTFProUniqueKey:  "",
 	}
 
 	found := 0
@@ -1352,14 +1490,14 @@ func (s *WatchlistService) GetTimesfmBestUniqueKeysByConfig(symbol string, horiz
 		var predictionType string
 		var uniqueKey string
 		if err := rows.Scan(&predictionType, &uniqueKey); err != nil {
-			return nil, fmt.Errorf("failed to scan timesfm_best_predictions by config: %v", err)
+			return nil, fmt.Errorf("failed to scan mtf_best_predictions by config: %v", err)
 		}
-		switch normalizedPredictionType(predictionType) {
-		case "cov":
-			result.CovUniqueKey = uniqueKey
+		switch normalizeTrainPredictionType(predictionType) {
+		case "mtf-pro":
+			result.MTFProUniqueKey = uniqueKey
 			found++
 		default:
-			result.NonCovUniqueKey = uniqueKey
+			result.MTFLiteUniqueKey = uniqueKey
 			found++
 		}
 	}
@@ -1370,24 +1508,24 @@ func (s *WatchlistService) GetTimesfmBestUniqueKeysByConfig(symbol string, horiz
 	return result, nil
 }
 
-// 按 unique_key 查询单条 TimesFM 回测结果
-func (s *WatchlistService) GetTimesfmBacktestByUniqueKey(uniqueKey string) (map[string]interface{}, error) {
+// 按 unique_key 查询单条 MTF 回测结果
+func (s *WatchlistService) GetMTFBacktestByUniqueKey(uniqueKey string) (map[string]interface{}, error) {
 	row := s.db.Conn.QueryRow(`
         SELECT 
-            unique_key, symbol, timesfm_version, context_len, horizon_len,
+            unique_key, symbol, mtf_version, context_len, horizon_len,
             covariate_config, covariate_signature, covariate_analysis,
             used_quantile, buy_threshold_pct, sell_threshold_pct, trade_fee_rate, total_fees_paid, actual_total_return_pct,
             benchmark_return_pct, benchmark_annualized_return_pct, period_days,
             validation_start_date, validation_end_date, validation_benchmark_return_pct, validation_benchmark_annualized_return_pct, validation_period_days,
             position_control, predicted_change_stats, per_chunk_signals,
             equity_curve_values, equity_curve_pct, equity_curve_pct_gross, curve_dates, actual_end_prices, trades
-        FROM timesfm_backtests
+        FROM mtf_backtests
         WHERE unique_key = $1
         LIMIT 1
     `, uniqueKey)
 
 	var (
-		uniqueKeyOut, symbol, timesfmVersion                                                 string
+		uniqueKeyOut, symbol, mtfVersion                                                     string
 		covariateConfig, covariateAnalysis                                                   []byte
 		covariateSignature                                                                   sql.NullString
 		contextLen, horizonLen, periodDays, validationPeriodDays                             int
@@ -1402,7 +1540,7 @@ func (s *WatchlistService) GetTimesfmBacktestByUniqueKey(uniqueKey string) (map[
 	)
 
 	err := row.Scan(
-		&uniqueKeyOut, &symbol, &timesfmVersion, &contextLen, &horizonLen,
+		&uniqueKeyOut, &symbol, &mtfVersion, &contextLen, &horizonLen,
 		&covariateConfig, &covariateSignature, &covariateAnalysis,
 		&usedQuantile, &buyThresholdPct, &sellThresholdPct, &tradeFeeRate, &totalFeesPaid, &actualTotalReturnPct,
 		&benchmarkReturnPct, &benchmarkAnnualizedReturnPct, &periodDays,
@@ -1414,16 +1552,15 @@ func (s *WatchlistService) GetTimesfmBacktestByUniqueKey(uniqueKey string) (map[
 		if err == sql.ErrNoRows {
 			return nil, sql.ErrNoRows
 		}
-		return nil, fmt.Errorf("failed to get timesfm_backtests by unique_key: %v", err)
+		return nil, fmt.Errorf("failed to get mtf_backtests by unique_key: %v", err)
 	}
 
 	out := map[string]interface{}{
 		"unique_key":                      uniqueKeyOut,
 		"symbol":                          symbol,
-		"timesfm_version":                 timesfmVersion,
+		"mtf_version":                     mtfVersion,
 		"context_len":                     contextLen,
 		"horizon_len":                     horizonLen,
-		"covariate_config":                covariateConfig,
 		"covariate_analysis":              covariateAnalysis,
 		"used_quantile":                   usedQuantile,
 		"buy_threshold_pct":               buyThresholdPct,
@@ -1466,11 +1603,11 @@ func (s *WatchlistService) GetTimesfmBacktestByUniqueKey(uniqueKey string) (map[
 	return out, nil
 }
 
-// 按用户ID查询其所有TimesFM最佳分位预测列表
-func (s *WatchlistService) ListTimesfmBestByUserID(userID int) ([]models.TimesfmBestPrediction, error) {
+// 按用户ID查询其所有MTF最佳分位预测列表
+func (s *WatchlistService) ListMTFBestByUserID(userID int) ([]models.MTFBestPrediction, error) {
 	rows, err := s.db.Conn.Query(`
         SELECT 
-            id, unique_key, symbol, timesfm_version, best_prediction_item, best_metrics::text,
+            id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics::text,
             prediction_type, COALESCE(covariate_config, '{}'::jsonb)::text,
             COALESCE(covariate_signature, ''),
             COALESCE(covariate_analysis, '{}'::jsonb)::text,
@@ -1480,24 +1617,24 @@ func (s *WatchlistService) ListTimesfmBestByUserID(userID int) ([]models.Timesfm
             val_start_date, val_end_date,
             context_len, horizon_len,
             created_at, updated_at
-        FROM timesfm_best_predictions
+        FROM mtf_best_predictions
         WHERE EXISTS (
-            SELECT 1 FROM timesfm_best_validation_chunks vc
-            WHERE vc.unique_key = timesfm_best_predictions.unique_key
+            SELECT 1 FROM mtf_best_validation_chunks vc
+            WHERE vc.unique_key = mtf_best_predictions.unique_key
               AND vc.user_id = $1
         )
         ORDER BY updated_at DESC
     `, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query timesfm_best_predictions by user_id: %v", err)
+		return nil, fmt.Errorf("failed to query mtf_best_predictions by user_id: %v", err)
 	}
 	defer rows.Close()
 
-	var results []models.TimesfmBestPrediction
+	var results []models.MTFBestPrediction
 	for rows.Next() {
-		var item models.TimesfmBestPrediction
+		var item models.MTFBestPrediction
 		if err := rows.Scan(
-			&item.ID, &item.UniqueKey, &item.Symbol, &item.TimesfmVersion, &item.BestPredictionItem, &item.BestMetrics,
+			&item.ID, &item.UniqueKey, &item.Symbol, &item.MTFVersion, &item.BestPredictionItem, &item.BestMetrics,
 			&item.PredictionType,
 			&item.CovariateConfig, &item.CovariateSignature, &item.CovariateAnalysis,
 			&item.IsPublic,
@@ -1507,7 +1644,7 @@ func (s *WatchlistService) ListTimesfmBestByUserID(userID int) ([]models.Timesfm
 			&item.ContextLen, &item.HorizonLen,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan timesfm_best_predictions: %v", err)
+			return nil, fmt.Errorf("failed to scan mtf_best_predictions: %v", err)
 		}
 		results = append(results, item)
 	}
@@ -1515,17 +1652,17 @@ func (s *WatchlistService) ListTimesfmBestByUserID(userID int) ([]models.Timesfm
 }
 
 // 普通用户只查询公开数据；管理员可同时查询公开/非公开数据，并支持按 horizon_len / symbol 筛选
-func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, userID *int, includePrivate bool) ([]models.TimesfmBestPrediction, error) {
-	baseCanonicalSymbolExpr := timesfmCanonicalSymbolExpr("symbol")
-	rowCanonicalSymbolExpr := timesfmCanonicalSymbolExpr("t.symbol")
+func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, userID *int, includePrivate bool) ([]models.MTFBestPrediction, error) {
+	baseCanonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
+	rowCanonicalSymbolExpr := mtfCanonicalSymbolExpr("t.symbol")
 	query := fmt.Sprintf(`
         WITH public_groups AS (
             SELECT DISTINCT
                 %s AS canonical_symbol,
                 horizon_len,
                 context_len,
-                timesfm_version
-            FROM timesfm_best_predictions
+                mtf_version
+            FROM mtf_best_predictions
             WHERE 1 = 1
     `, baseCanonicalSymbolExpr)
 	var args []interface{}
@@ -1537,8 +1674,8 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
 		conditions = append(conditions, fmt.Sprintf(`(
 			is_public = 1 OR EXISTS (
 				SELECT 1
-				FROM timesfm_best_validation_chunks vc
-				WHERE vc.unique_key = timesfm_best_predictions.unique_key
+				FROM mtf_best_validation_chunks vc
+				WHERE vc.unique_key = mtf_best_predictions.unique_key
 				  AND vc.user_id = $%d
 			)
 		)`, len(args)))
@@ -1549,7 +1686,7 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
 		args = append(args, horizonLen)
 		conditions = append(conditions, fmt.Sprintf("horizon_len = $%d", len(args)))
 	}
-	if normalizedSymbol := normalizeTimesfmSymbolReadKey(symbol); normalizedSymbol != "" {
+	if normalizedSymbol := normalizeMTFSymbolReadKey(symbol); normalizedSymbol != "" {
 		args = append(args, normalizedSymbol)
 		conditions = append(conditions, fmt.Sprintf("%s = $%d", baseCanonicalSymbolExpr, len(args)))
 	}
@@ -1558,19 +1695,12 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
 	}
 	query += fmt.Sprintf(`
         ),
-        watchlist_counts AS (
-            SELECT
-                %s AS canonical_symbol,
-                COUNT(DISTINCT user_id)::int AS watchlist_count
-            FROM user_watchlist
-            GROUP BY %s
-        ),
         ranked AS (
             SELECT
                 t.id,
                 t.unique_key,
                 %s AS symbol,
-                t.timesfm_version,
+                t.mtf_version,
                 t.best_prediction_item,
                 t.best_metrics::text AS best_metrics,
                 t.prediction_type,
@@ -1589,47 +1719,44 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
                 t.created_at,
                 t.updated_at,
                 COALESCE(t.short_name, '') AS short_name,
-                COALESCE(wc.watchlist_count, 0) AS watchlist_count,
                 ROW_NUMBER() OVER (
-                    PARTITION BY %s, t.horizon_len, t.context_len, t.timesfm_version, COALESCE(NULLIF(TRIM(t.prediction_type), ''), 'non_cov')
+                    PARTITION BY %s, t.horizon_len, t.context_len, t.mtf_version, COALESCE(NULLIF(TRIM(t.prediction_type), ''), 'mtf-lite')
                     ORDER BY CASE WHEN %s = lower(trim(t.symbol)) THEN 0 ELSE 1 END,
                              t.updated_at DESC,
                              t.id DESC
                 ) AS rn
-            FROM timesfm_best_predictions t
+            FROM mtf_best_predictions t
             INNER JOIN public_groups g
                 ON g.canonical_symbol = %s
                AND g.horizon_len = t.horizon_len
                AND g.context_len = t.context_len
-               AND g.timesfm_version = t.timesfm_version
-            LEFT JOIN watchlist_counts wc
-                ON wc.canonical_symbol = %s
+               AND g.mtf_version = t.mtf_version
         )
         SELECT
-            id, unique_key, symbol, timesfm_version, best_prediction_item, best_metrics,
+            id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
             prediction_type, covariate_config, covariate_signature, covariate_analysis,
             is_public,
             train_start_date, train_end_date,
             test_start_date, test_end_date,
             val_start_date, val_end_date,
             context_len, horizon_len,
-            created_at, updated_at, short_name, watchlist_count
+            created_at, updated_at, short_name
         FROM ranked
         WHERE rn = 1
         ORDER BY updated_at DESC
-    `, timesfmCanonicalSymbolExpr("symbol"), timesfmCanonicalSymbolExpr("symbol"), rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
+    `, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
 
 	rows, err := s.db.Conn.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query public timesfm_best_predictions: %v", err)
+		return nil, fmt.Errorf("failed to query public mtf_best_predictions: %v", err)
 	}
 	defer rows.Close()
 
-	var results []models.TimesfmBestPrediction
+	var results []models.MTFBestPrediction
 	for rows.Next() {
-		var item models.TimesfmBestPrediction
+		var item models.MTFBestPrediction
 		if err := rows.Scan(
-			&item.ID, &item.UniqueKey, &item.Symbol, &item.TimesfmVersion, &item.BestPredictionItem, &item.BestMetrics,
+			&item.ID, &item.UniqueKey, &item.Symbol, &item.MTFVersion, &item.BestPredictionItem, &item.BestMetrics,
 			&item.PredictionType,
 			&item.CovariateConfig, &item.CovariateSignature, &item.CovariateAnalysis,
 			&item.IsPublic,
@@ -1637,9 +1764,9 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
 			&item.TestStartDate, &item.TestEndDate,
 			&item.ValStartDate, &item.ValEndDate,
 			&item.ContextLen, &item.HorizonLen,
-			&item.CreatedAt, &item.UpdatedAt, &item.ShortName, &item.WatchlistCount,
+			&item.CreatedAt, &item.UpdatedAt, &item.ShortName,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan public timesfm_best_predictions: %v", err)
+			return nil, fmt.Errorf("failed to scan public mtf_best_predictions: %v", err)
 		}
 		if strings.TrimSpace(item.ShortName) == "" {
 			item.ShortName = s.lookupDisplayName(item.Symbol)
@@ -1650,26 +1777,26 @@ func (s *WatchlistService) listScopedTimesfmBest(horizonLen int, symbol string, 
 	return results, nil
 }
 
-func (s *WatchlistService) ListPublicTimesfmBest(horizonLen int, symbol string, includePrivate bool) ([]models.TimesfmBestPrediction, error) {
-	return s.listScopedTimesfmBest(horizonLen, symbol, nil, includePrivate)
+func (s *WatchlistService) ListPublicMTFBest(horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {
+	return s.listScopedMTFBest(horizonLen, symbol, nil, includePrivate)
 }
 
-func (s *WatchlistService) ListAccessibleTimesfmBest(userID int, horizonLen int, symbol string, includePrivate bool) ([]models.TimesfmBestPrediction, error) {
+func (s *WatchlistService) ListAccessibleMTFBest(userID int, horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {
 	uid := userID
-	items, err := s.listScopedTimesfmBest(horizonLen, symbol, &uid, includePrivate)
+	items, err := s.listScopedMTFBest(horizonLen, symbol, &uid, includePrivate)
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
-		if err := s.triggerStaleTimesfmBestRefresh(item); err != nil {
-			log.Printf("stale timesfm best refresh enqueue failed: symbol=%s unique_key=%s err=%v", item.Symbol, item.UniqueKey, err)
+		if err := s.triggerStaleMTFBestRefresh(item); err != nil {
+			log.Printf("stale mtf best refresh enqueue failed: symbol=%s unique_key=%s err=%v", item.Symbol, item.UniqueKey, err)
 		}
 	}
 	return items, nil
 }
 
 // 根据 unique_key 查询对应的验证集分块列表
-func (s *WatchlistService) ListValidationChunksByUniqueKey(uniqueKey string) ([]models.SaveTimesfmValChunkRequest, error) {
+func (s *WatchlistService) ListValidationChunksByUniqueKey(uniqueKey string) ([]models.SaveMTFValChunkRequest, error) {
 	chunksByKey, err := s.ListValidationChunksByUniqueKeys([]string{uniqueKey})
 	if err != nil {
 		return nil, err
@@ -1677,11 +1804,11 @@ func (s *WatchlistService) ListValidationChunksByUniqueKey(uniqueKey string) ([]
 	return chunksByKey[uniqueKey], nil
 }
 
-func (s *WatchlistService) ListValidationChunksByUniqueKeys(uniqueKeys []string) (map[string][]models.SaveTimesfmValChunkRequest, error) {
+func (s *WatchlistService) ListValidationChunksByUniqueKeys(uniqueKeys []string) (map[string][]models.SaveMTFValChunkRequest, error) {
 	keys := uniqueNonEmptyStrings(uniqueKeys)
-	chunksByKey := make(map[string][]models.SaveTimesfmValChunkRequest, len(keys))
+	chunksByKey := make(map[string][]models.SaveMTFValChunkRequest, len(keys))
 	for _, key := range keys {
-		chunksByKey[key] = []models.SaveTimesfmValChunkRequest{}
+		chunksByKey[key] = []models.SaveMTFValChunkRequest{}
 	}
 	if len(keys) == 0 {
 		return chunksByKey, nil
@@ -1695,9 +1822,9 @@ func (s *WatchlistService) ListValidationChunksByUniqueKeys(uniqueKeys []string)
             COALESCE(actual_change_percent, '[]'::jsonb),
             change_base_value,
             change_base_date::text,
-            dates, COALESCE(prediction_type, 'non_cov'),
+            dates, COALESCE(prediction_type, 'mtf-lite'),
             covariate_config, covariate_signature, covariate_analysis
-        FROM timesfm_best_validation_chunks
+        FROM mtf_best_validation_chunks
         WHERE unique_key = ANY($1)
         ORDER BY unique_key ASC, chunk_index ASC
     `, pq.Array(keys))
@@ -1707,7 +1834,7 @@ func (s *WatchlistService) ListValidationChunksByUniqueKeys(uniqueKeys []string)
 	defer rows.Close()
 
 	for rows.Next() {
-		req, err := scanTimesfmValidationChunk(rows)
+		req, err := scanMTFValidationChunk(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -1736,8 +1863,8 @@ func uniqueNonEmptyStrings(values []string) []string {
 	return out
 }
 
-func scanTimesfmValidationChunk(rows *sql.Rows) (models.SaveTimesfmValChunkRequest, error) {
-	var req models.SaveTimesfmValChunkRequest
+func scanMTFValidationChunk(rows *sql.Rows) (models.SaveMTFValChunkRequest, error) {
+	var req models.SaveMTFValChunkRequest
 	var predsJSON, actualJSON, predChangeJSON, actualChangeJSON, datesJSON []byte
 	var changeBaseValue sql.NullFloat64
 	var changeBaseDate sql.NullString
@@ -1804,12 +1931,12 @@ func (s *WatchlistService) GetLatestValidationChunkByUniqueKey(uniqueKey string)
             vc.symbol,
             vc.start_date,
             vc.end_date,
-            COALESCE(vc.prediction_type, 'non_cov'),
+            COALESCE(vc.prediction_type, 'mtf-lite'),
             COALESCE(vc.covariate_config, '{}'::jsonb),
             COALESCE(vc.covariate_signature, ''),
             COALESCE(vc.covariate_analysis, '{}'::jsonb),
             COALESCE(st.company_name, '') AS stock_name
-        FROM timesfm_best_validation_chunks vc
+        FROM mtf_best_validation_chunks vc
         LEFT JOIN stocks st ON st.symbol = vc.symbol
         WHERE vc.unique_key = $1
         ORDER BY vc.chunk_index DESC
@@ -1841,7 +1968,6 @@ func (s *WatchlistService) GetLatestValidationChunkByUniqueKey(uniqueKey string)
 		"chunk_index":         chunkIdx,
 		"symbol":              symbol,
 		"prediction_type":     predictionType,
-		"covariate_config":    covConfig,
 		"covariate_signature": covSignature,
 		"covariate_analysis":  covAnalysis,
 		"stock_name":          stockName,
@@ -1852,7 +1978,7 @@ func (s *WatchlistService) GetLatestValidationChunkByUniqueKey(uniqueKey string)
 }
 
 func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([]string, []float64, float64, float64, float64, error) {
-	row := s.db.Conn.QueryRow(`SELECT best_prediction_item FROM timesfm_best_predictions WHERE unique_key = $1 LIMIT 1`, uniqueKey)
+	row := s.db.Conn.QueryRow(`SELECT best_prediction_item FROM mtf_best_predictions WHERE unique_key = $1 LIMIT 1`, uniqueKey)
 	var bestItem string
 	if err := row.Scan(&bestItem); err != nil {
 		return nil, nil, 0, 0, 0, fmt.Errorf("failed to get best_prediction_item: %v", err)
@@ -1860,7 +1986,7 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 
 	rows, err := s.db.Conn.Query(`
         SELECT dates, predictions
-        FROM timesfm_best_validation_chunks
+        FROM mtf_best_validation_chunks
         WHERE unique_key = $1 AND start_date >= CURRENT_DATE + INTERVAL '1 day'
         ORDER BY chunk_index ASC
     `, uniqueKey)
@@ -1938,7 +2064,7 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 	var actualLatest float64 = 0
 	pastRows, err := s.db.Conn.Query(`
         SELECT actual_values
-        FROM timesfm_best_validation_chunks
+        FROM mtf_best_validation_chunks
         WHERE unique_key = $1 AND start_date <= CURRENT_DATE
         ORDER BY chunk_index ASC
     `, uniqueKey)
@@ -1974,7 +2100,7 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 }
 
 // 保存验证集分块的预测与实际值（UPSERT by unique_key+chunk_index）
-func (s *WatchlistService) SaveTimesfmValChunk(req *models.SaveTimesfmValChunkRequest) error {
+func (s *WatchlistService) SaveMTFValChunk(req *models.SaveMTFValChunkRequest) error {
 	predsJSON, err := json.Marshal(req.Predictions)
 	if err != nil {
 		return fmt.Errorf("failed to marshal predictions: %v", err)
@@ -2034,7 +2160,7 @@ func (s *WatchlistService) SaveTimesfmValChunk(req *models.SaveTimesfmValChunkRe
 	}
 
 	_, err = s.db.Conn.Exec(`
-        INSERT INTO timesfm_best_validation_chunks (
+        INSERT INTO mtf_best_validation_chunks (
             unique_key, chunk_index, user_id, symbol, start_date, end_date,
             predictions, actual_values, predicted_change_percent, actual_change_percent, change_base_value, change_base_date, dates,
             prediction_type, covariate_config, covariate_signature, covariate_analysis
@@ -2064,13 +2190,13 @@ func (s *WatchlistService) SaveTimesfmValChunk(req *models.SaveTimesfmValChunkRe
 		predictionType, covConfigJSON, covSignatureArg, covAnalysisJSON,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert timesfm_best_validation_chunks: %v", err)
+		return fmt.Errorf("failed to upsert mtf_best_validation_chunks: %v", err)
 	}
 	return nil
 }
 
-// 保存 TimesFM 回测结果到 PG（UPSERT by unique_key）
-func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRequest) error {
+// 保存 MTF 回测结果到 PG（UPSERT by unique_key）
+func (s *WatchlistService) SaveMTFBacktest(req *models.SaveMTFBacktestRequest) error {
 	posJSON, err := json.Marshal(req.PositionControl)
 	if err != nil {
 		return fmt.Errorf("failed to marshal position_control: %v", err)
@@ -2132,14 +2258,14 @@ func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRe
 	} else {
 		var spID int
 		if req.UserID != nil {
-			row := s.db.Conn.QueryRow(`SELECT id FROM timesfm_strategy_params WHERE unique_key = $1 AND user_id = $2 LIMIT 1`, req.UniqueKey, *req.UserID)
+			row := s.db.Conn.QueryRow(`SELECT id FROM mtf_strategy_params WHERE unique_key = $1 AND user_id = $2 LIMIT 1`, req.UniqueKey, *req.UserID)
 			if err := row.Scan(&spID); err == nil {
 				spIDArg = spID
 			} else {
 				spIDArg = nil
 			}
 		} else {
-			row := s.db.Conn.QueryRow(`SELECT id FROM timesfm_strategy_params WHERE unique_key = $1 LIMIT 1`, req.UniqueKey)
+			row := s.db.Conn.QueryRow(`SELECT id FROM mtf_strategy_params WHERE unique_key = $1 LIMIT 1`, req.UniqueKey)
 			if err := row.Scan(&spID); err == nil {
 				spIDArg = spID
 			} else {
@@ -2149,8 +2275,8 @@ func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRe
 	}
 
 	_, err = s.db.Conn.Exec(`
-        INSERT INTO timesfm_backtests (
-            unique_key, user_id, strategy_params_id, symbol, timesfm_version, context_len, horizon_len,
+        INSERT INTO mtf_backtests (
+            unique_key, user_id, strategy_params_id, symbol, mtf_version, context_len, horizon_len,
             covariate_config, covariate_signature, covariate_analysis,
             used_quantile, buy_threshold_pct, sell_threshold_pct, trade_fee_rate, total_fees_paid, actual_total_return_pct,
             benchmark_return_pct, benchmark_annualized_return_pct, period_days,
@@ -2170,7 +2296,7 @@ func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRe
             user_id = EXCLUDED.user_id,
             strategy_params_id = EXCLUDED.strategy_params_id,
             symbol = EXCLUDED.symbol,
-            timesfm_version = EXCLUDED.timesfm_version,
+            mtf_version = EXCLUDED.mtf_version,
             context_len = EXCLUDED.context_len,
             horizon_len = EXCLUDED.horizon_len,
             covariate_config = EXCLUDED.covariate_config,
@@ -2201,7 +2327,7 @@ func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRe
             trades = EXCLUDED.trades,
             updated_at = CURRENT_TIMESTAMP
         `,
-		req.UniqueKey, uidArg, spIDArg, req.Symbol, req.TimesfmVersion, req.ContextLen, req.HorizonLen,
+		req.UniqueKey, uidArg, spIDArg, req.Symbol, req.MTFVersion, req.ContextLen, req.HorizonLen,
 		covConfigJSON, covSignatureArg, covAnalysisJSON,
 		req.UsedQuantile, req.BuyThresholdPct, req.SellThresholdPct, req.TradeFeeRate, req.TotalFeesPaid, req.ActualTotalReturnPct,
 		req.BenchmarkReturnPct, req.BenchmarkAnnualizedReturnPct, req.PeriodDays,
@@ -2210,7 +2336,7 @@ func (s *WatchlistService) SaveTimesfmBacktest(req *models.SaveTimesfmBacktestRe
 		string(eqValsJSON), string(eqPctJSON), string(eqPctGrossJSON), string(curveDatesJSON), string(actualEndJSON), string(tradesJSON),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert timesfm_backtests: %v", err)
+		return fmt.Errorf("failed to upsert mtf_backtests: %v", err)
 	}
 	return nil
 }
@@ -2223,7 +2349,7 @@ func (s *WatchlistService) SaveStrategyParams(req *models.SaveStrategyParamsRequ
 		uidArg = nil
 	}
 	_, err := s.db.Conn.Exec(`
-        INSERT INTO timesfm_strategy_params (
+        INSERT INTO mtf_strategy_params (
             unique_key, user_id, name,
             buy_threshold_pct, sell_threshold_pct, initial_cash,
             enable_rebalance, max_position_pct, min_position_pct,
@@ -2259,7 +2385,7 @@ func (s *WatchlistService) SaveStrategyParams(req *models.SaveStrategyParamsRequ
 		req.TradeFeeRate, req.TakeProfitThresholdPct, req.TakeProfitSellFrac,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert timesfm_strategy_params: %v", err)
+		return fmt.Errorf("failed to upsert mtf_strategy_params: %v", err)
 	}
 	return nil
 }
@@ -2271,7 +2397,7 @@ func (s *WatchlistService) GetStrategyParamsByUniqueKey(uniqueKey string) (*mode
                enable_rebalance, max_position_pct, min_position_pct,
                slope_position_per_pct, rebalance_tolerance_pct,
                trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac
-        FROM timesfm_strategy_params
+        FROM mtf_strategy_params
         WHERE unique_key = $1
         LIMIT 1
     `, uniqueKey)
@@ -2307,7 +2433,7 @@ func (s *WatchlistService) GetUserStrategies(userID int) ([]models.StrategyParam
                enable_rebalance, max_position_pct, min_position_pct,
                slope_position_per_pct, rebalance_tolerance_pct,
                trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac
-        FROM timesfm_strategy_params
+        FROM mtf_strategy_params
         WHERE user_id = $1 OR is_public = 1
         ORDER BY is_public DESC, updated_at DESC
     `, userID)

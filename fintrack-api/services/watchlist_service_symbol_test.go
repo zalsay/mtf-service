@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestNormalizeTimesfmSymbolReadKey(t *testing.T) {
+func TestNormalizeMTFSymbolReadKey(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -20,9 +20,9 @@ func TestNormalizeTimesfmSymbolReadKey(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeTimesfmSymbolReadKey(tc.input)
+			got := normalizeMTFSymbolReadKey(tc.input)
 			if got != tc.want {
-				t.Fatalf("normalizeTimesfmSymbolReadKey(%q) = %q, want %q", tc.input, got, tc.want)
+				t.Fatalf("normalizeMTFSymbolReadKey(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
 	}

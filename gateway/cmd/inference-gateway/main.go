@@ -143,12 +143,25 @@ func main() {
 	historyServiceURL := getenv("HISTORY_SERVICE_URL", getenv("AKSHARE_SERVICE_URL", postgresHandlerURL))
 	apiToken := getenv("GATEWAY_API_TOKEN", "fintrack-dev-token")
 	dailyStockSyncEnabled := getenvBool("DAILY_STOCK_SYNC_ENABLED", true)
+	dailyStockSyncMode := strings.TrimSpace(strings.ToLower(os.Getenv("DAILY_STOCK_SYNC_MODE")))
 	dailyStockSyncHour := getenvInt("DAILY_STOCK_SYNC_HOUR", 22)
 	dailyStockSyncMinute := getenvInt("DAILY_STOCK_SYNC_MINUTE", 0)
 	dailyStockSyncExtraTimes := getenv("DAILY_STOCK_SYNC_EXTRA_TIMES", "")
 	dailyStockSyncMaxConcurrency := getenvInt("DAILY_STOCK_SYNC_MAX_CONCURRENCY", 4)
 	dailyStockSyncLookbackDays := getenvInt("DAILY_STOCK_SYNC_LOOKBACK_DAYS", 0)
 	dailyStockSyncTimezone := getenv("DAILY_STOCK_SYNC_TIMEZONE", "Asia/Shanghai")
+	level1DailyURL := strings.TrimSpace(os.Getenv("A_STOCK_DAILY_URL"))
+	level1DailyConcurrent := getenvInt("A_STOCK_DAILY_CONCURRENT", 50)
+	if dailyStockSyncMode == "" {
+		if level1DailyURL != "" {
+			dailyStockSyncMode = "level1"
+		} else {
+			dailyStockSyncMode = "history"
+		}
+	}
+	if dailyStockSyncMode == "level1" && level1DailyURL == "" {
+		level1DailyURL = "http://a-stock-daily:8080"
+	}
 
 	location, err := time.LoadLocation(dailyStockSyncTimezone)
 	if err != nil {
@@ -208,7 +221,7 @@ func main() {
 		})
 	}
 	scheduler := queue.NewScheduler(client, redisStore, endpoints)
-	log.Printf("gateway cov route mode: %s", covRouteMode)
+	log.Printf("gateway mtf-pro route mode: %s", covRouteMode)
 	log.Printf("gateway uzi queue: backend=%s concurrency=%d", uziURL, uziConcurrency)
 	if deepSeekTUIBackendURL != "" {
 		log.Printf("gateway deepseek tui proxy: path=%s backend=%s token_configured=%t", deepSeekTUIProxyPath, deepSeekTUIBackendURL, deepSeekTUIProxyToken != "")
@@ -224,27 +237,51 @@ func main() {
 	if dailyStockSyncEnabled {
 		schedules := dailySyncSchedules(dailyStockSyncHour, dailyStockSyncMinute, dailyStockSyncExtraTimes)
 		for _, schedule := range schedules {
-			dailySyncer := gateway.NewDailyStockSyncer(
+			if dailyStockSyncMode == "level1" {
+				dailySyncer := gateway.NewLevel1DailySyncer(
+					level1DailyURL,
+					historyServiceURL,
+					apiToken,
+					location,
+					schedule.Hour,
+					schedule.Minute,
+					level1DailyConcurrent,
+				)
+				dailySyncer.Start(ctx)
+			} else {
+				dailySyncer := gateway.NewDailyStockSyncer(
+					postgresHandlerURL,
+					historyServiceURL,
+					apiToken,
+					location,
+					schedule.Hour,
+					schedule.Minute,
+					dailyStockSyncMaxConcurrency,
+					dailyStockSyncLookbackDays,
+				)
+				dailySyncer.Start(ctx)
+			}
+		}
+		if dailyStockSyncMode == "level1" {
+			log.Printf(
+				"daily stock sync enabled: mode=level1 level1=%s history=%s schedules=%s tz=%s concurrent=%d",
+				level1DailyURL,
+				historyServiceURL,
+				formatDailySyncSchedules(schedules),
+				location.String(),
+				level1DailyConcurrent,
+			)
+		} else {
+			log.Printf(
+				"daily stock sync enabled: mode=history postgres=%s history=%s schedules=%s tz=%s concurrency=%d lookback_days=%d",
 				postgresHandlerURL,
 				historyServiceURL,
-				apiToken,
-				location,
-				schedule.Hour,
-				schedule.Minute,
+				formatDailySyncSchedules(schedules),
+				location.String(),
 				dailyStockSyncMaxConcurrency,
 				dailyStockSyncLookbackDays,
 			)
-			dailySyncer.Start(ctx)
 		}
-		log.Printf(
-			"daily stock sync enabled: postgres=%s history=%s schedules=%s tz=%s concurrency=%d lookback_days=%d",
-			postgresHandlerURL,
-			historyServiceURL,
-			formatDailySyncSchedules(schedules),
-			location.String(),
-			dailyStockSyncMaxConcurrency,
-			dailyStockSyncLookbackDays,
-		)
 	} else {
 		log.Printf("daily stock sync disabled")
 	}

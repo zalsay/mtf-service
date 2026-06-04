@@ -19,7 +19,7 @@ func TestInferenceTimeEstimatorUsesPredictionType(t *testing.T) {
 			{
 				"generated_at": "2026-05-20T16:10:04+08:00",
 				"backend": "rocm",
-				"prediction_type": "non_cov",
+				"prediction_type": "mtf-lite",
 				"results": [
 					{"context_len": 1024, "horizon_len": 14, "estimated_inference_time_sec": 15.7}
 				]
@@ -27,7 +27,7 @@ func TestInferenceTimeEstimatorUsesPredictionType(t *testing.T) {
 			{
 				"generated_at": "2026-05-20T16:28:59+08:00",
 				"backend": "xpu",
-				"prediction_type": "cov",
+				"prediction_type": "mtf-pro",
 				"results": [
 					{"context_len": 1024, "horizon_len": 14, "estimated_inference_time_sec": 8.0}
 				]
@@ -68,10 +68,10 @@ func TestNormalizeInferencePayloadCanonicalizesLegacyCovPreset(t *testing.T) {
 		"years": 15,
 		"horizon_len": 7,
 		"context_len": 2048,
-		"covariate_preset": "market_cov_v1_timesfm_xreg",
+		"covariate_preset": "market_cov_v1_mtf_xreg",
 		"covariate_config": {
 			"enabled": true,
-			"xreg_mode": "timesfm + xreg",
+			"xreg_mode": "mtf + xreg",
 			"run_tag": "legacy"
 		}
 	}`)
@@ -90,7 +90,6 @@ func TestNormalizeInferencePayloadCanonicalizesLegacyCovPreset(t *testing.T) {
 		EndDate:         request["end_date"],
 		HorizonLen:      request["horizon_len"],
 		ContextLen:      request["context_len"],
-		TimesFMVersion:  request["timesfm_version"],
 		UserID:          request["user_id"],
 		CovariateConfig: request["covariate_config"],
 		Covariates:      request["covariates"],
@@ -112,7 +111,7 @@ func TestNormalizeInferencePayloadCanonicalizesLegacyCovPreset(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected canonical covariate_config map, got %#v", normalizedRequest.CovariateConfig)
 	}
-	if got := strings.TrimSpace(config["xreg_mode"].(string)); got != "xreg + timesfm" {
+	if got := strings.TrimSpace(config["xreg_mode"].(string)); got != "xreg + mtf" {
 		t.Fatalf("expected canonical xreg_mode, got %q", got)
 	}
 	if _, hasAlias := normalizedRequest.Covariates.(map[string]any); hasAlias {
@@ -130,11 +129,47 @@ func TestNormalizeInferencePayloadCanonicalizesLegacyCovPreset(t *testing.T) {
 		t.Fatalf("expected normalized body covariate_signature=%q, got %#v", normalizedRequest.CovariateSignature(), got)
 	}
 	cfg := normalized["covariate_config"].(map[string]any)
-	if got := strings.TrimSpace(cfg["xreg_mode"].(string)); got != "xreg + timesfm" {
+	if got := strings.TrimSpace(cfg["xreg_mode"].(string)); got != "xreg + mtf" {
 		t.Fatalf("expected normalized body xreg_mode to be canonical, got %q", got)
 	}
 	if _, exists := normalized["covariates"]; exists {
 		t.Fatalf("expected normalized body to drop covariates alias, got %#v", normalized["covariates"])
+	}
+	if normalized["prediction_type"] != "mtf-pro" {
+		t.Fatalf("expected normalized body prediction_type=mtf-pro, got %#v", normalized["prediction_type"])
+	}
+	if normalizedRequest.PredictionType() != "mtf-pro" {
+		t.Fatalf("expected normalized request prediction type mtf-pro, got %q", normalizedRequest.PredictionType())
+	}
+}
+
+func TestNormalizeInferencePayloadMapsLegacyPredictionTypeToMtfLite(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510300",
+		"stock_type": 2,
+		"horizon_len": 7,
+		"context_len": 2048,
+		"prediction_type": "mtf-lite"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	if normalizedRequest.PredictionType() != "mtf-lite" {
+		t.Fatalf("expected normalized request prediction type mtf-lite, got %q", normalizedRequest.PredictionType())
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if normalized["prediction_type"] != "mtf-lite" {
+		t.Fatalf("expected normalized body prediction_type=mtf-lite, got %#v", normalized["prediction_type"])
 	}
 }
 
@@ -145,7 +180,7 @@ func TestNormalizeInferencePayloadForwardsForceEnqueueToBackendBody(t *testing.T
 		"years": 15,
 		"horizon_len": 7,
 		"context_len": 2048,
-		"timesfm_version": "2.5",
+		"mtf_version": "legacy-client-value",
 		"force_enqueue": "true"
 	}`)
 
@@ -155,13 +190,12 @@ func TestNormalizeInferencePayloadForwardsForceEnqueueToBackendBody(t *testing.T
 	}
 
 	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, models.InferenceRequest{
-		StockCode:      request["stock_code"].(string),
-		StockType:      request["stock_type"],
-		Years:          request["years"],
-		HorizonLen:     request["horizon_len"],
-		ContextLen:     request["context_len"],
-		TimesFMVersion: request["timesfm_version"],
-		ForceEnqueue:   request["force_enqueue"],
+		StockCode:    request["stock_code"].(string),
+		StockType:    request["stock_type"],
+		Years:        request["years"],
+		HorizonLen:   request["horizon_len"],
+		ContextLen:   request["context_len"],
+		ForceEnqueue: request["force_enqueue"],
 	}, "/internal/predict_for_best_sync")
 	if err != nil {
 		t.Fatalf("normalizeInferencePayload() error: %v", err)
@@ -177,6 +211,9 @@ func TestNormalizeInferencePayloadForwardsForceEnqueueToBackendBody(t *testing.T
 	}
 	if normalized["force_enqueue"] != true {
 		t.Fatalf("expected normalized body to forward force_enqueue=true, got %#v", normalized["force_enqueue"])
+	}
+	if _, exists := normalized["mtf_version"]; exists {
+		t.Fatalf("expected normalized body to omit mtf_version, got %#v", normalized["mtf_version"])
 	}
 }
 

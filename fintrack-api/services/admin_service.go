@@ -120,7 +120,7 @@ func (s *AdminService) ListSystemStrategies() ([]models.StrategyParams, error) {
 		       enable_rebalance, max_position_pct, min_position_pct,
 		       slope_position_per_pct, rebalance_tolerance_pct,
 		       trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac
-		FROM timesfm_strategy_params
+		FROM mtf_strategy_params
 		WHERE is_public = 1
 		ORDER BY updated_at DESC, id DESC
 	`)
@@ -158,7 +158,7 @@ func (s *AdminService) SaveSystemStrategy(req *models.SaveStrategyParamsRequest)
 		return nil, fmt.Errorf("unique_key is required")
 	}
 	_, err := s.db.Conn.Exec(`
-		INSERT INTO timesfm_strategy_params (
+		INSERT INTO mtf_strategy_params (
 			unique_key, user_id, name, is_public,
 			buy_threshold_pct, sell_threshold_pct, initial_cash,
 			enable_rebalance, max_position_pct, min_position_pct,
@@ -252,7 +252,7 @@ func (s *AdminService) getSystemStrategyByUniqueKey(uniqueKey string) (*models.S
 		       enable_rebalance, max_position_pct, min_position_pct,
 		       slope_position_per_pct, rebalance_tolerance_pct,
 		       trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac
-		FROM timesfm_strategy_params
+		FROM mtf_strategy_params
 		WHERE unique_key = $1 AND is_public = 1
 		LIMIT 1
 	`, uniqueKey)

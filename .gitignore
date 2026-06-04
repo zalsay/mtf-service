@@ -32,6 +32,8 @@ MANIFEST
 
 # Codex local workspace settings
 .codex/
+.sparky/
+docs/superpowers/
 
 # macOS
 .DS_Store
@@ -63,6 +65,9 @@ Desktop.ini
 *.log
 logs/
 *.pid
+backups/
+fintrack-api/data/
+fintrack-api/services/data/
 
 # Environment
 .env
@@ -83,13 +88,13 @@ tmp/
 
 *.png
 *.csv
-ai-fucntions/timesfm_inference/timesfm-2p5-functions/timesfm-2.5
+ai-fucntions/mtf_inference/mtf-2p5-functions/mtf-2.5
 fintrack-ai-front/node_modules
-ai-fucntions/timesfm_inference/timesfm-2p5-functions/timesfm-2.5
+ai-fucntions/mtf_inference/mtf-2p5-functions/mtf-2.5
 *.txt
 !ai-fucntions/requirements-rocm.txt
 run
-ai-fucntions/timesfm_inference/forecast-results
+ai-fucntions/mtf_inference/forecast-results
 
 dependencies/
 .xpu/

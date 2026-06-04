@@ -102,8 +102,8 @@ echo "5. 测试按日期范围查询..."
 curl -s "$BASE_URL/api/v1/stock-data/000001/range?type=1&start_date=2024-01-01&end_date=2024-12-31" | jq '.' || echo "日期范围查询失败"
 echo -e "\n"
 
-# 4. TimesFM 验证分块列表查询（按chunk_index升序）
-echo "4. 查询TimesFM验证分块列表..."
+# 4. MTF 验证分块列表查询（按chunk_index升序）
+echo "4. 查询MTF验证分块列表..."
 curl -s -G "$BASE_URL/api/v1/save-predictions/mtf-best/val-chunk/list" \
   -H "Authorization: Bearer fintrack-dev-token" \
   --data-urlencode "unique_key=sh510050_best_hlen_7_clen_2048_v_2.5" | jq '.' || echo "查询验证分块列表失败"

@@ -11,8 +11,8 @@ import (
 	"fintrack-api/models"
 )
 
-func TestNormalizeTimesfmBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
-	req := &models.TimesfmBestTrainRequest{
+func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "non_cov",
@@ -20,7 +20,7 @@ func TestNormalizeTimesfmBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.
 		ContextLen:     256,
 	}
 
-	normalized, err := NormalizeTimesfmBestTrainRequest(req, 0, 12, false)
+	normalized, err := NormalizeMTFBestTrainRequest(req, 0, 12, false)
 	if err != nil {
 		t.Fatalf("expected level 0 request to pass, got error: %v", err)
 	}
@@ -35,7 +35,89 @@ func TestNormalizeTimesfmBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.
 	}
 }
 
-func TestTriggerStaleTimesfmBestRefreshSubmitsBackgroundGatewayJob(t *testing.T) {
+func TestNormalizeTrainPredictionTypeUsesMtfNames(t *testing.T) {
+	tests := map[string]string{
+		"":         "mtf-lite",
+		"non_cov":  "mtf-lite",
+		"cov":      "mtf-pro",
+		"mtf_lite": "mtf-lite",
+		"mtf-lite": "mtf-lite",
+		"mtf_pro":  "mtf-pro",
+		"mtf-pro":  "mtf-pro",
+	}
+
+	for input, want := range tests {
+		if got := normalizeTrainPredictionType(input); got != want {
+			t.Fatalf("normalizeTrainPredictionType(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeMTFBestTrainRequestMtfProBuildsCovariates(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-pro",
+		HorizonLen:     7,
+		ContextLen:     256,
+	}
+
+	normalized, err := NormalizeMTFBestTrainRequest(req, 1, 88, false)
+	if err != nil {
+		t.Fatalf("NormalizeMTFBestTrainRequest() error = %v", err)
+	}
+	if normalized.PredictionType != "mtf-pro" {
+		t.Fatalf("PredictionType = %q, want mtf-pro", normalized.PredictionType)
+	}
+	if normalized.CovariateConfig == nil {
+		t.Fatal("expected mtf-pro request to produce covariate_config")
+	}
+}
+
+func TestTriggerMTFPredictDoesNotForwardMTFVersion(t *testing.T) {
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/predict_for_best" {
+			t.Fatalf("expected /predict_for_best path, got %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		PythonService: config.PythonServiceConfig{
+			BaseURL: server.URL,
+			Timeout: 1,
+		},
+	})
+	horizonLen := 7
+	contextLen := 256
+	status, _, err := service.TriggerMTFPredict(&models.MTFPredictRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-lite",
+		HorizonLen:     &horizonLen,
+		ContextLen:     &contextLen,
+	})
+	if err != nil {
+		t.Fatalf("TriggerMTFPredict error = %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, exists := payload["mtf_version"]; exists {
+		t.Fatalf("payload must not include mtf_version: %#v", payload["mtf_version"])
+	}
+	if payload["prediction_type"] != "mtf-lite" {
+		t.Fatalf("prediction_type = %#v, want mtf-lite", payload["prediction_type"])
+	}
+}
+
+func TestTriggerStaleMTFBestRefreshSubmitsBackgroundGatewayJob(t *testing.T) {
 	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/predict_for_best" {
@@ -55,17 +137,17 @@ func TestTriggerStaleTimesfmBestRefreshSubmitsBackgroundGatewayJob(t *testing.T)
 			Timeout: 1,
 		},
 	})
-	item := models.TimesfmBestPrediction{
+	item := models.MTFBestPrediction{
 		Symbol:         "510050",
 		StockType:      2,
-		TimesfmVersion: "2.5",
+		MTFVersion:     "2.5",
 		PredictionType: "non_cov",
 		ContextLen:     2048,
 		HorizonLen:     7,
 		UpdatedAt:      time.Now().AddDate(0, 0, -181),
 	}
 
-	if err := service.triggerStaleTimesfmBestRefresh(item); err != nil {
+	if err := service.triggerStaleMTFBestRefresh(item); err != nil {
 		t.Fatalf("expected stale refresh submission to pass, got error: %v", err)
 	}
 
@@ -83,8 +165,8 @@ func TestTriggerStaleTimesfmBestRefreshSubmitsBackgroundGatewayJob(t *testing.T)
 	}
 }
 
-func TestNormalizeTimesfmBestTrainRequestLevel0RejectsCov(t *testing.T) {
-	req := &models.TimesfmBestTrainRequest{
+func TestNormalizeMTFBestTrainRequestLevel0RejectsCov(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "cov",
@@ -92,13 +174,13 @@ func TestNormalizeTimesfmBestTrainRequestLevel0RejectsCov(t *testing.T) {
 		ContextLen:     256,
 	}
 
-	if _, err := NormalizeTimesfmBestTrainRequest(req, 0, 12, false); err == nil {
+	if _, err := NormalizeMTFBestTrainRequest(req, 0, 12, false); err == nil {
 		t.Fatal("expected cov request to be rejected for membership level 0")
 	}
 }
 
-func TestNormalizeTimesfmBestTrainRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
-	req := &models.TimesfmBestTrainRequest{
+func TestNormalizeMTFBestTrainRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "non_cov",
@@ -106,13 +188,13 @@ func TestNormalizeTimesfmBestTrainRequestTemporarilyAllowsAnyHorizon(t *testing.
 		ContextLen:     256,
 	}
 
-	if _, err := NormalizeTimesfmBestTrainRequest(req, 1, 12, false); err != nil {
+	if _, err := NormalizeMTFBestTrainRequest(req, 1, 12, false); err != nil {
 		t.Fatalf("expected horizon_len to bypass membership validation temporarily, got error: %v", err)
 	}
 }
 
-func TestNormalizeTimesfmBestTrainRequestLevel1AcceptsCovAndBuildsCovariates(t *testing.T) {
-	req := &models.TimesfmBestTrainRequest{
+func TestNormalizeMTFBestTrainRequestLevel1AcceptsCovAndBuildsCovariates(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "cov",
@@ -120,7 +202,7 @@ func TestNormalizeTimesfmBestTrainRequestLevel1AcceptsCovAndBuildsCovariates(t *
 		ContextLen:     512,
 	}
 
-	normalized, err := NormalizeTimesfmBestTrainRequest(req, 1, 23, true)
+	normalized, err := NormalizeMTFBestTrainRequest(req, 1, 23, true)
 	if err != nil {
 		t.Fatalf("expected level 1 cov request to pass, got error: %v", err)
 	}
@@ -130,7 +212,7 @@ func TestNormalizeTimesfmBestTrainRequestLevel1AcceptsCovAndBuildsCovariates(t *
 	if enabled, ok := normalized.CovariateConfig["enabled"].(bool); !ok || !enabled {
 		t.Fatalf("expected covariate_config.enabled=true, got %#v", normalized.CovariateConfig["enabled"])
 	}
-	if mode, ok := normalized.CovariateConfig["xreg_mode"].(string); !ok || mode != "timesfm + xreg" {
+	if mode, ok := normalized.CovariateConfig["xreg_mode"].(string); !ok || mode != "mtf + xreg" {
 		t.Fatalf("expected xreg_mode to be injected, got %#v", normalized.CovariateConfig["xreg_mode"])
 	}
 	if normalized.CovariatePreset == nil || *normalized.CovariatePreset != "market_cov_v1" {
@@ -141,8 +223,8 @@ func TestNormalizeTimesfmBestTrainRequestLevel1AcceptsCovAndBuildsCovariates(t *
 	}
 }
 
-func TestNormalizeTimesfmBestTrainRequestRejectsContextOutsideMembershipLimit(t *testing.T) {
-	req := &models.TimesfmBestTrainRequest{
+func TestNormalizeMTFBestTrainRequestRejectsContextOutsideMembershipLimit(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "cov",
@@ -150,18 +232,18 @@ func TestNormalizeTimesfmBestTrainRequestRejectsContextOutsideMembershipLimit(t 
 		ContextLen:     2048,
 	}
 
-	if _, err := NormalizeTimesfmBestTrainRequest(req, 2, 45, false); err == nil {
+	if _, err := NormalizeMTFBestTrainRequest(req, 2, 45, false); err == nil {
 		t.Fatal("expected context length above level 2 limit to be rejected")
 	}
 }
 
-func TestNormalizeTimesfmPredictOnceRequestAdminInjectsForceRequeue(t *testing.T) {
-	req := &models.TimesfmPredictRequest{
+func TestNormalizeMTFPredictOnceRequestAdminInjectsForceRequeue(t *testing.T) {
+	req := &models.MTFPredictRequest{
 		StockCode: "000001",
 		StockType: 1,
 	}
 
-	normalized, err := NormalizeTimesfmPredictOnceRequest(req, 3, 99, true)
+	normalized, err := NormalizeMTFPredictOnceRequest(req, 3, 99, true)
 	if err != nil {
 		t.Fatalf("expected admin predict once request to pass, got error: %v", err)
 	}
@@ -176,16 +258,16 @@ func TestNormalizeTimesfmPredictOnceRequestAdminInjectsForceRequeue(t *testing.T
 	}
 }
 
-func TestNormalizeTimesfmPredictOnceRequestNonAdminDoesNotForceRequeue(t *testing.T) {
+func TestNormalizeMTFPredictOnceRequestNonAdminDoesNotForceRequeue(t *testing.T) {
 	force := true
-	req := &models.TimesfmPredictRequest{
+	req := &models.MTFPredictRequest{
 		StockCode:    "000001",
 		StockType:    1,
 		ForceEnqueue: &force,
 		ForceRequeue: &force,
 	}
 
-	normalized, err := NormalizeTimesfmPredictOnceRequest(req, 0, 88, false)
+	normalized, err := NormalizeMTFPredictOnceRequest(req, 0, 88, false)
 	if err != nil {
 		t.Fatalf("expected non-admin predict once request to pass, got error: %v", err)
 	}
@@ -200,10 +282,10 @@ func TestNormalizeTimesfmPredictOnceRequestNonAdminDoesNotForceRequeue(t *testin
 	}
 }
 
-func TestNormalizeTimesfmPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
+func TestNormalizeMTFPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
 	horizonLen := 3
 	contextLen := 512
-	req := &models.TimesfmPredictRequest{
+	req := &models.MTFPredictRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "cov",
@@ -211,12 +293,12 @@ func TestNormalizeTimesfmPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testin
 		ContextLen:     &contextLen,
 	}
 
-	if _, err := NormalizeTimesfmPredictOnceRequest(req, 1, 88, false); err != nil {
+	if _, err := NormalizeMTFPredictOnceRequest(req, 1, 88, false); err != nil {
 		t.Fatalf("expected horizon_len to bypass membership validation temporarily, got error: %v", err)
 	}
 }
 
-func TestTriggerTimesfmPredictOnceSendsForceRequeueAlias(t *testing.T) {
+func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/predict_once" {
@@ -237,13 +319,13 @@ func TestTriggerTimesfmPredictOnceSendsForceRequeueAlias(t *testing.T) {
 		},
 	})
 	force := true
-	req := &models.TimesfmPredictRequest{
+	req := &models.MTFPredictRequest{
 		StockCode:    "000001",
 		ForceEnqueue: &force,
 		ForceRequeue: &force,
 	}
 
-	status, _, err := service.TriggerTimesfmPredictOnce(req)
+	status, _, err := service.TriggerMTFPredictOnce(req)
 	if err != nil {
 		t.Fatalf("expected predict once proxy to pass, got error: %v", err)
 	}
@@ -258,69 +340,69 @@ func TestTriggerTimesfmPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	}
 }
 
-func TestGetTimesfmPredictOnceCachedCallsGateway(t *testing.T) {
+func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/predict_once_cached" {
-			t.Fatalf("path = %s, want /predict_once_cached", r.URL.Path)
+		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
+			t.Fatalf("path = %s, want /api/v1/save-predictions/mtf-direct/by-request", r.URL.Path)
 		}
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
+		if r.Header.Get("X-Token") != "test-token" {
+			t.Fatalf("X-Token = %q, want test-token", r.Header.Get("X-Token"))
 		}
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode request body: %v", err)
+		query := r.URL.Query()
+		if query.Get("symbol") != "510050" {
+			t.Fatalf("symbol query = %q, want 510050", query.Get("symbol"))
 		}
-		if payload["stock_code"] != "sh510050" {
-			t.Fatalf("stock_code payload = %#v, want sh510050", payload["stock_code"])
+		if query.Get("stock_type") != "2" {
+			t.Fatalf("stock_type query = %q, want 2", query.Get("stock_type"))
 		}
-		if payload["stock_type"] != "etf" {
-			t.Fatalf("stock_type payload = %#v, want etf", payload["stock_type"])
+		if query.Get("horizon_len") != "7" || query.Get("context_len") != "2048" {
+			t.Fatalf("unexpected horizon/context query: %s", r.URL.RawQuery)
 		}
-		if payload["prediction_type"] != "cov" {
-			t.Fatalf("prediction_type payload = %#v, want cov", payload["prediction_type"])
+		if query.Get("prediction_type") != "mtf-pro" {
+			t.Fatalf("prediction_type query = %q, want mtf-pro", query.Get("prediction_type"))
 		}
-		if payload["covariate_signature"] != "sig123" {
-			t.Fatalf("covariate_signature payload = %#v, want sig123", payload["covariate_signature"])
+		if query.Has("mtf_version") {
+			t.Fatalf("query must not include mtf_version: %s", r.URL.RawQuery)
+		}
+		if query.Get("covariate_signature") != "sig123" {
+			t.Fatalf("covariate_signature query = %q, want sig123", query.Get("covariate_signature"))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"success": true,
-			"stock_code": "sh510050",
-			"message": "单次预测缓存命中",
+			"code": 200,
+			"message": "Success",
 			"data": {
-				"stock_code": "sh510050",
+				"stock_code": "510050",
 				"future_dates": ["2026-01-01"],
 				"best_prediction_item": "mtf-0.5",
 				"best_prediction_values": [1.23],
 				"predictions": {"mtf-0.5": [1.23]},
-				"covariate_signature": "sig123",
-				"cache_hit": true
+				"covariate_signature": "sig123"
 			}
 		}`))
 	}))
 	defer server.Close()
 
 	service := NewWatchlistService(nil, &config.Config{
-		PythonService: config.PythonServiceConfig{
-			BaseURL: server.URL,
-			Timeout: 2,
+		PostgresHandler: config.PostgresHandlerConfig{
+			BaseURL:  server.URL,
+			APIToken: "test-token",
+			Timeout:  2,
 		},
 	})
 
 	horizonLen := 7
 	contextLen := 2048
-	version := "2.5"
-	status, body, err := service.GetTimesfmPredictOnceCached(&models.TimesfmPredictRequest{
+	status, body, err := service.GetMTFPredictOnceCached(&models.MTFPredictRequest{
 		StockCode:          "sh510050",
 		StockType:          "etf",
-		PredictionType:     "cov",
+		PredictionType:     "mtf-pro",
 		HorizonLen:         &horizonLen,
 		ContextLen:         &contextLen,
-		TimesfmVersion:     &version,
 		CovariateSignature: "sig123",
 	})
 	if err != nil {
-		t.Fatalf("GetTimesfmPredictOnceCached returned error: %v", err)
+		t.Fatalf("GetMTFPredictOnceCached returned error: %v", err)
 	}
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)

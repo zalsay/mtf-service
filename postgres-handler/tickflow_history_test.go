@@ -64,10 +64,10 @@ func TestNormalizeBaiduKlinesFiltersDateRange(t *testing.T) {
 }
 
 func TestHistoryProviderOrder(t *testing.T) {
-	t.Setenv("HISTORY_PROVIDER_ORDER", "baidu, tickflow, eastmoney, baidu")
+	t.Setenv("HISTORY_PROVIDER_ORDER", "baidu, tickflow, daily, eastmoney, baidu")
 
 	got := historyProviderOrder()
-	want := []string{baiduProviderName, tickflowProviderName, eastmoneyProviderName}
+	want := []string{baiduProviderName, tickflowProviderName, dailyProviderName, eastmoneyProviderName}
 	if len(got) != len(want) {
 		t.Fatalf("historyProviderOrder len = %d, want %d: %#v", len(got), len(want), got)
 	}
@@ -99,11 +99,26 @@ func TestEastmoneySecIDAndFQT(t *testing.T) {
 	}
 }
 
+func TestDailyAdjustMapping(t *testing.T) {
+	if dailyAdjust("qfq") != "qfq" {
+		t.Fatalf("dailyAdjust(qfq) = %q, want qfq", dailyAdjust("qfq"))
+	}
+	if dailyAdjust("forward_additive") != "qfq" {
+		t.Fatalf("dailyAdjust(forward_additive) = %q, want qfq", dailyAdjust("forward_additive"))
+	}
+	if dailyAdjust("hfq") != "hfq" {
+		t.Fatalf("dailyAdjust(hfq) = %q, want hfq", dailyAdjust("hfq"))
+	}
+	if dailyAdjust("none") != "none" {
+		t.Fatalf("dailyAdjust(none) = %q, want none", dailyAdjust("none"))
+	}
+}
+
 func TestDefaultHistoryProviderOrderDoesNotRequireEnv(t *testing.T) {
 	t.Setenv("HISTORY_PROVIDER_ORDER", "")
 
 	got := historyProviderOrder()
-	want := []string{eastmoneyProviderName, baiduProviderName, tickflowProviderName}
+	want := []string{tickflowProviderName, dailyProviderName, eastmoneyProviderName, baiduProviderName}
 	if len(got) != len(want) {
 		t.Fatalf("historyProviderOrder len = %d, want %d: %#v", len(got), len(want), got)
 	}

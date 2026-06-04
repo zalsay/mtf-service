@@ -211,17 +211,24 @@ type historyTrendSkillQuery struct {
 	PointLimit     int    `json:"point_limit"`
 }
 
+func normalizeOptionalHistoryPredictionType(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return normalizeTrainPredictionType(value)
+}
+
 func (s *MTFAgentService) queryHistoryTrendItems(ctx context.Context, userID int, query historyTrendSkillQuery) ([]map[string]interface{}, error) {
-	canonicalSymbol := normalizeTimesfmSymbolReadKey(query.Symbol)
-	canonicalExpr := timesfmCanonicalSymbolExpr("p.symbol")
+	canonicalSymbol := normalizeMTFSymbolReadKey(query.Symbol)
+	canonicalExpr := mtfCanonicalSymbolExpr("p.symbol")
 	sqlText := fmt.Sprintf(`
 		SELECT
 			p.unique_key,
 			p.symbol,
 			COALESCE(p.short_name, ''),
-			p.timesfm_version,
+			p.mtf_version,
 			p.best_prediction_item,
-			COALESCE(NULLIF(TRIM(p.prediction_type), ''), 'non_cov'),
+			COALESCE(NULLIF(TRIM(p.prediction_type), ''), 'mtf-lite'),
 			p.context_len,
 			p.horizon_len,
 			p.train_start_date,
@@ -229,21 +236,21 @@ func (s *MTFAgentService) queryHistoryTrendItems(ctx context.Context, userID int
 			p.val_start_date,
 			p.val_end_date,
 			p.updated_at
-		FROM timesfm_best_predictions p
+		FROM mtf_best_predictions p
 		WHERE ($1 = '' OR p.unique_key = $1)
 		  AND ($2 = '' OR %s = $2)
-		  AND ($3 = '' OR COALESCE(NULLIF(TRIM(p.prediction_type), ''), 'non_cov') = $3)
+		  AND ($3 = '' OR COALESCE(NULLIF(TRIM(p.prediction_type), ''), 'mtf-lite') = $3)
 		  AND ($4 = 0 OR p.horizon_len = $4)
 		  AND (
 		    p.is_public = 1 OR EXISTS (
-		      SELECT 1 FROM timesfm_best_validation_chunks vc
+		      SELECT 1 FROM mtf_best_validation_chunks vc
 		      WHERE vc.unique_key = p.unique_key AND vc.user_id = $5
 		    )
 		  )
 		ORDER BY p.updated_at DESC, p.id DESC
 		LIMIT $6
 	`, canonicalExpr)
-	rows, err := s.db.Conn.QueryContext(ctx, sqlText, strings.TrimSpace(query.UniqueKey), canonicalSymbol, strings.TrimSpace(query.PredictionType), query.HorizonLen, userID, query.Limit)
+	rows, err := s.db.Conn.QueryContext(ctx, sqlText, strings.TrimSpace(query.UniqueKey), canonicalSymbol, normalizeOptionalHistoryPredictionType(query.PredictionType), query.HorizonLen, userID, query.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("query history trend predictions: %w", err)
 	}
@@ -251,10 +258,10 @@ func (s *MTFAgentService) queryHistoryTrendItems(ctx context.Context, userID int
 
 	items := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var uniqueKey, symbol, shortName, timesfmVersion, bestItem, predictionType string
+		var uniqueKey, symbol, shortName, mtfVersion, bestItem, predictionType string
 		var contextLen, horizonLen int
 		var trainStart, trainEnd, valStart, valEnd, updatedAt time.Time
-		if err := rows.Scan(&uniqueKey, &symbol, &shortName, &timesfmVersion, &bestItem, &predictionType, &contextLen, &horizonLen, &trainStart, &trainEnd, &valStart, &valEnd, &updatedAt); err != nil {
+		if err := rows.Scan(&uniqueKey, &symbol, &shortName, &mtfVersion, &bestItem, &predictionType, &contextLen, &horizonLen, &trainStart, &trainEnd, &valStart, &valEnd, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan history trend prediction: %w", err)
 		}
 		chunks, err := s.queryHistoryTrendChunks(ctx, uniqueKey, bestItem, query.ChunkLimit, query.PointLimit)
@@ -265,7 +272,7 @@ func (s *MTFAgentService) queryHistoryTrendItems(ctx context.Context, userID int
 			"unique_key":           uniqueKey,
 			"symbol":               symbol,
 			"short_name":           shortName,
-			"timesfm_version":      timesfmVersion,
+			"mtf_version":          mtfVersion,
 			"best_prediction_item": bestItem,
 			"prediction_type":      predictionType,
 			"context_len":          contextLen,
@@ -288,7 +295,7 @@ func (s *MTFAgentService) queryHistoryTrendChunks(ctx context.Context, uniqueKey
 		       COALESCE(predicted_change_percent, '{}'::jsonb),
 		       COALESCE(actual_change_percent, '[]'::jsonb),
 		       dates
-		FROM timesfm_best_validation_chunks
+		FROM mtf_best_validation_chunks
 		WHERE unique_key = $1
 		ORDER BY chunk_index DESC
 		LIMIT $2
@@ -376,7 +383,7 @@ func buildHistoryTrendPoints(dates []string, actual []float64, predicted []float
 func (s *MTFAgentService) executeUZIReportsSkill(ctx context.Context, userID int, args map[string]interface{}) (map[string]interface{}, error) {
 	ticker := skillStringArg(args, "ticker")
 	limit := skillIntArg(args, "limit", mtfAgentDefaultReportsLimit, 1, mtfAgentMaxReportsLimit)
-	canonicalTicker := normalizeTimesfmSymbolReadKey(ticker)
+	canonicalTicker := normalizeMTFSymbolReadKey(ticker)
 	rows, err := s.db.Conn.QueryContext(ctx, fmt.Sprintf(`
 		SELECT ticker, COALESCE(depth, ''), status, report_relative_path, report_url,
 		       size_bytes, COALESCE(stdout_tail, ''), updated_at
@@ -386,7 +393,7 @@ func (s *MTFAgentService) executeUZIReportsSkill(ctx context.Context, userID int
 		  AND ($2 = '' OR LOWER(ticker) = LOWER($2) OR %s = $3)
 		ORDER BY updated_at DESC, id DESC
 		LIMIT $4
-	`, timesfmCanonicalSymbolExpr("ticker")), userID, strings.TrimSpace(ticker), canonicalTicker, limit)
+	`, mtfCanonicalSymbolExpr("ticker")), userID, strings.TrimSpace(ticker), canonicalTicker, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query UZI reports: %w", err)
 	}

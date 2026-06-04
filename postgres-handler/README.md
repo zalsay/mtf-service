@@ -70,10 +70,12 @@ export DB_NAME=fintrack          # 数据库名称
 export PORT=8080                 # 服务端口
 ```
 
-历史行情接口默认按 `eastmoney,baidu,tickflow` 顺序尝试，避免单一 TickFlow 源限流导致训练链路失败：
+历史行情接口默认按 `tickflow,daily,eastmoney,baidu` 顺序尝试。`daily` 指 `a-stock-daily` 服务，会在 TickFlow 失败或无数据后作为第二优先级读取 ClickHouse 历史日线：
 
 ```bash
-export HISTORY_PROVIDER_ORDER=eastmoney,baidu,tickflow  # 可改为 baidu,eastmoney,tickflow
+export HISTORY_PROVIDER_ORDER=tickflow,daily,eastmoney,baidu
+export A_STOCK_DAILY_URL=http://a-stock-daily:8080
+export A_STOCK_DAILY_TOKEN=fintrack-dev-token
 export EASTMONEY_BASE_URL=http://push2his.eastmoney.com
 export BAIDU_FINANCE_BASE_URL=https://finance.pae.baidu.com
 export TICKFLOW_BASE_URL=https://api.tickflow.org

@@ -23,7 +23,7 @@ type backtestTradeExecutionPoint struct {
 	Price float64
 }
 
-type timesfmBacktestParams struct {
+type mtfBacktestParams struct {
 	BuyThresholdPct        float64
 	SellThresholdPct       float64
 	InitialCash            float64
@@ -86,7 +86,7 @@ func isWholeShareLot(shares float64) bool {
 	return math.Abs(lots-math.Round(lots)) <= shareLotEpsilon
 }
 
-func chunkTradeExecutionPoint(chunk models.SaveTimesfmValChunkRequest, action string, fallbackPrice float64) backtestTradeExecutionPoint {
+func chunkTradeExecutionPoint(chunk models.SaveMTFValChunkRequest, action string, fallbackPrice float64) backtestTradeExecutionPoint {
 	point := backtestTradeExecutionPoint{
 		Date:  chunk.StartDate,
 		Price: fallbackPrice,
@@ -131,7 +131,7 @@ type postgresHandlerStockPrice struct {
 	Open     float64 `json:"open"`
 }
 
-func resolveTimesfmBacktestStockType(req *models.TimesfmBacktestRequest, symbol string) int {
+func resolveMTFBacktestStockType(req *models.MTFBacktestRequest, symbol string) int {
 	if req != nil && req.StockType != nil {
 		normalized := strings.ToLower(strings.TrimSpace(*req.StockType))
 		switch normalized {
@@ -217,7 +217,7 @@ func (s *WatchlistService) fetchPostgresHandlerOpenPricesByDate(symbol string, s
 	return out, nil
 }
 
-func (s *WatchlistService) hydrateBacktestOpenPrices(symbol string, stockType int, chunks []models.SaveTimesfmValChunkRequest) ([]models.SaveTimesfmValChunkRequest, error) {
+func (s *WatchlistService) hydrateBacktestOpenPrices(symbol string, stockType int, chunks []models.SaveMTFValChunkRequest) ([]models.SaveMTFValChunkRequest, error) {
 	if len(chunks) == 0 {
 		return chunks, nil
 	}
@@ -241,19 +241,19 @@ func (s *WatchlistService) hydrateBacktestOpenPrices(symbol string, stockType in
 	return chunks, nil
 }
 
-func (s *WatchlistService) RunTimesfmBacktest(req *models.TimesfmBacktestRequest) (int, map[string]interface{}, error) {
+func (s *WatchlistService) RunMTFBacktest(req *models.MTFBacktestRequest) (int, map[string]interface{}, error) {
 	uniqueKey := strings.TrimSpace(req.UniqueKey)
 	if uniqueKey == "" {
-		uniqueKey = buildTimesfmBacktestUniqueKey(req)
+		uniqueKey = buildMTFBacktestUniqueKey(req)
 	}
 	if uniqueKey == "" {
 		return 400, map[string]interface{}{
 			"success": false,
-			"message": "回测需要 unique_key，或同时提供 symbol/context_len/horizon_len/timesfm_version",
+			"message": "回测需要 unique_key，或同时提供 symbol/context_len/horizon_len/mtf_version",
 		}, nil
 	}
 
-	best, err := s.GetTimesfmBestByUniqueKey(uniqueKey)
+	best, err := s.GetMTFBestByUniqueKey(uniqueKey)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 404, map[string]interface{}{
@@ -276,7 +276,7 @@ func (s *WatchlistService) RunTimesfmBacktest(req *models.TimesfmBacktestRequest
 			"message":    "暂无可用于回测的预测结果，请先执行 MTF 预测推理。",
 		}, nil
 	}
-	stockType := resolveTimesfmBacktestStockType(req, best.Symbol)
+	stockType := resolveMTFBacktestStockType(req, best.Symbol)
 	chunks, err = s.hydrateBacktestOpenPrices(best.Symbol, stockType, chunks)
 	if err != nil {
 		return 400, map[string]interface{}{
@@ -287,14 +287,14 @@ func (s *WatchlistService) RunTimesfmBacktest(req *models.TimesfmBacktestRequest
 		}, nil
 	}
 
-	params := buildTimesfmBacktestParams(req)
+	params := buildMTFBacktestParams(req)
 	if strategy, err := s.GetStrategyParamsByUniqueKey(uniqueKey); err == nil && strategy != nil {
 		params = backtestParamsFromStrategy(strategy)
 	} else if err != nil && err != sql.ErrNoRows {
 		return 0, nil, err
 	}
 
-	saveReq, backtest, err := runTimesfmBacktestOnChunks(best, chunks, params)
+	saveReq, backtest, err := runMTFBacktestOnChunks(best, chunks, params)
 	if err != nil {
 		return 400, map[string]interface{}{
 			"success":    false,
@@ -305,7 +305,7 @@ func (s *WatchlistService) RunTimesfmBacktest(req *models.TimesfmBacktestRequest
 	}
 	saveReq.UserID = req.UserID
 	saveReq.StrategyParamsID = req.StrategyParamsID
-	if err := s.SaveTimesfmBacktest(saveReq); err != nil {
+	if err := s.SaveMTFBacktest(saveReq); err != nil {
 		return 0, nil, err
 	}
 
@@ -317,20 +317,20 @@ func (s *WatchlistService) RunTimesfmBacktest(req *models.TimesfmBacktestRequest
 	}, nil
 }
 
-func buildTimesfmBacktestUniqueKey(req *models.TimesfmBacktestRequest) string {
+func buildMTFBacktestUniqueKey(req *models.MTFBacktestRequest) string {
 	symbol := strings.TrimSpace(req.Symbol)
 	if symbol == "" || req.HorizonLen == nil || req.ContextLen == nil {
 		return ""
 	}
 	version := "2.5"
-	if req.TimesfmVersion != nil && strings.TrimSpace(*req.TimesfmVersion) != "" {
-		version = strings.TrimSpace(*req.TimesfmVersion)
+	if req.MTFVersion != nil && strings.TrimSpace(*req.MTFVersion) != "" {
+		version = strings.TrimSpace(*req.MTFVersion)
 	}
-	return fmt.Sprintf("%s_best_hlen_%d_clen_%d_v_%s", normalizeTimesfmSymbolReadKey(symbol), *req.HorizonLen, *req.ContextLen, version)
+	return fmt.Sprintf("%s_best_hlen_%d_clen_%d_v_%s", normalizeMTFSymbolReadKey(symbol), *req.HorizonLen, *req.ContextLen, version)
 }
 
-func buildTimesfmBacktestParams(req *models.TimesfmBacktestRequest) timesfmBacktestParams {
-	params := timesfmBacktestParams{
+func buildMTFBacktestParams(req *models.MTFBacktestRequest) mtfBacktestParams {
+	params := mtfBacktestParams{
 		BuyThresholdPct:        3.0,
 		SellThresholdPct:       -1.0,
 		InitialCash:            100000.0,
@@ -379,8 +379,8 @@ func buildTimesfmBacktestParams(req *models.TimesfmBacktestRequest) timesfmBackt
 	return params
 }
 
-func backtestParamsFromStrategy(strategy *models.StrategyParams) timesfmBacktestParams {
-	return timesfmBacktestParams{
+func backtestParamsFromStrategy(strategy *models.StrategyParams) mtfBacktestParams {
+	return mtfBacktestParams{
 		BuyThresholdPct:        strategy.BuyThresholdPct,
 		SellThresholdPct:       strategy.SellThresholdPct,
 		InitialCash:            strategy.InitialCash,
@@ -395,7 +395,7 @@ func backtestParamsFromStrategy(strategy *models.StrategyParams) timesfmBacktest
 	}
 }
 
-func runTimesfmBacktestOnChunks(best *models.TimesfmBestPrediction, chunks []models.SaveTimesfmValChunkRequest, params timesfmBacktestParams) (*models.SaveTimesfmBacktestRequest, map[string]interface{}, error) {
+func runMTFBacktestOnChunks(best *models.MTFBestPrediction, chunks []models.SaveMTFValChunkRequest, params mtfBacktestParams) (*models.SaveMTFBacktestRequest, map[string]interface{}, error) {
 	if best == nil {
 		return nil, nil, fmt.Errorf("missing best prediction")
 	}
@@ -420,7 +420,7 @@ func runTimesfmBacktestOnChunks(best *models.TimesfmBestPrediction, chunks []mod
 	equityCurvePctGross := make([]float64, 0, len(chunks))
 	curveDates := make([]string, 0, len(chunks))
 	actualEndPrices := make([]float64, 0, len(chunks))
-	usableChunks := make([]models.SaveTimesfmValChunkRequest, 0, len(chunks))
+	usableChunks := make([]models.SaveMTFValChunkRequest, 0, len(chunks))
 
 	for _, chunk := range chunks {
 		if !isUsableBacktestChunk(chunk, fixedQuantile) {
@@ -574,50 +574,50 @@ func runTimesfmBacktestOnChunks(best *models.TimesfmBestPrediction, chunks []mod
 	}
 	stats := predictedChangeStats(predictedChanges, params)
 	result := map[string]interface{}{
-		"unique_key":                                 best.UniqueKey,
-		"symbol":                                     best.Symbol,
-		"timesfm_version":                            best.TimesfmVersion,
-		"context_len":                                best.ContextLen,
-		"horizon_len":                                best.HorizonLen,
-		"covariate_signature":                        best.CovariateSignature,
-		"initial_cash":                               params.InitialCash,
-		"final_value":                                finalValue,
-		"total_return_pct":                           totalReturn,
-		"annualized_return_pct":                      annualized,
-		"final_value_gross":                          grossFinalValue,
-		"total_return_pct_gross":                     grossTotalReturn,
-		"annualized_return_pct_gross":                grossAnnualized,
-		"net_profit":                                 finalValue - params.InitialCash,
-		"gross_profit":                               grossFinalValue - params.InitialCash,
-		"trades":                                     trades,
-		"buy_threshold_pct":                          params.BuyThresholdPct,
-		"sell_threshold_pct":                         params.SellThresholdPct,
-		"used_quantile":                              fixedQuantile,
-		"predicted_change_stats":                     stats,
-		"per_chunk_signals":                          perChunkSignals,
-		"benchmark_return_pct":                       benchmarkReturn,
-		"benchmark_annualized_return_pct":            benchmarkAnnualized,
-		"period_days":                                periodDays,
-		"position_control":                           positionControl,
-		"trade_fee_rate":                             params.TradeFeeRate,
-		"total_fees_paid":                            totalFeesPaid,
-		"actual_total_return_pct":                    actualTotalReturnPct,
-		"equity_curve_values":                        equityCurveValues,
-		"equity_curve_pct":                           equityCurvePct,
-		"equity_curve_pct_gross":                     equityCurvePctGross,
-		"curve_dates":                                curveDates,
-		"actual_end_prices":                          actualEndPrices,
-		"validation_start_date":                      validationStartDate,
-		"validation_end_date":                        validationEndDate,
-		"validation_benchmark_return_pct":            validationBenchmarkReturn,
+		"unique_key":                      best.UniqueKey,
+		"symbol":                          best.Symbol,
+		"mtf_version":                     best.MTFVersion,
+		"context_len":                     best.ContextLen,
+		"horizon_len":                     best.HorizonLen,
+		"covariate_signature":             best.CovariateSignature,
+		"initial_cash":                    params.InitialCash,
+		"final_value":                     finalValue,
+		"total_return_pct":                totalReturn,
+		"annualized_return_pct":           annualized,
+		"final_value_gross":               grossFinalValue,
+		"total_return_pct_gross":          grossTotalReturn,
+		"annualized_return_pct_gross":     grossAnnualized,
+		"net_profit":                      finalValue - params.InitialCash,
+		"gross_profit":                    grossFinalValue - params.InitialCash,
+		"trades":                          trades,
+		"buy_threshold_pct":               params.BuyThresholdPct,
+		"sell_threshold_pct":              params.SellThresholdPct,
+		"used_quantile":                   fixedQuantile,
+		"predicted_change_stats":          stats,
+		"per_chunk_signals":               perChunkSignals,
+		"benchmark_return_pct":            benchmarkReturn,
+		"benchmark_annualized_return_pct": benchmarkAnnualized,
+		"period_days":                     periodDays,
+		"position_control":                positionControl,
+		"trade_fee_rate":                  params.TradeFeeRate,
+		"total_fees_paid":                 totalFeesPaid,
+		"actual_total_return_pct":         actualTotalReturnPct,
+		"equity_curve_values":             equityCurveValues,
+		"equity_curve_pct":                equityCurvePct,
+		"equity_curve_pct_gross":          equityCurvePctGross,
+		"curve_dates":                     curveDates,
+		"actual_end_prices":               actualEndPrices,
+		"validation_start_date":           validationStartDate,
+		"validation_end_date":             validationEndDate,
+		"validation_benchmark_return_pct": validationBenchmarkReturn,
 		"validation_benchmark_annualized_return_pct": validationBenchmarkAnnualized,
 		"validation_period_days":                     validationPeriodDays,
 	}
 
-	saveReq := &models.SaveTimesfmBacktestRequest{
+	saveReq := &models.SaveMTFBacktestRequest{
 		UniqueKey:                              best.UniqueKey,
 		Symbol:                                 best.Symbol,
-		TimesfmVersion:                         best.TimesfmVersion,
+		MTFVersion:                             best.MTFVersion,
 		ContextLen:                             best.ContextLen,
 		HorizonLen:                             best.HorizonLen,
 		UsedQuantile:                           fixedQuantile,
@@ -650,12 +650,12 @@ func runTimesfmBacktestOnChunks(best *models.TimesfmBestPrediction, chunks []mod
 	return saveReq, result, nil
 }
 
-func currentValidationWindowChunks(best *models.TimesfmBestPrediction, chunks []models.SaveTimesfmValChunkRequest) []models.SaveTimesfmValChunkRequest {
+func currentValidationWindowChunks(best *models.MTFBestPrediction, chunks []models.SaveMTFValChunkRequest) []models.SaveMTFValChunkRequest {
 	if best == nil || best.ValStartDate.IsZero() || best.ValEndDate.IsZero() || len(chunks) == 0 {
 		return chunks
 	}
 
-	ordered := append([]models.SaveTimesfmValChunkRequest(nil), chunks...)
+	ordered := append([]models.SaveMTFValChunkRequest(nil), chunks...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].ChunkIndex < ordered[j].ChunkIndex
 	})
@@ -673,7 +673,7 @@ func currentValidationWindowChunks(best *models.TimesfmBestPrediction, chunks []
 		return chunks
 	}
 
-	current := make([]models.SaveTimesfmValChunkRequest, 0, len(ordered)-anchor)
+	current := make([]models.SaveMTFValChunkRequest, 0, len(ordered)-anchor)
 	previousStart := ""
 	for _, chunk := range ordered[anchor:] {
 		startDate := normalizedBacktestDate(chunk.StartDate)
@@ -712,7 +712,7 @@ func (s *WatchlistService) applyCurrentBacktestReferenceMetrics(uniqueKey string
 		return
 	}
 
-	best, err := s.GetTimesfmBestByUniqueKey(uniqueKey)
+	best, err := s.GetMTFBestByUniqueKey(uniqueKey)
 	if err != nil || best == nil {
 		return
 	}
@@ -758,8 +758,8 @@ func backtestTrade(date string, action string, price float64, size float64, chun
 	}
 }
 
-func usableBacktestChunks(chunks []models.SaveTimesfmValChunkRequest, fixedQuantile string) []models.SaveTimesfmValChunkRequest {
-	usable := make([]models.SaveTimesfmValChunkRequest, 0, len(chunks))
+func usableBacktestChunks(chunks []models.SaveMTFValChunkRequest, fixedQuantile string) []models.SaveMTFValChunkRequest {
+	usable := make([]models.SaveMTFValChunkRequest, 0, len(chunks))
 	for _, chunk := range chunks {
 		if isUsableBacktestChunk(chunk, fixedQuantile) {
 			usable = append(usable, chunk)
@@ -768,7 +768,7 @@ func usableBacktestChunks(chunks []models.SaveTimesfmValChunkRequest, fixedQuant
 	return usable
 }
 
-func isUsableBacktestChunk(chunk models.SaveTimesfmValChunkRequest, fixedQuantile string) bool {
+func isUsableBacktestChunk(chunk models.SaveMTFValChunkRequest, fixedQuantile string) bool {
 	if len(chunk.Actual) == 0 {
 		return false
 	}
@@ -827,7 +827,7 @@ func lastValidFloat(values []float64) (float64, bool) {
 	return 0, false
 }
 
-func firstLastActual(chunks []models.SaveTimesfmValChunkRequest) (float64, float64, bool) {
+func firstLastActual(chunks []models.SaveMTFValChunkRequest) (float64, float64, bool) {
 	start := math.NaN()
 	end := math.NaN()
 	for _, chunk := range chunks {
@@ -845,7 +845,7 @@ func firstLastActual(chunks []models.SaveTimesfmValChunkRequest) (float64, float
 	return start, end, validFloat(start) && validFloat(end) && start != 0
 }
 
-func actualTotalReturn(chunks []models.SaveTimesfmValChunkRequest) float64 {
+func actualTotalReturn(chunks []models.SaveMTFValChunkRequest) float64 {
 	start, end, ok := firstLastActual(chunks)
 	if !ok {
 		return 0
@@ -853,7 +853,7 @@ func actualTotalReturn(chunks []models.SaveTimesfmValChunkRequest) float64 {
 	return (end/start - 1) * 100
 }
 
-func benchmarkReturnPct(chunks []models.SaveTimesfmValChunkRequest, days int) (float64, float64) {
+func benchmarkReturnPct(chunks []models.SaveMTFValChunkRequest, days int) (float64, float64) {
 	start, end, ok := firstLastActual(chunks)
 	if !ok {
 		return 0, 0
@@ -863,21 +863,21 @@ func benchmarkReturnPct(chunks []models.SaveTimesfmValChunkRequest, days int) (f
 	return total, annualized
 }
 
-func backtestPeriodDays(chunks []models.SaveTimesfmValChunkRequest) int {
+func backtestPeriodDays(chunks []models.SaveMTFValChunkRequest) int {
 	if len(chunks) == 0 {
 		return 1
 	}
 	return daysBetween(chunks[0].StartDate, chunks[len(chunks)-1].EndDate)
 }
 
-func validationPeriodDays(chunks []models.SaveTimesfmValChunkRequest) int {
+func validationPeriodDays(chunks []models.SaveMTFValChunkRequest) int {
 	if len(chunks) == 0 {
 		return 0
 	}
 	return daysBetween(chunks[0].StartDate, chunks[len(chunks)-1].EndDate)
 }
 
-func firstChunkDate(chunks []models.SaveTimesfmValChunkRequest, start bool) string {
+func firstChunkDate(chunks []models.SaveMTFValChunkRequest, start bool) string {
 	if len(chunks) == 0 {
 		return ""
 	}
@@ -905,7 +905,7 @@ func parseBacktestDate(raw string) (time.Time, error) {
 	return time.Parse("2006-01-02", raw)
 }
 
-func predictedChangeStats(values []float64, params timesfmBacktestParams) map[string]interface{} {
+func predictedChangeStats(values []float64, params mtfBacktestParams) map[string]interface{} {
 	if len(values) == 0 {
 		return map[string]interface{}{}
 	}

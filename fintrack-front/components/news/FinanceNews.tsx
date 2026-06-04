@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { financeNewsAPI, FinanceNewsCategory, FinanceNewsItem } from '../../services/apiService';
+import { financeNewsAPI, FinanceNewsCategory, FinanceNewsItem, HotETFItem } from '../../services/apiService';
 import { useLanguage } from '../../contexts/LanguageContext';
-import HotETFTable from './HotETFTable';
 
 interface FinanceNewsProps {
   onAuthError?: () => void;
@@ -13,6 +12,7 @@ const categories: { id: FinanceNewsCategory; icon: string; zh: string; en: strin
   { id: 'stock', icon: 'monitoring', zh: '个股新闻', en: 'Stock' },
   { id: 'announcements', icon: 'campaign', zh: '公司公告', en: 'Announcements' },
   { id: 'lhb', icon: 'leaderboard', zh: '东方财富龙虎榜', en: 'Dragon Tiger' },
+  { id: 'hot_etf', icon: 'radar', zh: '热门 ETF', en: 'Hot ETF' },
 ];
 
 const inputShellClassName = 'flex h-11 items-center gap-2 rounded-lg border-0 bg-black/[0.16] px-3 shadow-none outline-none ring-0 [box-shadow:none] [outline:none] focus-within:border-0 focus-within:outline-none focus-within:ring-0 focus-within:[box-shadow:none] focus-within:[outline:none]';
@@ -41,6 +41,7 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
   const [symbol, setSymbol] = useState('688017');
   const [keyword, setKeyword] = useState('');
   const [items, setItems] = useState<FinanceNewsItem[]>([]);
+  const [hotETFItems, setHotETFItems] = useState<HotETFItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [page, setPage] = useState(1);
@@ -68,6 +69,16 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
     stock: isZh ? '股票' : 'Stock',
     detail: isZh ? '上榜原因与资金' : 'Reason & Flow',
     action: isZh ? '操作' : 'Action',
+    etfName: isZh ? '标的' : 'ETF',
+    radarPriority: isZh ? '雷达优先级' : 'Priority',
+    riskRPS: isZh ? '风险RPS' : 'Risk RPS',
+    trend: isZh ? '趋势' : 'Trend',
+    month: isZh ? '月线' : 'Month',
+    week: isZh ? '周线' : 'Week',
+    day: isZh ? '日线' : 'Day',
+    stop: isZh ? '参考止损' : 'Stop',
+    totalScore: isZh ? '总分' : 'Score',
+    status: isZh ? '状态' : 'Status',
   }), [isZh, items.length]);
 
   const loadNews = useCallback(async (targetPage = 1, append = false) => {
@@ -85,6 +96,17 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
     }
     setError('');
     try {
+      if (category === 'hot_etf') {
+        const response = await financeNewsAPI.hotETF();
+        if (requestSeq !== requestSeqRef.current) {
+          return;
+        }
+        setHotETFItems(response.items || []);
+        setItems([]);
+        setPage(1);
+        setHasMore(false);
+        return;
+      }
       const response = await financeNewsAPI.list({
         category,
         symbol: category === 'stock' || category === 'announcements' ? symbol : undefined,
@@ -96,6 +118,7 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
         return;
       }
       const nextItems = response.items || [];
+      setHotETFItems([]);
       setItems((current) => append ? mergeNewsItems(current, nextItems) : nextItems);
       setPage(response.query?.page || targetPage);
       setHasMore(nextItems.length >= newsPageSize);
@@ -148,17 +171,19 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
-          <div className={inputShellClassName}>
-            <span className="material-symbols-outlined text-lg text-white/45">search</span>
-            <input
-              type="search"
-              value={keyword}
-              onChange={(event) => setKeyword(event.target.value)}
-              placeholder={copy.search}
-              aria-label={copy.search}
-              className={`w-44 ${inputClassName}`}
-            />
-          </div>
+          {category !== 'hot_etf' && (
+            <div className={inputShellClassName}>
+              <span className="material-symbols-outlined text-lg text-white/45">search</span>
+              <input
+                type="search"
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                placeholder={copy.search}
+                aria-label={copy.search}
+                className={`w-44 ${inputClassName}`}
+              />
+            </div>
+          )}
           {(category === 'stock' || category === 'announcements') && (
             <div className={inputShellClassName}>
               <span className="material-symbols-outlined text-lg text-white/45">tag</span>
@@ -213,14 +238,7 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
       )}
 
       {category === 'hot_etf' ? (
-        <HotETFTable
-          items={items}
-          isLoading={isLoading}
-          emptyText={copy.empty}
-          loadingText={copy.loading}
-          openText={copy.open}
-          isZh={isZh}
-        />
+        <HotETFTable items={hotETFItems} loading={isLoading} copy={copy} />
       ) : category === 'lhb' ? (
         <section className="overflow-hidden rounded-lg border border-white/[0.08] bg-white/[0.026] text-left">
           {isLoading && items.length === 0 ? (
@@ -334,7 +352,7 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
         </section>
       )}
 
-      {items.length > 0 && (
+      {category !== 'hot_etf' && items.length > 0 && (
         <div ref={loadMoreRef} className="flex flex-col items-center gap-3 py-2">
           <div className="text-xs font-medium text-white/42">
             {isLoadingMore ? copy.loadingMore : hasMore ? copy.loadedCount : copy.noMore}
@@ -356,6 +374,103 @@ const FinanceNews: React.FC<FinanceNewsProps> = ({ onAuthError }) => {
       )}
     </div>
   );
+};
+
+const HotETFTable: React.FC<{
+  items: HotETFItem[];
+  loading: boolean;
+  copy: Record<string, string>;
+}> = ({ items, loading, copy }) => {
+  if (loading && items.length === 0) {
+    return (
+      <section className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-sm text-white/58">
+        {copy.loading}
+      </section>
+    );
+  }
+  if (items.length === 0) {
+    return (
+      <section className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-sm text-white/58">
+        {copy.empty}
+      </section>
+    );
+  }
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-white/[0.08] bg-white/[0.026] text-left">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1180px] border-collapse text-left">
+          <thead className="border-b border-white/[0.08] bg-black/[0.16] text-left text-xs font-bold uppercase tracking-normal text-white/42">
+            <tr>
+              <th className="px-4 py-3 text-left align-top">{copy.rank}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.etfName}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.radarPriority}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.riskRPS}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.month}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.week}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.day}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.stop}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.totalScore}</th>
+              <th className="px-4 py-3 text-left align-top">{copy.status}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/[0.07]">
+            {items.map((item, index) => (
+              <tr key={item.code} className="transition hover:bg-white/[0.045]">
+                <td className="px-4 py-4 align-top">
+                  <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-md bg-primary/12 px-2 text-xs font-black text-primary">
+                    {index + 1}
+                  </span>
+                </td>
+                <td className="min-w-[260px] px-4 py-4 align-top">
+                  <div className="text-sm font-bold text-white">{item.name}</div>
+                  <div className="mt-1 font-mono text-xs text-primary/82">{item.code}</div>
+                  {item.trend && <div className="mt-2 max-w-[260px] whitespace-normal break-words text-xs leading-5 text-white/42">{item.trend}</div>}
+                </td>
+                <td className="px-4 py-4 align-top">
+                  <div className="text-lg font-black text-white">{formatNumber(item.radar_priority)}</div>
+                  {item.grade && <div className="mt-1 text-xs font-bold text-primary">Grade {item.grade}</div>}
+                </td>
+                <td className="px-4 py-4 align-top text-sm font-bold text-white/75">{formatNumber(item.risk_rps)}</td>
+                <SignalCell signal={item.month} />
+                <SignalCell signal={item.week} />
+                <SignalCell signal={item.day} />
+                <td className="px-4 py-4 align-top">
+                  <div className="text-sm font-bold text-white">{item.stop_price || '-'}</div>
+                  {item.stop_distance && <div className="mt-1 text-xs text-amber-200">{item.stop_distance}</div>}
+                </td>
+                <td className="px-4 py-4 align-top text-lg font-black text-white">{formatNumber(item.total_score)}</td>
+                <td className="px-4 py-4 align-top">
+                  <span className="inline-flex max-w-[220px] rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-bold leading-5 text-white/78">
+                    {item.status || '-'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+};
+
+const SignalCell: React.FC<{ signal: { score?: number; text?: string } }> = ({ signal }) => {
+  const score = Number(signal?.score || 0);
+  const tone = score > 0 ? 'text-red-300 bg-red-500/10' : score < 0 ? 'text-emerald-300 bg-emerald-500/10' : 'text-white/70 bg-white/[0.06]';
+  return (
+    <td className="px-4 py-4 align-top">
+      <div className={`inline-flex min-w-14 justify-center rounded-md px-2 py-1 text-xs font-black ${tone}`}>
+        {formatNumber(score, true)}
+      </div>
+      {signal?.text && <div className="mt-2 max-w-[180px] text-xs leading-5 text-white/58">{signal.text}</div>}
+    </td>
+  );
+};
+
+const formatNumber = (value: number, signed = false) => {
+  const numeric = Number(value || 0);
+  const text = Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(1);
+  return signed && numeric > 0 ? `+${text}` : text;
 };
 
 const formatNewsTime = (value: string) => {

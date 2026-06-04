@@ -8,11 +8,11 @@ import {
     authAPI,
     getAccessiblePredictions,
     quotesAPI,
-    timesfmAPI,
-    TimesfmPredictAcceptedResponse,
-    TimesfmPredictBestRequest,
-    TimesfmJobStatusResponse,
-    TimesfmPredictOnceRequest,
+    mtfAPI,
+    MTFPredictAcceptedResponse,
+    MTFPredictBestRequest,
+    MTFJobStatusResponse,
+    MTFPredictOnceRequest,
     DirectPredictionResult,
     watchlistAPI,
     WatchlistItem,
@@ -46,10 +46,10 @@ const normalizePredictionSymbol = (symbol: string): string => {
     return digits || trimmed;
 };
 
-type TrainPredictionType = 'non_cov' | 'cov';
+type TrainPredictionType = 'mtf-lite' | 'mtf-pro';
 type ChartModelGroup = 'lite_pro' | 'lite' | 'pro';
 
-interface TimesfmTrainPolicy {
+interface MTFTrainPolicy {
     predictionTypes: TrainPredictionType[];
     contextLens: number[];
     horizonLens: number[];
@@ -62,7 +62,7 @@ interface TrainResultPreference {
     predictionType: TrainPredictionType;
     contextLen: number;
     horizonLen: number;
-    timesfmVersion: string;
+    mtfVersion: string;
     covariateSignature?: string;
 }
 
@@ -78,12 +78,12 @@ interface ChartPredictionOption {
     horizonLen: number;
     contextLen: number;
     contextLabel: string;
-    timesfmVersion: string;
+    mtfVersion: string;
     resolved: ResolvedPublicPrediction;
 }
 
-const DEFAULT_TIMESFM_YEARS = 15;
-const DEFAULT_TIMESFM_VERSION = '2.5';
+const DEFAULT_MTF_YEARS = 15;
+const DEFAULT_MTF_VERSION = '2.5';
 const BEST_TRAIN_POLL_INTERVAL_MS = 2000;
 const BEST_TRAIN_MAX_POLL_ATTEMPTS = 180;
 const PRO_PROGRESS_GRADIENT = 'linear-gradient(90deg, #FFF1B8 0%, #FCD34D 24%, #F59E0B 52%, #FB923C 78%, #F97316 100%)';
@@ -98,45 +98,49 @@ const normalizeEstimatedSeconds = (seconds: unknown): number | null => {
     return value;
 };
 
-const getTimesfmTrainPolicy = (membershipLevel: number): TimesfmTrainPolicy => {
+const getMTFTrainPolicy = (membershipLevel: number): MTFTrainPolicy => {
     switch (membershipLevel) {
         case 3:
             return {
-                predictionTypes: ['non_cov', 'cov'],
+                predictionTypes: ['mtf-lite', 'mtf-pro'],
                 contextLens: [256, 512, 1024, 2048],
                 horizonLens: [7, 14, 28],
-                defaultPredictionType: 'cov',
+                defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 2048,
                 defaultHorizonLen: 7,
             };
         case 2:
             return {
-                predictionTypes: ['non_cov', 'cov'],
+                predictionTypes: ['mtf-lite', 'mtf-pro'],
                 contextLens: [256, 512, 1024],
                 horizonLens: [7, 14, 28],
-                defaultPredictionType: 'cov',
+                defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 1024,
                 defaultHorizonLen: 7,
             };
         case 1:
             return {
-                predictionTypes: ['non_cov', 'cov'],
+                predictionTypes: ['mtf-lite', 'mtf-pro'],
                 contextLens: [256, 512],
                 horizonLens: [7, 14, 28],
-                defaultPredictionType: 'cov',
+                defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 512,
                 defaultHorizonLen: 7,
             };
         default:
             return {
-                predictionTypes: ['non_cov'],
+                predictionTypes: ['mtf-lite'],
                 contextLens: [256],
                 horizonLens: [7],
-                defaultPredictionType: 'non_cov',
+                defaultPredictionType: 'mtf-lite',
                 defaultContextLen: 256,
                 defaultHorizonLen: 7,
             };
     }
+};
+
+const isWatchlistItemOverLimit = (item: WatchlistItem | null | undefined): boolean => {
+    return !!item?.is_over_limit;
 };
 
 const getTrainingStockCode = (item: WatchlistItem | null): string => {
@@ -148,7 +152,7 @@ const getTrainingStockCode = (item: WatchlistItem | null): string => {
     return stockType === 2 ? symbol : symbol.replace(/^(sh|sz)/, '');
 };
 
-const normalizeTimesfmJobError = (error: unknown): string => {
+const normalizeMTFJobError = (error: unknown): string => {
     if (error instanceof Error && error.message) {
         return error.message;
     }
@@ -165,9 +169,9 @@ const matchesTrainResultPreference = (
         return true;
     }
 
-    const candidate = preference.predictionType === 'cov'
-        ? (resolved.pro || (normalizeOptionalText(resolved.primary.best.prediction_type) === 'cov' ? resolved.primary : undefined))
-        : (normalizeOptionalText(resolved.primary.best.prediction_type) === 'cov' ? undefined : resolved.primary);
+    const candidate = preference.predictionType === 'mtf-pro'
+        ? (resolved.pro || (normalizeOptionalText(resolved.primary.best.prediction_type) === 'mtf-pro' ? resolved.primary : undefined))
+        : (normalizeOptionalText(resolved.primary.best.prediction_type) === 'mtf-pro' ? undefined : resolved.primary);
 
     if (!candidate) {
         return false;
@@ -179,11 +183,11 @@ const matchesTrainResultPreference = (
     if (Number(candidate.best.horizon_len || 0) !== preference.horizonLen) {
         return false;
     }
-    if (String(candidate.best.timesfm_version || '').trim() !== preference.timesfmVersion) {
+    if (String(candidate.best.mtf_version || '').trim() !== preference.mtfVersion) {
         return false;
     }
 
-    if (preference.predictionType === 'cov' && preference.covariateSignature) {
+    if (preference.predictionType === 'mtf-pro' && preference.covariateSignature) {
         return normalizeOptionalText(candidate.best.covariate_signature) === normalizeOptionalText(preference.covariateSignature);
     }
 
@@ -196,9 +200,9 @@ const isCovPredictionItem = (item?: PublicPredictionItem | null): boolean => {
     }
     const predictionType = normalizeOptionalText(item.best.prediction_type);
     if (predictionType) {
-        return predictionType === 'cov';
+        return predictionType === 'mtf-pro';
     }
-    return String(item.best.unique_key || '').includes('_cov');
+    return String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
 };
 
 const getPredictionItemForType = (
@@ -208,7 +212,7 @@ const getPredictionItemForType = (
     if (!resolved) {
         return null;
     }
-    if (predictionType === 'cov') {
+    if (predictionType === 'mtf-pro') {
         if (resolved.pro) {
             return resolved.pro;
         }
@@ -218,7 +222,7 @@ const getPredictionItemForType = (
 };
 
 const getLoadedPredictionType = (resolved: ResolvedPublicPrediction): TrainPredictionType => (
-    isCovPredictionItem(resolved.primary) && !resolved.pro ? 'cov' : 'non_cov'
+    isCovPredictionItem(resolved.primary) && !resolved.pro ? 'mtf-pro' : 'mtf-lite'
 );
 
 const comparePredictionUpdatedAt = (left?: string, right?: string): number => {
@@ -268,11 +272,11 @@ const createChartPredictionOption = (
     language: string,
 ): ChartPredictionOption => {
     const modelMeta = getChartModelMeta(resolved, language);
-    const baseItem = getPredictionItemForType(resolved, modelMeta.group === 'pro' ? 'cov' : 'non_cov') || resolved.primary;
+    const baseItem = getPredictionItemForType(resolved, modelMeta.group === 'pro' ? 'mtf-pro' : 'mtf-lite') || resolved.primary;
     const horizonLen = Number(baseItem.best.horizon_len || 0);
     const contextLen = Number(baseItem.best.context_len || 0);
     const contextLabel = formatChartContextLabel(contextLen);
-    const timesfmVersion = String(baseItem.best.timesfm_version || DEFAULT_TIMESFM_VERSION).trim() || DEFAULT_TIMESFM_VERSION;
+    const mtfVersion = String(baseItem.best.mtf_version || DEFAULT_MTF_VERSION).trim() || DEFAULT_MTF_VERSION;
 
     return {
         id: key,
@@ -281,7 +285,7 @@ const createChartPredictionOption = (
         horizonLen,
         contextLen,
         contextLabel,
-        timesfmVersion,
+        mtfVersion,
         resolved,
     };
 };
@@ -319,13 +323,13 @@ const getUniqueChartOptions = <T extends string | number>(
 const pickClosestChartOption = (
     options: ChartPredictionOption[],
     current: ChartPredictionOption | undefined,
-    patch: Partial<Pick<ChartPredictionOption, 'modelGroup' | 'horizonLen' | 'contextLen' | 'timesfmVersion'>>,
+    patch: Partial<Pick<ChartPredictionOption, 'modelGroup' | 'horizonLen' | 'contextLen' | 'mtfVersion'>>,
 ): ChartPredictionOption | undefined => {
     const candidates = options.filter(option => (
         (patch.modelGroup === undefined || option.modelGroup === patch.modelGroup)
         && (patch.horizonLen === undefined || option.horizonLen === patch.horizonLen)
         && (patch.contextLen === undefined || option.contextLen === patch.contextLen)
-        && (patch.timesfmVersion === undefined || option.timesfmVersion === patch.timesfmVersion)
+        && (patch.mtfVersion === undefined || option.mtfVersion === patch.mtfVersion)
     ));
     if (!candidates.length) {
         return undefined;
@@ -341,7 +345,7 @@ const pickClosestChartOption = (
                 option.modelGroup === current.modelGroup ? 32 : 0,
                 option.horizonLen === current.horizonLen ? 16 : 0,
                 option.contextLen === current.contextLen ? 8 : 0,
-                option.timesfmVersion === current.timesfmVersion ? 4 : 0,
+                option.mtfVersion === current.mtfVersion ? 4 : 0,
             ].reduce((sum, value) => sum + value, 0);
             return { option, score };
         })
@@ -408,7 +412,7 @@ const buildChartPredictionOptions = (
             normalizePredictionSymbol(item.best.symbol),
             item.best.horizon_len ?? '',
             item.best.context_len ?? '',
-            item.best.timesfm_version ?? '',
+            item.best.mtf_version ?? '',
         ].join('|');
         const bucket = grouped.get(key) || {};
         if (isCovPredictionItem(item)) {
@@ -446,7 +450,7 @@ const buildChartPredictionOptions = (
             if (modelDiff !== 0) {
                 return modelDiff;
             }
-            return left.timesfmVersion.localeCompare(right.timesfmVersion);
+            return left.mtfVersion.localeCompare(right.mtfVersion);
         });
 };
 
@@ -617,7 +621,7 @@ const buildNextChunkChartData = (
         );
     }
 
-    if (predictionType === 'cov') {
+    if (predictionType === 'mtf-pro') {
         return {
             dates,
             actuals,
@@ -804,7 +808,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     const [nextChunkChartData, setNextChunkChartData] = useState<PredictionChartData | null>(null);
     const [latestQuotes, setLatestQuotes] = useState<Record<string, { latest_price?: number; change_percent?: number; trading_date?: string; turnover_rate?: number }>>({});
     const [membershipLevel, setMembershipLevel] = useState(0);
-    const [trainPredictionType, setTrainPredictionType] = useState<TrainPredictionType>('non_cov');
+    const [trainPredictionType, setTrainPredictionType] = useState<TrainPredictionType>('mtf-lite');
     const [trainContextLen, setTrainContextLen] = useState(256);
     const [trainHorizonLen, setTrainHorizonLen] = useState(7);
     const [trainingJobId, setTrainingJobId] = useState<string | null>(null);
@@ -818,10 +822,10 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
 
     const getItemSymbol = (item: WatchlistItem | null | undefined) => item?.stock?.symbol || '';
     const getItemCompanyName = (item: WatchlistItem | null | undefined) => item?.stock?.company_name || '';
-    const trainPolicy = getTimesfmTrainPolicy(membershipLevel);
+    const trainPolicy = getMTFTrainPolicy(membershipLevel);
     const trainPredictionTypeOptions: TrainSelectOption<TrainPredictionType>[] = trainPolicy.predictionTypes.map(option => ({
         value: option,
-        label: option === 'cov'
+        label: option === 'mtf-pro'
             ? (language === 'zh' ? 'Pro 模型' : 'Pro Model')
             : (language === 'zh' ? 'Lite 模型' : 'Lite Model'),
     }));
@@ -850,9 +854,13 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     ).sort((left, right) => left.contextLen - right.contextLen);
     const chartVersionParameterOptions = getUniqueChartOptions(
         chartPredictionOptions,
-        option => option.timesfmVersion,
-    ).sort((left, right) => left.timesfmVersion.localeCompare(right.timesfmVersion));
+        option => option.mtfVersion,
+    ).sort((left, right) => left.mtfVersion.localeCompare(right.mtfVersion));
     const openStandalonePredictionModal = (item: WatchlistItem) => {
+        if (isWatchlistItemOverLimit(item)) {
+            setError(language === 'zh' ? '超出当前会员等级上限。删除其他关注或升级会员后可继续预测。' : 'Over current membership limit. Delete other items or upgrade to enable predictions.');
+            return;
+        }
         setSinglePredictionMode('standalone');
         setNextChunkBestItem(null);
         setSinglePredictionItem(item);
@@ -874,7 +882,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
         if (!chartOpen || !!selectedStock?.prediction || isTrainingBest) {
             return;
         }
-        const policy = getTimesfmTrainPolicy(membershipLevel);
+        const policy = getMTFTrainPolicy(membershipLevel);
         setTrainPredictionType(policy.defaultPredictionType);
         setTrainContextLen(policy.defaultContextLen);
         setTrainHorizonLen(policy.defaultHorizonLen);
@@ -899,7 +907,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
             const level = Number(profile?.membership_level ?? 0);
             const normalizedLevel = Number.isFinite(level) ? level : 0;
             setMembershipLevel(normalizedLevel);
-            const policy = getTimesfmTrainPolicy(normalizedLevel);
+            const policy = getMTFTrainPolicy(normalizedLevel);
             setTrainPredictionType(policy.defaultPredictionType);
             setTrainContextLen(policy.defaultContextLen);
             setTrainHorizonLen(policy.defaultHorizonLen);
@@ -1040,7 +1048,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     };
 
     const handleChartParameterChange = (
-        patch: Partial<Pick<ChartPredictionOption, 'modelGroup' | 'horizonLen' | 'contextLen' | 'timesfmVersion'>>,
+        patch: Partial<Pick<ChartPredictionOption, 'modelGroup' | 'horizonLen' | 'contextLen' | 'mtfVersion'>>,
     ) => {
         if (!selectedWatchlistItem || isTrainingBest || isChartLoading) {
             return;
@@ -1116,9 +1124,13 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     };
 
     const handleShowChart = async (item: WatchlistItem) => {
+        if (isWatchlistItemOverLimit(item)) {
+            setError(language === 'zh' ? '超出当前会员等级上限。删除其他关注或升级会员后可继续预测。' : 'Over current membership limit. Delete other items or upgrade to enable predictions.');
+            return;
+        }
         const requestSeq = chartRequestSeqRef.current + 1;
         chartRequestSeqRef.current = requestSeq;
-        const policy = getTimesfmTrainPolicy(membershipLevel);
+        const policy = getMTFTrainPolicy(membershipLevel);
 
         setChartOpen(true);
         setIsChartLoading(true);
@@ -1153,8 +1165,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     };
 
     const resolveTrainResultPreference = (
-        accepted: TimesfmPredictAcceptedResponse,
-        status: TimesfmJobStatusResponse | null,
+        accepted: MTFPredictAcceptedResponse,
+        status: MTFJobStatusResponse | null,
         fallback: TrainResultPreference,
     ): TrainResultPreference => ({
         ...fallback,
@@ -1162,7 +1174,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     });
 
     const pollBestTrainingJob = async (
-        accepted: TimesfmPredictAcceptedResponse,
+        accepted: MTFPredictAcceptedResponse,
         requestSeq: number,
         fallbackPreference: TrainResultPreference,
     ) => {
@@ -1171,7 +1183,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                 return;
             }
 
-            const nextStatus = await timesfmAPI.getJobStatus(accepted.job_id);
+            const nextStatus = await mtfAPI.getJobStatus(accepted.job_id);
             if (requestSeq !== chartRequestSeqRef.current) {
                 return;
             }
@@ -1239,7 +1251,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
 
     const handleNextChunkPredictionComplete = (
         directResult: DirectPredictionResult,
-        request: TimesfmPredictOnceRequest,
+        request: MTFPredictOnceRequest,
     ) => {
 		const bestItem = nextChunkBestItem || getCurrentBestPredictionItem();
 		if (!bestItem) {
@@ -1275,24 +1287,23 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
         setTrainingProgressNow(Date.now());
         setNextChunkChartData(null);
 
-        const request: TimesfmPredictBestRequest = {
+        const request: MTFPredictBestRequest = {
             stock_code: stockCode,
             stock_type: (selectedWatchlistItem.stock_type || 1) === 2 ? 'etf' : 'stock',
             prediction_type: trainPredictionType,
-            years: DEFAULT_TIMESFM_YEARS,
+            years: DEFAULT_MTF_YEARS,
             horizon_len: trainHorizonLen,
             context_len: trainContextLen,
-            timesfm_version: DEFAULT_TIMESFM_VERSION,
         };
         const resultPreference: TrainResultPreference = {
             predictionType: trainPredictionType,
             contextLen: trainContextLen,
             horizonLen: trainHorizonLen,
-            timesfmVersion: DEFAULT_TIMESFM_VERSION,
+            mtfVersion: DEFAULT_MTF_VERSION,
         };
 
         try {
-            const accepted = await timesfmAPI.predictBest(request);
+            const accepted = await mtfAPI.predictBest(request);
             if (requestSeq !== chartRequestSeqRef.current) {
                 return;
             }
@@ -1316,7 +1327,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
             if (requestSeq !== chartRequestSeqRef.current) {
                 return;
             }
-            const message = err?.message || normalizeTimesfmJobError(err);
+            const message = err?.message || normalizeMTFJobError(err);
             if (onAuthError && (
                 message.includes('Authorization header required') ||
                 message.includes('401') ||
@@ -1393,7 +1404,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     const trainingRemainingPercent = trainingProgress
         ? Math.max(2, Math.min(100, Math.ceil(100 - trainingProgressPercent)))
         : null;
-    const isProTraining = trainPredictionType === 'cov';
+    const isProTraining = trainPredictionType === 'mtf-pro';
 
     const handleCloseTrainPanel = () => {
         if (!selectedStock?.prediction) {
@@ -1618,10 +1629,10 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                         {chartVersionParameterOptions.length > 1 && renderChartParameterGroup(
                             language === 'zh' ? '模型版本' : 'Version',
                             chartVersionParameterOptions.map(option => renderChartParameterButton(
-                                option.timesfmVersion,
-                                `v${option.timesfmVersion}`,
-                                activeChartPredictionOption?.timesfmVersion === option.timesfmVersion,
-                                () => handleChartParameterChange({ timesfmVersion: option.timesfmVersion }),
+                                option.mtfVersion,
+                                `v${option.mtfVersion}`,
+                                activeChartPredictionOption?.mtfVersion === option.mtfVersion,
+                                () => handleChartParameterChange({ mtfVersion: option.mtfVersion }),
                                 isTrainingBest || isChartLoading,
                             )),
                         )}
@@ -1666,6 +1677,9 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                             }
                             if (error.includes('User not authenticated') || error.includes('Unauthorized')) {
                                 return t('addStock.errorAuth');
+                            }
+                            if (error.includes('watchlist limit exceeded')) {
+                                return t('addStock.errorLimitExceeded');
                             }
                             return error;
                         })()}
@@ -1750,8 +1764,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                     initialHorizonLen={trainHorizonLen}
                     contextOptions={trainPolicy.contextLens}
                     horizonOptions={trainPolicy.horizonLens}
-                    timesfmVersion={singlePredictionMode === 'next_chunk'
-                        ? String(nextChunkBestItem?.best.timesfm_version || '').trim() || DEFAULT_TIMESFM_VERSION
+                    mtfVersion={singlePredictionMode === 'next_chunk'
+                        ? String(nextChunkBestItem?.best.mtf_version || '').trim() || DEFAULT_MTF_VERSION
                         : undefined}
                     enableCachedLookup
                     historicalBestItem={nextChunkBestItem}
@@ -1847,13 +1861,24 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                             const isPositive = changePercent >= 0;
                             const { textClass } = getChangeColors(isPositive, language);
                             const currentPrice = latestQuotes[symbol]?.latest_price ?? item.current_price?.price;
+                            const overLimit = isWatchlistItemOverLimit(item);
 
                             return (
-                                <div key={item.id} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                                <div key={item.id} className={`rounded-2xl border bg-black/20 p-4 ${overLimit ? 'border-amber-300/30 opacity-75' : 'border-white/10'}`}>
                                     <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">
-                                            <p className="font-mono text-sm font-semibold text-white">{symbol.toLowerCase()}</p>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <p className="font-mono text-sm font-semibold text-white">{symbol.toLowerCase()}</p>
+                                                {overLimit && (
+                                                    <span className="rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] font-bold text-amber-200">
+                                                        {t('watchlist.overLimitBadge')}
+                                                    </span>
+                                                )}
+                                            </div>
                                             <p className="mt-1 text-sm text-white/55">{companyName}</p>
+                                            {overLimit && (
+                                                <p className="mt-2 text-xs leading-5 text-amber-100/75">{t('watchlist.overLimitHint')}</p>
+                                            )}
                                         </div>
                                         <div className="text-right">
                                             <p className="text-sm font-semibold text-white">
@@ -1892,7 +1917,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                         <button
                                             onClick={() => openStandalonePredictionModal(item)}
                                             className="flex h-10 items-center justify-center gap-1 rounded-xl border border-white/10 bg-white/5 text-xs font-medium text-white/85 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/5"
-                                            disabled={isLoading}
+                                            disabled={isLoading || overLimit}
+                                            title={overLimit ? t('watchlist.overLimitHint') : t('watchlist.singlePredict')}
                                         >
                                             <span className="material-symbols-outlined text-[18px]">timeline</span>
                                             <span>{t('watchlist.singlePredict')}</span>
@@ -1900,7 +1926,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                         <button
                                             onClick={() => handleShowChart(item)}
                                             className="flex h-10 items-center justify-center gap-1 rounded-xl border border-primary/20 bg-primary/10 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-primary/10"
-                                            disabled={isLoading}
+                                            disabled={isLoading || overLimit}
+                                            title={overLimit ? t('watchlist.overLimitHint') : t('watchlist.showChart')}
                                         >
                                             <span className="material-symbols-outlined text-[18px]">query_stats</span>
                                             <span>{t('watchlist.showChart')}</span>
@@ -1941,12 +1968,20 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                     const isPositive = changePercent >= 0;
                                     const { textClass } = getChangeColors(isPositive, language);
                                     const currentPrice = latestQuotes[symbol]?.latest_price ?? item.current_price?.price;
+                                    const overLimit = isWatchlistItemOverLimit(item);
 
                                     return (
-                                        <tr key={item.id} className="border-t border-t-[#2D2D2D]">
+                                        <tr key={item.id} className={`border-t border-t-[#2D2D2D] ${overLimit ? 'bg-amber-300/[0.03] opacity-75' : ''}`}>
                                             <td className="h-[72px] px-4 py-2 text-white text-sm font-normal leading-normal">
-                                                <span className="font-bold">{symbol.toLowerCase()}</span><br />
+                                                <span className="font-bold">{symbol.toLowerCase()}</span>
+                                                {overLimit && (
+                                                    <span className="ml-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 text-[11px] font-bold text-amber-200">
+                                                        {t('watchlist.overLimitBadge')}
+                                                    </span>
+                                                )}
+                                                <br />
                                                 <span className="text-xs text-white/60">{companyName}</span>
+                                                {overLimit && <p className="mt-1 max-w-[260px] text-xs text-amber-100/70">{t('watchlist.overLimitHint')}</p>}
                                             </td>
                                             <td className="h-[72px] px-4 py-2 text-white/60 text-sm">
                                                 {latestQuotes[symbol]?.trading_date || '—'}
@@ -1968,8 +2003,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                                 <button
                                                     onClick={() => openStandalonePredictionModal(item)}
                                                     className="p-2 rounded-full hover:bg-white/10 text-white/80 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                                                    disabled={isLoading}
-                                                    title={t('watchlist.singlePredict')}
+                                                    disabled={isLoading || overLimit}
+                                                    title={overLimit ? t('watchlist.overLimitHint') : t('watchlist.singlePredict')}
                                                 >
                                                     <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>timeline</span>
                                                 </button>
@@ -1978,8 +2013,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                                 <button
                                                     onClick={() => handleShowChart(item)}
                                                     className="p-2 rounded-full hover:bg-white/10 text-primary transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-                                                    disabled={isLoading}
-                                                    title={t('watchlist.showChart')}
+                                                    disabled={isLoading || overLimit}
+                                                    title={overLimit ? t('watchlist.overLimitHint') : t('watchlist.showChart')}
                                                 >
                                                     <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>query_stats</span>
                                                 </button>

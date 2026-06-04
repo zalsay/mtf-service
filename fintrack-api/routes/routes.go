@@ -64,6 +64,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	adminService := services.NewAdminService(db, cfg)
 	mtfAgentService := services.NewMTFAgentService(db, cfg)
 	financeNewsService := services.NewFinanceNewsService(nil)
+	openAPIService := services.NewOpenAPIService(db)
 
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler(authService)
@@ -74,6 +75,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	adminHandler := handlers.NewAdminHandler(adminService)
 	mtfAgentHandler := handlers.NewMTFAgentHandler(mtfAgentService, aiModelConfigService)
 	financeNewsHandler := handlers.NewFinanceNewsHandler(financeNewsService)
+	openAPIHandler := handlers.NewOpenAPIHandler(openAPIService, watchlistService, mtfAgentService, aiModelConfigService, financeNewsService)
 
 	// 健康检查
 	router.GET("/health", func(c *gin.Context) {
@@ -130,34 +132,39 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 		getPredictions := v1.Group("/get-predictions")
 		{
 			// 需要鉴权，按当前登录用户查询其关联的best列表
-			getPredictions.GET("/mtf-best", authHandler.AuthMiddleware(), watchlistHandler.ListTimesfmBestByUser)
+			getPredictions.GET("/mtf-best", authHandler.AuthMiddleware(), watchlistHandler.ListMTFBestByUser)
 			// 匿名时只返回公开数据；管理员携带有效 token 时可同时查询公开/非公开数据
-			getPredictions.GET("/mtf-best/public", authHandler.OptionalAuthMiddleware(), watchlistHandler.ListPublicTimesfmBestWithValidation)
+			getPredictions.GET("/mtf-best/public", authHandler.OptionalAuthMiddleware(), watchlistHandler.ListPublicMTFBestWithValidation)
 			// 当前登录用户可查询“自己可访问”的 best + validation chunks；管理员可看任意私有/公开数据
-			getPredictions.GET("/mtf-best/accessible", authHandler.AuthMiddleware(), watchlistHandler.ListAccessibleTimesfmBestWithValidation)
+			getPredictions.GET("/mtf-best/accessible", authHandler.AuthMiddleware(), watchlistHandler.ListAccessibleMTFBestWithValidation)
 			getPredictions.GET("/mtf-best/future", watchlistHandler.GetFuturePredictions)
 		}
 
 		savePredictions := v1.Group("/save-predictions")
 		{
-			savePredictions.POST("/mtf-best", watchlistHandler.SaveTimesfmBest)
-			savePredictions.GET("/mtf-best/by-unique", watchlistHandler.GetTimesfmBestByUniqueKey)
-			savePredictions.GET("/mtf-best/by-config", watchlistHandler.GetTimesfmBestUniqueKeysByConfig)
-			savePredictions.POST("/mtf-best/val-chunk", watchlistHandler.SaveTimesfmValChunk)
+			savePredictions.POST("/mtf-best", watchlistHandler.SaveMTFBest)
+			savePredictions.GET("/mtf-best/by-unique", watchlistHandler.GetMTFBestByUniqueKey)
+			savePredictions.GET("/mtf-best/by-config", watchlistHandler.GetMTFBestUniqueKeysByConfig)
+			savePredictions.POST("/mtf-best/val-chunk", watchlistHandler.SaveMTFValChunk)
 			savePredictions.GET("/mtf-best/val-chunk/latest", watchlistHandler.GetLatestValidationChunk)
-			savePredictions.POST("/backtest", watchlistHandler.SaveTimesfmBacktest)
+			savePredictions.POST("/backtest", watchlistHandler.SaveMTFBacktest)
 		}
 
-		// TimesFM 推理与回测代理路由
-		timesfm := v1.Group("/mtf")
+		// MTF 推理与回测代理路由
+		mtf := v1.Group("/mtf")
 		{
-			timesfm.POST("/predict", watchlistHandler.TriggerTimesfmPredict)
-			timesfm.POST("/predict-best", authHandler.AuthMiddleware(), watchlistHandler.TriggerTimesfmPredictBestAuthorized)
-			timesfm.POST("/predict-once", authHandler.AuthMiddleware(), watchlistHandler.TriggerTimesfmPredictOnce)
-			timesfm.POST("/predict-once/cached", authHandler.AuthMiddleware(), watchlistHandler.GetTimesfmPredictOnceCached)
-			timesfm.GET("/jobs/:jobID", authHandler.AuthMiddleware(), watchlistHandler.GetTimesfmJobStatus)
-			timesfm.POST("/backtest", authHandler.AuthMiddleware(), watchlistHandler.RunTimesfmBacktestProxy)
-			timesfm.GET("/backtest/by-unique", authHandler.AuthMiddleware(), watchlistHandler.GetTimesfmBacktestByUniqueKey)
+			mtf.POST("/predict", watchlistHandler.TriggerMTFPredict)
+			mtf.POST("/predict-best", authHandler.AuthMiddleware(), watchlistHandler.TriggerMTFPredictBestAuthorized)
+			mtf.POST("/predict-once", authHandler.AuthMiddleware(), watchlistHandler.TriggerMTFPredictOnce)
+			mtf.POST("/predict-once/cached", authHandler.AuthMiddleware(), watchlistHandler.GetMTFPredictOnceCached)
+			mtf.GET("/jobs/:jobID", authHandler.AuthMiddleware(), watchlistHandler.GetMTFJobStatus)
+			mtf.POST("/backtest", authHandler.AuthMiddleware(), watchlistHandler.RunMTFBacktestProxy)
+			mtf.GET("/backtest/by-unique", authHandler.AuthMiddleware(), watchlistHandler.GetMTFBacktestByUniqueKey)
+		}
+
+		paid := v1.Group("/paid")
+		{
+			paid.POST("/mtf/predict-once", watchlistHandler.TriggerPaidMTFPredictOnce)
 		}
 
 		strategy := v1.Group("/strategy")
@@ -201,6 +208,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 		financeNews := v1.Group("/finance-news")
 		{
 			financeNews.GET("", financeNewsHandler.List)
+			financeNews.GET("/hot-etf", financeNewsHandler.HotETF)
 		}
 
 		v1.GET("/uzi/health", uziHandler.Health)
@@ -229,6 +237,50 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 				c.JSON(200, gin.H{"message": "Stock detail endpoint - coming soon"})
 			})
 			stocks.GET("/lookup", watchlistHandler.LookupStockName)
+		}
+	}
+
+	open := router.Group("/api/open/v1")
+	{
+		open.POST("/auth/api-key", openAPIHandler.CreateAPIKey)
+
+		etf := open.Group("/etf")
+		etf.Use(openAPIHandler.AuthMiddleware("etf:read"))
+		{
+			etf.GET("/hot", openAPIHandler.HotETF)
+			etf.POST("/quotes", openAPIHandler.ETFQuotes)
+			etf.GET("/lookup", openAPIHandler.ETFLookup)
+		}
+
+		mtfRead := open.Group("/mtf")
+		{
+			mtfRead.GET("/best", openAPIHandler.AuthMiddleware("mtf:read"), openAPIHandler.MTFBest)
+			mtfRead.GET("/best/by-config", openAPIHandler.AuthMiddleware("mtf:read"), openAPIHandler.MTFBestByConfig)
+			mtfRead.GET("/future", openAPIHandler.AuthMiddleware("mtf:read"), openAPIHandler.MTFFuture)
+			mtfRead.GET("/jobs/:jobID", openAPIHandler.AuthMiddleware("mtf:read"), openAPIHandler.MTFJob)
+			mtfRead.POST("/predict-once", openAPIHandler.AuthMiddleware("mtf:predict"), openAPIHandler.MTFPredictOnce)
+			mtfRead.POST("/predict-best", openAPIHandler.AuthMiddleware("mtf:predict"), openAPIHandler.MTFPredictBest)
+			mtfRead.POST("/backtest", openAPIHandler.AuthMiddleware("mtf:backtest"), openAPIHandler.MTFBacktest)
+		}
+
+		strategy := open.Group("/strategy")
+		{
+			strategy.GET("/list", openAPIHandler.AuthMiddleware("strategy:read"), openAPIHandler.StrategyList)
+			strategy.POST("/params", openAPIHandler.AuthMiddleware("strategy:write"), openAPIHandler.SaveStrategy)
+		}
+
+		openWatchlist := open.Group("/watchlist")
+		{
+			openWatchlist.GET("", openAPIHandler.AuthMiddleware("watchlist:read"), openAPIHandler.Watchlist)
+			openWatchlist.POST("", openAPIHandler.AuthMiddleware("watchlist:write"), openAPIHandler.AddWatchlist)
+			openWatchlist.POST("/bind-strategy", openAPIHandler.AuthMiddleware("watchlist:write", "strategy:read"), openAPIHandler.BindWatchlistStrategy)
+		}
+
+		agent := open.Group("/agent")
+		{
+			agent.POST("/messages", openAPIHandler.AuthMiddleware("agent:chat"), openAPIHandler.AgentMessage)
+			agent.GET("/skills/history-trends", openAPIHandler.AuthMiddleware("agent:chat", "mtf:read"), openAPIHandler.AgentHistoryTrends)
+			agent.GET("/skills/uzi-reports", openAPIHandler.AuthMiddleware("agent:chat", "uzi:read"), openAPIHandler.AgentUZIReports)
 		}
 	}
 

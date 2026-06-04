@@ -217,14 +217,6 @@ func (s *Server) handlePredictOnceCached(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stock_code is required"})
 		return
 	}
-	version := models.NormalizeTimesFMVersion(request.TimesFMVersion)
-	if version != models.SupportedTimesFMVersion {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":              "unsupported timesfm_version",
-			"supported_versions": []string{models.SupportedTimesFMVersion},
-		})
-		return
-	}
 
 	statusCode, responseBody, err := s.scheduler.CallBackendSync(r.Context(), "/internal/predict_once_cached_sync", body)
 	if err != nil {
@@ -263,14 +255,6 @@ func (s *Server) handleInferenceRequest(w http.ResponseWriter, r *http.Request, 
 	request.StockCode = strings.TrimSpace(request.StockCode)
 	if request.StockCode == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stock_code is required"})
-		return
-	}
-	version := models.NormalizeTimesFMVersion(request.TimesFMVersion)
-	if version != models.SupportedTimesFMVersion {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error":              "unsupported timesfm_version",
-			"supported_versions": []string{models.SupportedTimesFMVersion},
-		})
 		return
 	}
 
@@ -403,9 +387,9 @@ func loadInferenceTimeEstimator(path string) (*inferenceTimeEstimator, error) {
 
 func addInferenceTimeBenchmarkEntries(estimator *inferenceTimeEstimator, benchmark inferenceTimeBenchmarkFile) {
 	backend := strings.TrimSpace(benchmark.Backend)
-	predictionType := strings.TrimSpace(benchmark.PredictionType)
+	predictionType := models.NormalizePredictionType(benchmark.PredictionType)
 	if predictionType == "" {
-		predictionType = "non_cov"
+		predictionType = models.PredictionTypeMTFLite
 	}
 	sourceParts := []string{}
 	if backend != "" {
@@ -428,6 +412,8 @@ func addInferenceTimeBenchmarkEntries(estimator *inferenceTimeEstimator, benchma
 		}
 		if strings.TrimSpace(entry.PredictionType) == "" {
 			entry.PredictionType = predictionType
+		} else {
+			entry.PredictionType = models.NormalizePredictionType(entry.PredictionType)
 		}
 		entry.Source = source
 		estimator.entries[inferenceTimeKey(entry.PredictionType, entry.ContextLen, entry.HorizonLen)] = entry
@@ -895,8 +881,7 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	request.StockCode = strings.TrimSpace(request.StockCode)
 	normalized["stock_code"] = request.StockCode
 
-	request.TimesFMVersion = models.NormalizeTimesFMVersion(request.TimesFMVersion)
-	normalized["timesfm_version"] = request.TimesFMVersion
+	delete(normalized, "mtf_version")
 
 	request.ForceEnqueue = models.NormalizeForceEnqueueValue(request.ForceEnqueue)
 	if request.ForceEnqueueEnabled() {
@@ -929,6 +914,8 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	} else {
 		delete(normalized, "covariate_signature")
 	}
+	request.PredictionTypeValue = request.PredictionType()
+	normalized["prediction_type"] = request.PredictionTypeValue
 
 	endDate := modelsNormalizeDateOrDefault(request.EndDate, defaultEnd)
 	normalized["end_date"] = endDate

@@ -79,6 +79,8 @@ type WatchlistItem struct {
 	StockType         *int             `json:"stock_type"`
 	StrategyUniqueKey string           `json:"strategy_unique_key,omitempty"`
 	StrategyName      string           `json:"strategy_name,omitempty"`
+	IsOverLimit       bool             `json:"is_over_limit"`
+	WatchlistLimit    int              `json:"watchlist_limit"`
 }
 
 type AddToWatchlistRequest struct {
@@ -108,16 +110,16 @@ type PortfolioItem struct {
 	PurchaseDate    time.Time   `json:"purchase_date"`
 }
 
-// TimesFM最佳分位预测保存的模型与请求体
-type TimesfmBestPrediction struct {
+// MTF最佳分位预测保存的模型与请求体
+type MTFBestPrediction struct {
 	ID                 int       `json:"id" db:"id"`
 	UniqueKey          string    `json:"unique_key" db:"unique_key"`
 	Symbol             string    `json:"symbol" db:"symbol"`
-	TimesfmVersion     string    `json:"timesfm_version" db:"timesfm_version"`
+	MTFVersion         string    `json:"mtf_version" db:"mtf_version"`
 	BestPredictionItem string    `json:"best_prediction_item" db:"best_prediction_item"`
 	BestMetrics        string    `json:"best_metrics" db:"best_metrics"` // JSON string
 	PredictionType     string    `json:"prediction_type" db:"prediction_type"`
-	CovariateConfig    string    `json:"covariate_config" db:"covariate_config"`
+	CovariateConfig    string    `json:"-" db:"covariate_config"`
 	CovariateSignature string    `json:"covariate_signature" db:"covariate_signature"`
 	CovariateAnalysis  string    `json:"covariate_analysis" db:"covariate_analysis"`
 	IsPublic           int       `json:"is_public" db:"is_public"`
@@ -136,19 +138,19 @@ type TimesfmBestPrediction struct {
 	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
 }
 
-type TimesfmBestUniqueKeysByConfig struct {
-	Symbol          string `json:"symbol"`
-	TimesfmVersion  string `json:"timesfm_version"`
-	HorizonLen      int    `json:"horizon_len"`
-	ContextLen      int    `json:"context_len"`
-	NonCovUniqueKey string `json:"non_cov_unique_key"`
-	CovUniqueKey    string `json:"cov_unique_key"`
+type MTFBestUniqueKeysByConfig struct {
+	Symbol           string `json:"symbol"`
+	MTFVersion       string `json:"mtf_version"`
+	HorizonLen       int    `json:"horizon_len"`
+	ContextLen       int    `json:"context_len"`
+	MTFLiteUniqueKey string `json:"mtf_lite_unique_key"`
+	MTFProUniqueKey  string `json:"mtf_pro_unique_key"`
 }
 
-type SaveTimesfmBestRequest struct {
+type SaveMTFBestRequest struct {
 	UniqueKey          string                 `json:"unique_key" binding:"required"`
 	Symbol             string                 `json:"symbol" binding:"required"`
-	TimesfmVersion     string                 `json:"timesfm_version" binding:"required"`
+	MTFVersion         string                 `json:"mtf_version" binding:"required"`
 	BestPredictionItem string                 `json:"best_prediction_item" binding:"required"`
 	BestMetrics        map[string]interface{} `json:"best_metrics" binding:"required"`
 	PredictionType     string                 `json:"prediction_type"`
@@ -166,7 +168,7 @@ type SaveTimesfmBestRequest struct {
 	CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
 }
 
-type SaveTimesfmValChunkRequest struct {
+type SaveMTFValChunkRequest struct {
 	UniqueKey          string                 `json:"unique_key" binding:"required"`
 	ChunkIndex         int                    `json:"chunk_index" binding:"gte=0"`
 	StartDate          string                 `json:"start_date" binding:"required"`
@@ -187,11 +189,11 @@ type SaveTimesfmValChunkRequest struct {
 	CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
 }
 
-// 保存 TimesFM 回测结果的请求模型
-type SaveTimesfmBacktestRequest struct {
+// 保存 MTF 回测结果的请求模型
+type SaveMTFBacktestRequest struct {
 	UniqueKey        string `json:"unique_key" binding:"required"`
 	Symbol           string `json:"symbol" binding:"required"`
-	TimesfmVersion   string `json:"timesfm_version" binding:"required"`
+	MTFVersion       string `json:"mtf_version" binding:"required"`
 	ContextLen       int    `json:"context_len" binding:"required"`
 	HorizonLen       int    `json:"horizon_len" binding:"required"`
 	UserID           *int   `json:"user_id"`
@@ -229,7 +231,7 @@ type SaveTimesfmBacktestRequest struct {
 	CovariateAnalysis   map[string]interface{}   `json:"covariate_analysis"`
 }
 
-type TimesfmPredictRequest struct {
+type MTFPredictRequest struct {
 	StockCode          string                 `json:"stock_code" binding:"required"`
 	StockType          interface{}            `json:"stock_type,omitempty"`
 	TimeStep           *int                   `json:"time_step,omitempty"`
@@ -237,7 +239,6 @@ type TimesfmPredictRequest struct {
 	PredictionType     string                 `json:"prediction_type,omitempty"`
 	HorizonLen         *int                   `json:"horizon_len,omitempty"`
 	ContextLen         *int                   `json:"context_len,omitempty"`
-	TimesfmVersion     *string                `json:"timesfm_version,omitempty"`
 	UserID             *int                   `json:"user_id,omitempty"`
 	ForceEnqueue       *bool                  `json:"force_enqueue,omitempty"`
 	ForceRequeue       *bool                  `json:"force_requeue,omitempty"`
@@ -249,21 +250,20 @@ type TimesfmPredictRequest struct {
 	Covariates         map[string]interface{} `json:"covariates,omitempty"`
 }
 
-type TimesfmJobStatusResponse struct {
+type MTFJobStatusResponse struct {
 	JobID string `json:"job_id"`
 }
 
-type TimesfmBestTrainRequest struct {
+type MTFBestTrainRequest struct {
 	StockCode      string      `json:"stock_code" binding:"required"`
 	StockType      interface{} `json:"stock_type,omitempty"`
 	PredictionType string      `json:"prediction_type,omitempty"`
 	Years          *int        `json:"years,omitempty"`
 	HorizonLen     int         `json:"horizon_len" binding:"required"`
 	ContextLen     int         `json:"context_len" binding:"required"`
-	TimesfmVersion *string     `json:"timesfm_version,omitempty"`
 }
 
-type TimesfmBacktestRequest struct {
+type MTFBacktestRequest struct {
 	UniqueKey              string   `json:"unique_key,omitempty"`
 	Symbol                 string   `json:"symbol,omitempty"`
 	StockType              *string  `json:"stock_type,omitempty"`
@@ -273,7 +273,7 @@ type TimesfmBacktestRequest struct {
 	TimeStep               *int     `json:"time_step,omitempty"`
 	StartDate              *string  `json:"start_date,omitempty"`
 	EndDate                *string  `json:"end_date,omitempty"`
-	TimesfmVersion         *string  `json:"timesfm_version,omitempty"`
+	MTFVersion             *string  `json:"mtf_version,omitempty"`
 	UserID                 *int     `json:"user_id,omitempty"`
 	StrategyParamsID       *int     `json:"strategy_params_id,omitempty"`
 	BuyThresholdPct        *float64 `json:"buy_threshold_pct,omitempty"`

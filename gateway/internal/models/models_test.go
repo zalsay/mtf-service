@@ -34,14 +34,30 @@ func TestRequestKeyIncludesPredictionTypeAndCovariateSignature(t *testing.T) {
 	if nonCovKey == covKey {
 		t.Fatalf("expected different request keys for cov and non-cov requests, got identical key %q", covKey)
 	}
-	if want := `"prediction_type":"non_cov"`; !strings.Contains(nonCovKey, want) {
-		t.Fatalf("expected non-cov request key to include %s, got %s", want, nonCovKey)
+	if want := `"prediction_type":"mtf-lite"`; !strings.Contains(nonCovKey, want) {
+		t.Fatalf("expected mtf-lite request key to include %s, got %s", want, nonCovKey)
 	}
-	if want := `"prediction_type":"cov"`; !strings.Contains(covKey, want) {
-		t.Fatalf("expected cov request key to include %s, got %s", want, covKey)
+	if want := `"prediction_type":"mtf-pro"`; !strings.Contains(covKey, want) {
+		t.Fatalf("expected mtf-pro request key to include %s, got %s", want, covKey)
 	}
 	if !strings.Contains(covKey, `"covariate_signature":"`) {
 		t.Fatalf("expected cov request key to include covariate_signature, got %s", covKey)
+	}
+}
+
+func TestNormalizePredictionTypeMapsLegacyNames(t *testing.T) {
+	tests := map[string]string{
+		"":         "",
+		"non_cov":  "mtf-lite",
+		"cov":      "mtf-pro",
+		"mtf-lite": "mtf-lite",
+		"mtf-pro":  "mtf-pro",
+	}
+
+	for input, want := range tests {
+		if got := NormalizePredictionType(input); got != want {
+			t.Fatalf("NormalizePredictionType(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
@@ -113,15 +129,15 @@ func TestRequestKeyIncludesCovariatePreset(t *testing.T) {
 	}
 }
 
-func TestRequestKeyCanonicalizesLegacyTimesFMXRegPreset(t *testing.T) {
+func TestRequestKeyCanonicalizesLegacyMTFXRegPreset(t *testing.T) {
 	legacy := InferenceRequest{
 		StockCode:       "510050",
 		StockType:       2,
 		Years:           15,
 		HorizonLen:      7,
 		ContextLen:      2048,
-		CovariateConfig: map[string]any{"enabled": true, "xreg_mode": "timesfm + xreg"},
-		CovariatePreset: "market_cov_v1_timesfm_xreg",
+		CovariateConfig: map[string]any{"enabled": true, "xreg_mode": "mtf + xreg"},
+		CovariatePreset: "market_cov_v1_mtf_xreg",
 	}
 	canonical := InferenceRequest{
 		StockCode:       "510050",
@@ -129,7 +145,7 @@ func TestRequestKeyCanonicalizesLegacyTimesFMXRegPreset(t *testing.T) {
 		Years:           15,
 		HorizonLen:      7,
 		ContextLen:      2048,
-		CovariateConfig: map[string]any{"enabled": true, "xreg_mode": "xreg + timesfm"},
+		CovariateConfig: map[string]any{"enabled": true, "xreg_mode": "xreg + mtf"},
 		CovariatePreset: "market_cov_v1",
 	}
 
@@ -147,10 +163,10 @@ func TestRequestKeyCanonicalizesLegacyTimesFMXRegPreset(t *testing.T) {
 	if want := `"covariate_preset":"market_cov_v1"`; !strings.Contains(legacyKey, want) {
 		t.Fatalf("expected canonicalized request key to include %s, got %s", want, legacyKey)
 	}
-	if strings.Contains(legacyKey, "market_cov_v1_timesfm_xreg") {
+	if strings.Contains(legacyKey, "market_cov_v1_mtf_xreg") {
 		t.Fatalf("expected legacy preset name to be removed from request key, got %s", legacyKey)
 	}
-	if strings.Contains(legacyKey, `"timesfm + xreg"`) {
+	if strings.Contains(legacyKey, `"mtf + xreg"`) {
 		t.Fatalf("expected legacy xreg_mode to be removed from request key, got %s", legacyKey)
 	}
 }

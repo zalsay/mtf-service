@@ -21,9 +21,11 @@ import (
 
 const (
 	tickflowProviderName        = "tickflow-go"
+	dailyProviderName           = "a-stock-daily"
 	eastmoneyProviderName       = "eastmoney-push2his"
 	baiduProviderName           = "baidu-gushitong"
 	defaultTickflowAdjust       = "forward_additive"
+	defaultDailyBaseURL         = "http://a-stock-daily:8080"
 	defaultTickflowBaseURL      = "https://api.tickflow.org"
 	defaultTickflowFreeBaseURL  = "https://free-api.tickflow.org"
 	defaultEastmoneyBaseURL     = "http://push2his.eastmoney.com"
@@ -31,7 +33,7 @@ const (
 	maxTickflowKlinePageSize    = 10000
 	defaultTickflowHTTPTimeout  = 30 * time.Second
 	defaultTickflowTradingCheck = "000001.SH"
-	defaultHistoryProviderOrder = "eastmoney,baidu,tickflow"
+	defaultHistoryProviderOrder = "tickflow,daily,eastmoney,baidu"
 )
 
 type TickflowHistoryRequest struct {
@@ -114,6 +116,15 @@ type baiduKlineResponse struct {
 			MarketData string `json:"marketData"`
 		} `json:"newMarketData"`
 	} `json:"Result"`
+}
+
+type dailyHistoryResponse struct {
+	Code     int                    `json:"code"`
+	Symbol   string                 `json:"symbol"`
+	Provider string                 `json:"provider"`
+	Adjust   string                 `json:"adjust"`
+	Rows     int                    `json:"rows"`
+	Data     []TickflowMarketRecord `json:"data"`
 }
 
 func (h *DatabaseHandler) tickflowHistoryHandler(c *gin.Context) {
@@ -240,6 +251,8 @@ func (h *DatabaseHandler) LoadTickflowHistory(ctx context.Context, req TickflowH
 				name := h.lookupInstrumentName(ctx, tickflowSymbol, stockType)
 				records = normalizeTickflowKlines(klines, location, tickflowSymbol, name)
 			}
+		case dailyProviderName, "daily":
+			records, fetchErr = fetchDailyKlines(ctx, tickflowSymbol, stockType, startDate, endDate, adjust)
 		default:
 			continue
 		}
@@ -308,6 +321,14 @@ func fetchTickflowInstrumentName(ctx context.Context, symbol string) (string, er
 
 func tickflowGet(ctx context.Context, endpoint string) ([]byte, error) {
 	return marketHTTPGet(ctx, endpoint, nil)
+}
+
+func dailyGet(ctx context.Context, endpoint string) ([]byte, error) {
+	headers := map[string]string{}
+	if token := strings.TrimSpace(getEnv("A_STOCK_DAILY_TOKEN", "")); token != "" {
+		headers["X-Token"] = token
+	}
+	return marketHTTPGet(ctx, endpoint, headers)
 }
 
 func marketHTTPGet(ctx context.Context, endpoint string, headers map[string]string) ([]byte, error) {
@@ -380,6 +401,46 @@ func fetchEastmoneyKlines(ctx context.Context, symbol string, stockType int, sta
 		return nil, errors.New("eastmoney returned empty data")
 	}
 	return normalizeEastmoneyKlines(parsed.Data.Klines, parsed.Data.Name, symbol)
+}
+
+func fetchDailyKlines(ctx context.Context, symbol string, stockType int, startDate time.Time, endDate time.Time, adjust string) ([]TickflowMarketRecord, error) {
+	values := url.Values{}
+	values.Set("symbol", digitsOnly(symbol))
+	values.Set("stock_type", strconv.Itoa(stockType))
+	values.Set("start_date", startDate.Format("2006-01-02"))
+	values.Set("end_date", endDate.Format("2006-01-02"))
+	values.Set("adjust", dailyAdjust(adjust))
+
+	body, err := dailyGet(ctx, dailyBaseURL()+"/api/v1/history?"+values.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var parsed dailyHistoryResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	if parsed.Code != 0 && parsed.Code != 200 {
+		return nil, fmt.Errorf("daily returned code=%d", parsed.Code)
+	}
+	if len(parsed.Data) == 0 {
+		return nil, errors.New("daily returned empty data")
+	}
+	for i := range parsed.Data {
+		if strings.TrimSpace(parsed.Data[i].Symbol) == "" {
+			parsed.Data[i].Symbol = symbol
+		}
+		if strings.TrimSpace(parsed.Data[i].TradeDate) == "" {
+			parsed.Data[i].TradeDate = parsed.Data[i].DateStr
+		}
+		if strings.TrimSpace(parsed.Data[i].DateStr) == "" {
+			parsed.Data[i].DateStr = parsed.Data[i].TradeDate
+		}
+	}
+	sort.SliceStable(parsed.Data, func(i, j int) bool {
+		return firstNonEmpty(parsed.Data[i].DateStr, parsed.Data[i].TradeDate, parsed.Data[i].Datetime) <
+			firstNonEmpty(parsed.Data[j].DateStr, parsed.Data[j].TradeDate, parsed.Data[j].Datetime)
+	})
+	return parsed.Data, nil
 }
 
 func fetchBaiduKlines(ctx context.Context, symbol string, stockType int, startDate time.Time, endDate time.Time) ([]TickflowMarketRecord, error) {
@@ -878,7 +939,7 @@ func historyProviderOrder() []string {
 		providers = append(providers, provider)
 	}
 	if len(providers) == 0 {
-		return []string{eastmoneyProviderName, baiduProviderName, tickflowProviderName}
+		return []string{tickflowProviderName, dailyProviderName, eastmoneyProviderName, baiduProviderName}
 	}
 	return providers
 }
@@ -891,9 +952,29 @@ func canonicalHistoryProviderName(provider string) string {
 		return baiduProviderName
 	case "tickflow", "tickflow-go":
 		return tickflowProviderName
+	case "daily", "a-stock-daily", "astock-daily":
+		return dailyProviderName
 	default:
 		return ""
 	}
+}
+
+func dailyAdjust(adjust string) string {
+	switch normalizeTickflowAdjust(adjust) {
+	case "forward", "forward_additive":
+		return "qfq"
+	case "backward", "backward_additive":
+		return "hfq"
+	default:
+		return "none"
+	}
+}
+
+func dailyBaseURL() string {
+	if base := strings.TrimSpace(getEnv("A_STOCK_DAILY_URL", "")); base != "" {
+		return strings.TrimRight(base, "/")
+	}
+	return defaultDailyBaseURL
 }
 
 func eastmoneyBaseURL() string {

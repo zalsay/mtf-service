@@ -152,78 +152,140 @@ func TestFinanceNewsServiceListsDragonTigerBoard(t *testing.T) {
 	}
 }
 
-func TestFinanceNewsServiceListsHotETFRecommendations(t *testing.T) {
-	page := `
-		<html><body>
-			<h2>标的评分明细</h2>
-			<div>沪深300ETF 510300 91.50 88.00 92.00 85.00 3.870 89.25 观察</div>
-			<div>人工智能ETF 159819 96.20 94.00 97.00 91.00 0.982 95.40 强势</div>
-		</body></html>
-	`
+func TestFinanceNewsServiceListsHotETFDetails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/hot-etf" {
 			t.Fatalf("path = %s, want /hot-etf", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(page))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`
+			<table id="radarTable">
+				<thead>
+					<tr><th>标的/雷达优先级</th><th>趋势</th><th>月线</th><th>周线</th><th>日线</th><th>参考止损</th><th>总分</th><th>状态</th></tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td><div><span>华夏中证机器人ETF</span><span>562500 · 风险RPS 83</span><span>雷达优先级 77.7 · A</span></div></td>
+						<td><svg><title>2026-05-19~2026-06-03: +12.3→+18.8 (+2.4)</title></svg></td>
+						<td><span>+4.0</span><span>月线多头结构</span></td>
+						<td><span>+6.0</span><span>极强多</span></td>
+						<td><span>+4.5</span><span>突破上轨</span></td>
+						<td><div>参考止损 <strong>1.013</strong></div><div>2.5%</div></td>
+						<td><span>18.8</span></td>
+						<td><span>强势波段多头</span><span>主升</span></td>
+					</tr>
+				</tbody>
+			</table>
+		`))
 	}))
 	defer server.Close()
 
 	service := newTestFinanceNewsService(server)
-	result, err := service.List(context.Background(), FinanceNewsQuery{Category: "hot_etf", Keyword: "人工", Limit: 10, Page: 1})
+	result, err := service.ListHotETF(context.Background())
 	if err != nil {
-		t.Fatalf("List hot_etf error = %v", err)
+		t.Fatalf("ListHotETF error = %v", err)
 	}
-	if result.Source != "imlam_etf" || result.Category != "hot_etf" || result.Count != 1 {
+	if result.Source != "meetlife_hot_etf" || result.Count != 1 {
 		t.Fatalf("unexpected hot ETF result: %#v", result)
 	}
 	item := result.Items[0]
-	if item.Symbol != "159819" || item.StockName != "人工智能ETF" || item.Category != "hot_etf" {
-		t.Fatalf("unexpected hot ETF item identity: %#v", item)
+	if item.Code != "562500" || item.Name != "华夏中证机器人ETF" {
+		t.Fatalf("unexpected code/name: %#v", item)
 	}
-	if item.ETFStatus != "强势" || item.ETFRPS != "96.20" || item.ETFStopLoss != "0.982" || item.ETFScore != "95.40" {
-		t.Fatalf("unexpected hot ETF scores: %#v", item)
+	if item.RadarPriority != 77.7 || item.RiskRPS != 83 || item.Grade != "A" {
+		t.Fatalf("unexpected radar fields: %#v", item)
 	}
-	if !strings.Contains(item.Summary, "RPS 96.20") || !strings.Contains(item.Summary, "加权总分 95.40") {
-		t.Fatalf("summary should contain normalized score details: %s", item.Summary)
+	if item.TotalScore != 18.8 || item.StopPrice != "1.013" || item.StopDistance != "2.5%" {
+		t.Fatalf("unexpected score/stop fields: %#v", item)
+	}
+	if item.Month.Score != 4 || item.Week.Score != 6 || item.Day.Score != 4.5 {
+		t.Fatalf("unexpected signal scores: %#v", item)
+	}
+	if item.Status != "强势波段多头 主升" {
+		t.Fatalf("unexpected status: %q", item.Status)
+	}
+	if !strings.Contains(item.Trend, "+12.3") {
+		t.Fatalf("unexpected trend: %q", item.Trend)
 	}
 }
 
-func TestFinanceNewsServiceCachesHotETFRecommendationsForCurrentDay(t *testing.T) {
-	hits := 0
-	page := `<html><body><div>人工智能ETF 159819 96.20 94.00 97.00 91.00 0.982 95.40 强势</div></body></html>`
+func TestFinanceNewsServiceUsesLocalHotETFHTMLWhenPresent(t *testing.T) {
+	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		if hits > 1 {
-			t.Fatalf("hot ETF snapshot should be fetched once per day, got %d hits", hits)
-		}
-		_, _ = w.Write([]byte(page))
+		requests++
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
+	cachePath := filepath.Join(t.TempDir(), "hot-etf", "latest.html")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte(hotETFTestHTML("华夏本地ETF", "510300")), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
 	service := newTestFinanceNewsService(server)
-	service.hotETFURL = server.URL
-	service.hotETFCacheDir = t.TempDir()
-
-	for i := 0; i < 2; i++ {
-		result, err := service.List(context.Background(), FinanceNewsQuery{Category: "hot_etf", Limit: 10, Page: 1})
-		if err != nil {
-			t.Fatalf("List hot_etf #%d error = %v", i+1, err)
-		}
-		if result.Count != 1 || result.Items[0].Symbol != "159819" {
-			t.Fatalf("unexpected cached hot ETF result #%d: %#v", i+1, result)
-		}
-	}
-
-	files, err := filepath.Glob(filepath.Join(service.hotETFCacheDir, "hot_etf_*.json"))
+	service.hotETFCachePath = cachePath
+	result, err := service.ListHotETF(context.Background())
 	if err != nil {
-		t.Fatalf("glob cache files: %v", err)
+		t.Fatalf("ListHotETF error = %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("cache files count = %d, want 1", len(files))
+	if requests != 0 {
+		t.Fatalf("remote requests = %d, want 0", requests)
 	}
-	if info, err := os.Stat(files[0]); err != nil || info.Size() == 0 {
-		t.Fatalf("cache file should exist with content, info=%#v err=%v", info, err)
+	if result.Count != 1 || result.Items[0].Code != "510300" || result.Items[0].Name != "华夏本地ETF" {
+		t.Fatalf("unexpected cached hot ETF result: %#v", result)
 	}
+}
+
+func TestFinanceNewsServiceWritesHotETFHTMLCacheAfterRemoteFetch(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(hotETFTestHTML("华夏远端ETF", "159919")))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "hot-etf", "latest.html")
+	service := newTestFinanceNewsService(server)
+	service.hotETFCachePath = cachePath
+	result, err := service.ListHotETF(context.Background())
+	if err != nil {
+		t.Fatalf("ListHotETF error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("remote requests = %d, want 1", requests)
+	}
+	raw, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read written cache: %v", err)
+	}
+	if !strings.Contains(string(raw), "华夏远端ETF") {
+		t.Fatalf("cache body missing remote html: %s", string(raw))
+	}
+	if result.Count != 1 || result.Items[0].Code != "159919" {
+		t.Fatalf("unexpected remote hot ETF result: %#v", result)
+	}
+}
+
+func hotETFTestHTML(name string, code string) string {
+	return `
+		<table id="radarTable">
+			<tbody>
+				<tr>
+					<td><span>` + name + `</span><span>` + code + ` · 风险RPS 83</span><span>雷达优先级 77.7 · A</span></td>
+					<td><svg><title>2026-05-19~2026-06-03: +12.3→+18.8 (+2.4)</title></svg></td>
+					<td><span>+4.0</span><span>月线多头结构</span></td>
+					<td><span>+6.0</span><span>极强多</span></td>
+					<td><span>+4.5</span><span>突破上轨</span></td>
+					<td><div>参考止损 <strong>1.013</strong></div><div>2.5%</div></td>
+					<td><span>18.8</span></td>
+					<td><span>强势波段多头</span></td>
+				</tr>
+			</tbody>
+		</table>`
 }
 
 func newTestFinanceNewsService(server *httptest.Server) *FinanceNewsService {

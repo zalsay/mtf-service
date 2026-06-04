@@ -4,11 +4,11 @@ import PredictionChartPanel from '../common/PredictionChartPanel';
 import {
     DirectPredictionResult,
     getAccessiblePredictions,
-    TimesfmJobStatusResponse,
-    TimesfmPredictAcceptedResponse,
-    TimesfmPredictOnceRequest,
+    MTFJobStatusResponse,
+    MTFPredictAcceptedResponse,
+    MTFPredictOnceRequest,
     WatchlistItem,
-    timesfmAPI,
+    mtfAPI,
 } from '../../services/apiService';
 import type { PredictionChartData, PublicPredictionItem } from '../../types';
 import { resolvePublicPredictionItems } from '../../utils/predictionUtils';
@@ -18,28 +18,28 @@ interface SinglePredictionModalProps {
     item: WatchlistItem | null;
     currentPrice?: number;
     mode?: 'standalone' | 'next_chunk';
-    predictionType?: 'non_cov' | 'cov';
-    initialPredictionType?: 'non_cov' | 'cov';
-    predictionTypeOptions?: Array<'non_cov' | 'cov'>;
+    predictionType?: 'mtf-lite' | 'mtf-pro';
+    initialPredictionType?: 'mtf-lite' | 'mtf-pro';
+    predictionTypeOptions?: Array<'mtf-lite' | 'mtf-pro'>;
     covariateSignature?: string;
     initialHorizonLen?: number;
     initialContextLen?: number;
     horizonOptions?: number[];
     contextOptions?: number[];
-    timesfmVersion?: string;
+    mtfVersion?: string;
     enableCachedLookup?: boolean;
     historicalBestItem?: PublicPredictionItem | null;
     onClose: () => void;
     onAuthError?: () => void;
     onSubmittingChange?: (isSubmitting: boolean) => void;
-    onPredictionComplete?: (result: DirectPredictionResult, request: TimesfmPredictOnceRequest) => void | Promise<void>;
+    onPredictionComplete?: (result: DirectPredictionResult, request: MTFPredictOnceRequest) => void | Promise<void>;
 }
 
 const DEFAULT_HORIZON_LEN = 7;
 const DEFAULT_CONTEXT_LEN = 2048;
 const DEFAULT_TIME_STEP = 0;
 const DEFAULT_YEARS = 15;
-const DEFAULT_TIMESFM_VERSION = '2.5';
+const DEFAULT_MTF_VERSION = '2.5';
 const HORIZON_OPTIONS = [7, 14, 28];
 const CONTEXT_OPTIONS = [512, 1024, 2048];
 const POLL_INTERVAL_MS = 2000;
@@ -74,11 +74,11 @@ const findDirectPredictionResult = (value: unknown, depth = 0): DirectPrediction
     return null;
 };
 
-const extractDirectPredictionResult = (job: TimesfmJobStatusResponse): DirectPredictionResult | null => {
+const extractDirectPredictionResult = (job: MTFJobStatusResponse): DirectPredictionResult | null => {
     return findDirectPredictionResult(job.result);
 };
 
-const normalizeJobError = (job: TimesfmJobStatusResponse): string => {
+const normalizeJobError = (job: MTFJobStatusResponse): string => {
     const result = isRecord(job.result) ? job.result : {};
     const resultError = typeof result.error === 'string' ? result.error : '';
     const resultMessage = typeof result.message === 'string' ? result.message : '';
@@ -86,12 +86,12 @@ const normalizeJobError = (job: TimesfmJobStatusResponse): string => {
 };
 
 const getJobProgressLabel = (
-    snapshot: TimesfmJobStatusResponse | TimesfmPredictAcceptedResponse | null,
+    snapshot: MTFJobStatusResponse | MTFPredictAcceptedResponse | null,
     language: string,
 ): string => {
     const status = String(snapshot?.status || '').toLowerCase();
     const stage = String(snapshot?.current_stage || '').toLowerCase();
-    const backend = String((snapshot as TimesfmJobStatusResponse | null)?.backend || '').toLowerCase();
+    const backend = String((snapshot as MTFJobStatusResponse | null)?.backend || '').toLowerCase();
     const isZh = language === 'zh';
 
     if (status === 'succeeded') {
@@ -130,9 +130,9 @@ const isCovPredictionItem = (item?: PublicPredictionItem | null): boolean => {
     }
     const predictionType = normalizeOptionalText(item.best.prediction_type);
     if (predictionType) {
-        return predictionType === 'cov';
+        return predictionType === 'mtf-pro';
     }
-    return String(item.best.unique_key || '').includes('_cov');
+    return String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
 };
 
 const parseChunkDateTime = (value: unknown): number => {
@@ -208,16 +208,16 @@ const appendLatestActualAnchor = (
 const pickHistoricalBestItem = (
     items: PublicPredictionItem[],
     symbol: string,
-    predictionType: 'non_cov' | 'cov',
+    predictionType: 'mtf-lite' | 'mtf-pro',
     contextLen: number,
     horizonLen: number,
-    timesfmVersion: string,
+    mtfVersion: string,
 ): PublicPredictionItem | null => {
     const normalizedSymbol = normalizePredictionSymbol(symbol);
     const resolvedItems = resolvePublicPredictionItems(items || []);
 
     for (const resolved of resolvedItems) {
-        const candidate = predictionType === 'cov'
+        const candidate = predictionType === 'mtf-pro'
             ? (resolved.pro || (isCovPredictionItem(resolved.primary) ? resolved.primary : undefined))
             : (isCovPredictionItem(resolved.primary) ? undefined : resolved.primary);
         if (!candidate) {
@@ -232,7 +232,7 @@ const pickHistoricalBestItem = (
         if (Number(candidate.best.horizon_len || 0) !== horizonLen) {
             continue;
         }
-        if (String(candidate.best.timesfm_version || '').trim() !== timesfmVersion) {
+        if (String(candidate.best.mtf_version || '').trim() !== mtfVersion) {
             continue;
         }
         return candidate;
@@ -275,7 +275,7 @@ const getPredictionSeries = (
 
 const buildPredictionChartData = (
     result: DirectPredictionResult,
-    predictionType: 'non_cov' | 'cov',
+    predictionType: 'mtf-lite' | 'mtf-pro',
     latestClose?: number,
     fallbackCurrentPrice?: number,
     historicalBestItem?: PublicPredictionItem | null,
@@ -350,7 +350,7 @@ const buildPredictionChartData = (
         );
     }
 
-    if (predictionType === 'cov') {
+    if (predictionType === 'mtf-pro') {
         return {
             dates,
             actuals,
@@ -384,7 +384,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     initialContextLen,
     horizonOptions,
     contextOptions,
-    timesfmVersion,
+    mtfVersion,
     enableCachedLookup,
     historicalBestItem,
     onClose,
@@ -395,14 +395,14 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     const { t, language } = useLanguage();
     const [horizonLen, setHorizonLen] = useState(DEFAULT_HORIZON_LEN);
     const [contextLen, setContextLen] = useState(DEFAULT_CONTEXT_LEN);
-    const [selectedPredictionType, setSelectedPredictionType] = useState<'non_cov' | 'cov'>(predictionType || initialPredictionType || 'non_cov');
+    const [selectedPredictionType, setSelectedPredictionType] = useState<'mtf-lite' | 'mtf-pro'>(predictionType || initialPredictionType || 'mtf-lite');
     const [isCheckingExisting, setIsCheckingExisting] = useState(enableCachedLookup ?? mode === 'standalone');
     const [checkedLookupKey, setCheckedLookupKey] = useState<string | null>(null);
     const [checkedHistoricalLookupKey, setCheckedHistoricalLookupKey] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [acceptedJob, setAcceptedJob] = useState<TimesfmPredictAcceptedResponse | null>(null);
-    const [jobStatus, setJobStatus] = useState<TimesfmJobStatusResponse | null>(null);
+    const [acceptedJob, setAcceptedJob] = useState<MTFPredictAcceptedResponse | null>(null);
+    const [jobStatus, setJobStatus] = useState<MTFJobStatusResponse | null>(null);
     const [predictionResult, setPredictionResult] = useState<DirectPredictionResult | null>(null);
     const [fetchedHistoricalBestItem, setFetchedHistoricalBestItem] = useState<PublicPredictionItem | null>(null);
     const requestSeqRef = useRef(0);
@@ -419,9 +419,9 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     const effectivePredictionTypeOptions = predictionTypeOptions?.length ? predictionTypeOptions : [];
     const effectivePredictionType = predictionType || selectedPredictionType;
     const shouldLookupCached = enableCachedLookup ?? mode === 'standalone';
-    const effectiveTimesfmVersion = timesfmVersion || DEFAULT_TIMESFM_VERSION;
+    const effectiveMTFVersion = mtfVersion || DEFAULT_MTF_VERSION;
     const effectiveHistoricalBestItem = historicalBestItem || fetchedHistoricalBestItem;
-    const effectiveCovariateSignature = effectivePredictionType === 'cov'
+    const effectiveCovariateSignature = effectivePredictionType === 'mtf-pro'
         ? String(covariateSignature || effectiveHistoricalBestItem?.best.covariate_signature || '').trim()
         : '';
     const bestSeriesKey = predictionResult?.best_prediction_item || '';
@@ -437,33 +437,32 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     const directChartData: PredictionChartData | null = predictionResult
         ? buildPredictionChartData(predictionResult, effectivePredictionType, latestClose, currentPrice, effectiveHistoricalBestItem)
         : null;
-    const requestParams: TimesfmPredictOnceRequest = {
+    const requestParams: MTFPredictOnceRequest = {
         stock_code: requestStockCode,
         stock_type: stockTypeValue,
         time_step: DEFAULT_TIME_STEP,
         years: DEFAULT_YEARS,
         horizon_len: horizonLen,
         context_len: contextLen,
-        timesfm_version: effectiveTimesfmVersion,
         prediction_type: effectivePredictionType,
-        ...(effectivePredictionType === 'cov'
+        ...(effectivePredictionType === 'mtf-pro'
             ? {
                 covariate_preset: 'market_cov_v1',
                 ...(effectiveCovariateSignature ? { covariate_signature: effectiveCovariateSignature } : {}),
                 covariate_config: {
                     enabled: true,
-                    xreg_mode: 'timesfm + xreg',
+                    xreg_mode: 'mtf + xreg',
                 },
             }
             : {}),
     };
-    const cacheLookupKey = shouldLookupCached && item && !(effectivePredictionType === 'cov' && !effectiveCovariateSignature)
+    const cacheLookupKey = shouldLookupCached && item && !(effectivePredictionType === 'mtf-pro' && !effectiveCovariateSignature)
         ? [
             requestStockCode,
             stockTypeValue,
             horizonLen,
             contextLen,
-            effectiveTimesfmVersion,
+            effectiveMTFVersion,
             effectivePredictionType,
             effectiveCovariateSignature,
         ].join('|')
@@ -474,14 +473,14 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             effectivePredictionType,
             contextLen,
             horizonLen,
-            effectiveTimesfmVersion,
+            effectiveMTFVersion,
         ].join('|')
         : '';
     const hasReadonlyResult = Boolean(predictionResult) && shouldLookupCached;
     const activeJobSnapshot = jobStatus || acceptedJob;
     const activeJobProgressLabel = getJobProgressLabel(activeJobSnapshot, language);
     const isAwaitingCovariateSignature = shouldLookupCached
-        && effectivePredictionType === 'cov'
+        && effectivePredictionType === 'mtf-pro'
         && !effectiveCovariateSignature
         && Boolean(historicalLookupKey)
         && checkedHistoricalLookupKey !== historicalLookupKey;
@@ -495,7 +494,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         if (!isOpen || !item || !shouldLookupCached) {
             return;
         }
-        if (effectivePredictionType === 'cov' && !effectiveCovariateSignature) {
+        if (effectivePredictionType === 'mtf-pro' && !effectiveCovariateSignature) {
             return;
         }
 
@@ -512,7 +511,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
 
         setHorizonLen(defaultHorizonLen);
         setContextLen(defaultContextLen);
-        setSelectedPredictionType(predictionType || initialPredictionType || effectivePredictionTypeOptions[0] || 'non_cov');
+        setSelectedPredictionType(predictionType || initialPredictionType || effectivePredictionTypeOptions[0] || 'mtf-lite');
         setIsCheckingExisting(shouldLookupCached);
         setCheckedLookupKey(null);
         setCheckedHistoricalLookupKey(null);
@@ -523,7 +522,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         setJobStatus(null);
         setPredictionResult(null);
         setFetchedHistoricalBestItem(null);
-    }, [isOpen, item?.id, mode, predictionType, initialPredictionType, initialHorizonLen, initialContextLen, timesfmVersion]);
+    }, [isOpen, item?.id, mode, predictionType, initialPredictionType, initialHorizonLen, initialContextLen, mtfVersion]);
 
     useEffect(() => {
         if (!isOpen || !item || historicalBestItem) {
@@ -547,7 +546,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                     effectivePredictionType,
                     contextLen,
                     horizonLen,
-                    effectiveTimesfmVersion,
+                    effectiveMTFVersion,
                 );
                 setFetchedHistoricalBestItem(matched);
             } catch (err: any) {
@@ -578,7 +577,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         effectivePredictionType,
         contextLen,
         horizonLen,
-        effectiveTimesfmVersion,
+        effectiveMTFVersion,
         onAuthError,
         historicalLookupKey,
     ]);
@@ -590,7 +589,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         if (!isOpen || !item) {
             return;
         }
-        if (effectivePredictionType === 'cov' && !effectiveCovariateSignature) {
+        if (effectivePredictionType === 'mtf-pro' && !effectiveCovariateSignature) {
             setIsCheckingExisting(false);
             setCheckedLookupKey(null);
             setError(null);
@@ -613,15 +612,14 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             years: DEFAULT_YEARS,
             horizon_len: horizonLen,
             context_len: contextLen,
-            timesfm_version: effectiveTimesfmVersion,
             prediction_type: effectivePredictionType,
-            ...(effectivePredictionType === 'cov'
+            ...(effectivePredictionType === 'mtf-pro'
                 ? {
                     covariate_preset: 'market_cov_v1',
                     ...(effectiveCovariateSignature ? { covariate_signature: effectiveCovariateSignature } : {}),
                     covariate_config: {
                         enabled: true,
-                        xreg_mode: 'timesfm + xreg',
+                        xreg_mode: 'mtf + xreg',
                     },
                 }
                 : {}),
@@ -629,7 +627,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
 
         (async () => {
             try {
-                const cached = await timesfmAPI.getPredictOnceCached(lookupParams);
+                const cached = await mtfAPI.getPredictOnceCached(lookupParams);
                 if (requestSeq !== requestSeqRef.current) {
                     return;
                 }
@@ -667,7 +665,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         contextLen,
         effectivePredictionType,
         effectiveCovariateSignature,
-        effectiveTimesfmVersion,
+        effectiveMTFVersion,
         cacheLookupKey,
     ]);
 
@@ -689,7 +687,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             if (requestSeq !== requestSeqRef.current) {
                 return;
             }
-            const nextStatus = await timesfmAPI.getJobStatus(jobId);
+            const nextStatus = await mtfAPI.getJobStatus(jobId);
             if (requestSeq !== requestSeqRef.current) {
                 return;
             }
@@ -734,7 +732,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
 
         try {
             const submittedParams = { ...requestParams };
-            const accepted = await timesfmAPI.predictOnce(submittedParams);
+            const accepted = await mtfAPI.predictOnce(submittedParams);
             if (requestSeq !== requestSeqRef.current) {
                 return;
             }
@@ -799,7 +797,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                                 <div className="flex flex-wrap gap-2">
                                     {effectivePredictionTypeOptions.map(option => {
                                         const isActive = effectivePredictionType === option;
-                                        const isPro = option === 'cov';
+                                        const isPro = option === 'mtf-pro';
                                         const activeClass = isPro
                                             ? 'border border-amber-200/45 bg-[linear-gradient(135deg,rgba(255,241,184,0.95)_0%,rgba(252,211,77,0.95)_36%,rgba(245,158,11,0.95)_72%,rgba(249,115,22,0.95)_100%)] text-[#241400] shadow-[0_10px_28px_rgba(245,158,11,0.18)]'
                                             : 'bg-primary text-black';

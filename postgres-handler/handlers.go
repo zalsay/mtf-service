@@ -26,7 +26,7 @@ func buildFutureDatesKey(dates []string) string {
 	return strings.Join(normalized, ",")
 }
 
-func buildTimesfmDirectUniqueKey(symbol string, stockType int, horizonLen int, contextLen int, futureDatesKey string) string {
+func buildMTFDirectUniqueKey(symbol string, stockType int, horizonLen int, contextLen int, futureDatesKey string) string {
 	sum := sha1.Sum([]byte(futureDatesKey))
 	return fmt.Sprintf(
 		"%s_direct_st_%d_hlen_%d_clen_%d_fd_%x",
@@ -53,14 +53,21 @@ func marshalOptionalJSONObject(value interface{}) (string, error) {
 }
 
 func normalizedPredictionType(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "non_cov"
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "non_cov", "non-cov", "lite", "mtf_lite", "mtf-lite":
+		return "mtf-lite"
+	case "cov", "pro", "mtf_pro", "mtf-pro":
+		return "mtf-pro"
+	default:
+		return strings.TrimSpace(value)
 	}
-	return trimmed
 }
 
-func (h *DatabaseHandler) batchInsertTimesfmForecastHandler(c *gin.Context) {
+func predictionTypeUsesCovariates(value string) bool {
+	return normalizedPredictionType(value) == "mtf-pro"
+}
+
+func (h *DatabaseHandler) batchInsertMTFForecastHandler(c *gin.Context) {
 	var req []struct {
 		Symbol          string  `json:"symbol"`
 		Ds              string  `json:"ds"`
@@ -95,7 +102,7 @@ func (h *DatabaseHandler) batchInsertTimesfmForecastHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empty list"})
 		return
 	}
-	list := make([]TimesfmForecast, 0, len(req))
+	list := make([]MTFForecast, 0, len(req))
 	for i, v := range req {
 		if v.Symbol == "" || v.Ds == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("item %d missing symbol or ds", i)})
@@ -114,20 +121,20 @@ func (h *DatabaseHandler) batchInsertTimesfmForecastHandler(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("invalid ds format: %s", v.Ds)})
 			return
 		}
-		list = append(list, TimesfmForecast{
+		list = append(list, MTFForecast{
 			Symbol: v.Symbol, Ds: t, Tsf: v.Tsf, Tsf01: v.Tsf01, Tsf02: v.Tsf02, Tsf03: v.Tsf03, Tsf04: v.Tsf04, Tsf05: v.Tsf05, Tsf06: v.Tsf06, Tsf07: v.Tsf07, Tsf08: v.Tsf08, Tsf09: v.Tsf09,
 			ChunkIndex: v.ChunkIndex, BestQuantile: v.BestQuantile, BestQuantilePct: v.BestQuantilePct, BestPredPct: v.BestPredPct, ActualPct: v.ActualPct, DiffPct: v.DiffPct, MSE: v.MSE, MAE: v.MAE, CombinedScore: v.CombinedScore,
 			UserID: v.UserID, Version: v.Version, HorizonLen: v.HorizonLen,
 		})
 	}
-	if err := h.BatchInsertTimesfmForecast(list); err != nil {
+	if err := h.BatchInsertMTFForecast(list); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success"})
 }
 
-func (h *DatabaseHandler) getTimesfmForecastBySymbolVersionHorizon(c *gin.Context) {
+func (h *DatabaseHandler) getMTFForecastBySymbolVersionHorizon(c *gin.Context) {
 	var req struct {
 		Symbol     string  `json:"symbol"`
 		Version    float64 `json:"version"`
@@ -155,7 +162,7 @@ func (h *DatabaseHandler) getTimesfmForecastBySymbolVersionHorizon(c *gin.Contex
         SELECT symbol, ds, tsf, tsf_01, tsf_02, tsf_03, tsf_04, tsf_05, tsf_06, tsf_07, tsf_08, tsf_09,
                chunk_index, best_quantile, best_quantile_pct, best_pred_pct, actual_pct, diff_pct, mse, mae, combined_score,
                version, horizon_len
-        FROM timesfm_forecast
+        FROM mtf_forecast
         WHERE symbol = $1 AND version = $2 AND horizon_len = $3
         ORDER BY ds ASC
         LIMIT $4 OFFSET $5`, req.Symbol, req.Version, req.HorizonLen, limit, offset).Rows()
@@ -164,9 +171,9 @@ func (h *DatabaseHandler) getTimesfmForecastBySymbolVersionHorizon(c *gin.Contex
 		return
 	}
 	defer rows.Close()
-	list := []TimesfmForecast{}
+	list := []MTFForecast{}
 	for rows.Next() {
-		var v TimesfmForecast
+		var v MTFForecast
 		if err := rows.Scan(
 			&v.Symbol, &v.Ds, &v.Tsf, &v.Tsf01, &v.Tsf02, &v.Tsf03, &v.Tsf04, &v.Tsf05, &v.Tsf06, &v.Tsf07, &v.Tsf08, &v.Tsf09,
 			&v.ChunkIndex, &v.BestQuantile, &v.BestQuantilePct, &v.BestPredPct, &v.ActualPct, &v.DiffPct, &v.MSE, &v.MAE, &v.CombinedScore,
@@ -180,11 +187,11 @@ func (h *DatabaseHandler) getTimesfmForecastBySymbolVersionHorizon(c *gin.Contex
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: list})
 }
 
-func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
+func (h *DatabaseHandler) saveMTFBestHandler(c *gin.Context) {
 	var req struct {
 		UniqueKey          string                 `json:"unique_key"`
 		Symbol             string                 `json:"symbol"`
-		TimesfmVersion     string                 `json:"timesfm_version"`
+		MTFVersion         string                 `json:"mtf_version"`
 		BestPredictionItem string                 `json:"best_prediction_item"`
 		BestMetrics        map[string]interface{} `json:"best_metrics"`
 		PredictionType     string                 `json:"prediction_type"`
@@ -208,8 +215,8 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
-	if strings.TrimSpace(req.UniqueKey) == "" || strings.TrimSpace(req.Symbol) == "" || strings.TrimSpace(req.TimesfmVersion) == "" || strings.TrimSpace(req.BestPredictionItem) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key, symbol, timesfm_version, best_prediction_item are required"})
+	if strings.TrimSpace(req.UniqueKey) == "" || strings.TrimSpace(req.Symbol) == "" || strings.TrimSpace(req.MTFVersion) == "" || strings.TrimSpace(req.BestPredictionItem) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key, symbol, mtf_version, best_prediction_item are required"})
 		return
 	}
 	metricsJSON, err := json.Marshal(req.BestMetrics)
@@ -228,7 +235,7 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
 		return
 	}
 	covSignature := strings.TrimSpace(req.CovariateSignature)
-	// TimesFM best 结果统一公开，便于不同用户复用历史走势。
+	// MTF best 结果统一公开，便于不同用户复用历史走势。
 	isPublic := 1
 	if strings.TrimSpace(req.ShortName) == "" {
 		if req.StockType == 2 {
@@ -254,8 +261,8 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
 	}
 	predictionType := normalizedPredictionType(req.PredictionType)
 	err = h.db.Exec(`
-        INSERT INTO timesfm_best_predictions (
-            unique_key, symbol, timesfm_version, best_prediction_item, best_metrics,
+        INSERT INTO mtf_best_predictions (
+            unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
             prediction_type, covariate_config, covariate_signature, covariate_analysis,
             is_public,
             train_start_date, train_end_date,
@@ -273,7 +280,7 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
         )
         ON CONFLICT (unique_key) DO UPDATE SET
             symbol = EXCLUDED.symbol,
-            timesfm_version = EXCLUDED.timesfm_version,
+            mtf_version = EXCLUDED.mtf_version,
             best_prediction_item = EXCLUDED.best_prediction_item,
             best_metrics = EXCLUDED.best_metrics,
             prediction_type = EXCLUDED.prediction_type,
@@ -292,7 +299,7 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
             short_name = EXCLUDED.short_name,
 			stock_type = EXCLUDED.stock_type,
             updated_at = CURRENT_TIMESTAMP`,
-		req.UniqueKey, req.Symbol, req.TimesfmVersion, req.BestPredictionItem, string(metricsJSON),
+		req.UniqueKey, req.Symbol, req.MTFVersion, req.BestPredictionItem, string(metricsJSON),
 		predictionType, covConfigJSON, covSignature, covAnalysisJSON,
 		isPublic,
 		req.TrainStartDate, req.TrainEndDate,
@@ -301,13 +308,13 @@ func (h *DatabaseHandler) saveTimesfmBestHandler(c *gin.Context) {
 		req.ContextLen, req.HorizonLen, req.ShortName, req.StockType,
 	).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert timesfm_best_predictions: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert mtf_best_predictions: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: gin.H{"unique_key": req.UniqueKey}})
 }
 
-func (h *DatabaseHandler) saveTimesfmValChunkHandler(c *gin.Context) {
+func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 	var req struct {
 		UniqueKey          string                 `json:"unique_key"`
 		ChunkIndex         int                    `json:"chunk_index"`
@@ -375,7 +382,7 @@ func (h *DatabaseHandler) saveTimesfmValChunkHandler(c *gin.Context) {
 	covSignature := strings.TrimSpace(req.CovariateSignature)
 	// 查询是否存在记录
 	var existingID int
-	row := h.db.Raw(`SELECT id FROM timesfm_best_validation_chunks WHERE unique_key = $1 AND chunk_index = $2 LIMIT 1`, req.UniqueKey, req.ChunkIndex).Row()
+	row := h.db.Raw(`SELECT id FROM mtf_best_validation_chunks WHERE unique_key = $1 AND chunk_index = $2 LIMIT 1`, req.UniqueKey, req.ChunkIndex).Row()
 	scanErr := row.Scan(&existingID)
 	if scanErr != nil && scanErr != sql.ErrNoRows {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": scanErr.Error()})
@@ -528,13 +535,13 @@ func (h *DatabaseHandler) saveTimesfmValChunkHandler(c *gin.Context) {
 		}
 
 		// 拼接最终 SQL
-		updateSQL := fmt.Sprintf("UPDATE timesfm_best_validation_chunks SET %s, updated_at = CURRENT_TIMESTAMP WHERE unique_key = $%d AND chunk_index = $%d",
+		updateSQL := fmt.Sprintf("UPDATE mtf_best_validation_chunks SET %s, updated_at = CURRENT_TIMESTAMP WHERE unique_key = $%d AND chunk_index = $%d",
 			strings.Join(setParts, ", "), len(args)+1, len(args)+2,
 		)
 		// slog.Info("updateSQL", updateSQL)
 		args = append(args, req.UniqueKey, req.ChunkIndex)
 		if err := h.db.Exec(updateSQL, args...).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update timesfm_best_validation_chunks: %v", err)})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to update mtf_best_validation_chunks: %v", err)})
 			return
 		}
 		c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success"})
@@ -626,7 +633,7 @@ func (h *DatabaseHandler) saveTimesfmValChunkHandler(c *gin.Context) {
 		changeBaseDateArg = req.ChangeBaseDate
 	}
 	if err := h.db.Exec(`
-        INSERT INTO timesfm_best_validation_chunks (
+        INSERT INTO mtf_best_validation_chunks (
             unique_key, chunk_index, user_id, symbol, start_date, end_date,
             predictions, actual_values, predicted_change_percent, actual_change_percent, change_base_value, change_base_date, dates,
             prediction_type, covariate_config, covariate_signature, covariate_analysis, stock_name, stock_type
@@ -639,20 +646,20 @@ func (h *DatabaseHandler) saveTimesfmValChunkHandler(c *gin.Context) {
 		string(predsJSON), actualJSON, predictedChangeJSON, actualChangeJSON, changeBaseValueArg, changeBaseDateArg, string(datesJSON),
 		predictionType, covConfigJSON, covSignature, covAnalysisJSON, req.StockName, req.StockType,
 	).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to insert timesfm_best_validation_chunks: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to insert mtf_best_validation_chunks: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success"})
 }
 
-func (h *DatabaseHandler) getTimesfmBestByUniqueKeyHandler(c *gin.Context) {
+func (h *DatabaseHandler) getMTFBestByUniqueKeyHandler(c *gin.Context) {
 	uniqueKey := c.Query("unique_key")
 	if strings.TrimSpace(uniqueKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
 		return
 	}
 	row := h.db.Raw(`
-        SELECT id, unique_key, symbol, timesfm_version, best_prediction_item, best_metrics::text,
+        SELECT id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics::text,
                prediction_type, COALESCE(covariate_config, '{}'::jsonb)::text,
                COALESCE(covariate_signature, ''),
                COALESCE(covariate_analysis, '{}'::jsonb)::text,
@@ -662,18 +669,18 @@ func (h *DatabaseHandler) getTimesfmBestByUniqueKeyHandler(c *gin.Context) {
                val_start_date, val_end_date,
                context_len, horizon_len,
                created_at, updated_at
-        FROM timesfm_best_predictions
+        FROM mtf_best_predictions
         WHERE unique_key = $1
         LIMIT 1`, uniqueKey).Row()
 	var item struct {
 		ID                 int       `json:"id"`
 		UniqueKey          string    `json:"unique_key"`
 		Symbol             string    `json:"symbol"`
-		TimesfmVersion     string    `json:"timesfm_version"`
+		MTFVersion         string    `json:"mtf_version"`
 		BestPredictionItem string    `json:"best_prediction_item"`
 		BestMetrics        string    `json:"best_metrics"`
 		PredictionType     string    `json:"prediction_type"`
-		CovariateConfig    string    `json:"covariate_config"`
+		CovariateConfig    string    `json:"-"`
 		CovariateSignature string    `json:"covariate_signature"`
 		CovariateAnalysis  string    `json:"covariate_analysis"`
 		IsPublic           int       `json:"is_public"`
@@ -689,7 +696,7 @@ func (h *DatabaseHandler) getTimesfmBestByUniqueKeyHandler(c *gin.Context) {
 		UpdatedAt          time.Time `json:"updated_at"`
 	}
 	if err := row.Scan(
-		&item.ID, &item.UniqueKey, &item.Symbol, &item.TimesfmVersion, &item.BestPredictionItem, &item.BestMetrics,
+		&item.ID, &item.UniqueKey, &item.Symbol, &item.MTFVersion, &item.BestPredictionItem, &item.BestMetrics,
 		&item.PredictionType,
 		&item.CovariateConfig, &item.CovariateSignature, &item.CovariateAnalysis,
 		&item.IsPublic,
@@ -709,7 +716,7 @@ func (h *DatabaseHandler) getTimesfmBestByUniqueKeyHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: item})
 }
 
-func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
+func (h *DatabaseHandler) getMTFBestKeysByConfigHandler(c *gin.Context) {
 	symbol := strings.TrimSpace(c.Query("symbol"))
 	if symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
@@ -728,7 +735,7 @@ func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
 		return
 	}
 
-	timesfmVersion := strings.TrimSpace(c.Query("timesfm_version"))
+	mtfVersion := strings.TrimSpace(c.Query("mtf_version"))
 
 	rows, err := h.db.Raw(`
         SELECT prediction_type, unique_key
@@ -738,14 +745,14 @@ func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
                 unique_key,
                 updated_at,
                 id
-            FROM timesfm_best_predictions
+            FROM mtf_best_predictions
             WHERE symbol = $1
               AND horizon_len = $2
               AND context_len = $3
-              AND ($4 = '' OR timesfm_version = $4)
+              AND ($4 = '' OR mtf_version = $4)
             ORDER BY prediction_type, updated_at DESC, id DESC
         ) latest
-    `, symbol, horizonLen, contextLen, timesfmVersion).Rows()
+    `, symbol, horizonLen, contextLen, mtfVersion).Rows()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -753,12 +760,12 @@ func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
 	defer rows.Close()
 
 	response := gin.H{
-		"symbol":             symbol,
-		"timesfm_version":    timesfmVersion,
-		"horizon_len":        horizonLen,
-		"context_len":        contextLen,
-		"non_cov_unique_key": "",
-		"cov_unique_key":     "",
+		"symbol":              symbol,
+		"mtf_version":         mtfVersion,
+		"horizon_len":         horizonLen,
+		"context_len":         contextLen,
+		"mtf_lite_unique_key": "",
+		"mtf_pro_unique_key":  "",
 	}
 
 	found := 0
@@ -770,11 +777,11 @@ func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
 			return
 		}
 		switch normalizedPredictionType(predictionType) {
-		case "cov":
-			response["cov_unique_key"] = uniqueKey
+		case "mtf-pro":
+			response["mtf_pro_unique_key"] = uniqueKey
 			found++
 		default:
-			response["non_cov_unique_key"] = uniqueKey
+			response["mtf_lite_unique_key"] = uniqueKey
 			found++
 		}
 	}
@@ -788,7 +795,7 @@ func (h *DatabaseHandler) getTimesfmBestKeysByConfigHandler(c *gin.Context) {
 }
 
 // 获取指定 unique_key 的最新验证分块（按 chunk_index DESC 取一条）
-func (h *DatabaseHandler) getLatestTimesfmValChunkHandler(c *gin.Context) {
+func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
 	uniqueKey := c.Query("unique_key")
 	if strings.TrimSpace(uniqueKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
@@ -809,13 +816,13 @@ func (h *DatabaseHandler) getLatestTimesfmValChunkHandler(c *gin.Context) {
             change_base_value,
             change_base_date::text,
             COALESCE(dates, '[]'::jsonb) AS dates,
-            COALESCE(prediction_type, 'non_cov') AS prediction_type,
+            COALESCE(prediction_type, 'mtf-lite') AS prediction_type,
             COALESCE(covariate_config, '{}'::jsonb) AS covariate_config,
             COALESCE(covariate_signature, '') AS covariate_signature,
             COALESCE(covariate_analysis, '{}'::jsonb) AS covariate_analysis,
             COALESCE(stock_name, '') AS stock_name,
             COALESCE(stock_type, 1) AS stock_type
-        FROM timesfm_best_validation_chunks
+        FROM mtf_best_validation_chunks
         WHERE unique_key = $1
         ORDER BY chunk_index DESC
         LIMIT 1`, uniqueKey).Row()
@@ -910,7 +917,6 @@ func (h *DatabaseHandler) getLatestTimesfmValChunkHandler(c *gin.Context) {
 		}(),
 		"dates":               dates,
 		"prediction_type":     predictionType,
-		"covariate_config":    covConfig,
 		"covariate_signature": covSignature,
 		"covariate_analysis":  covAnalysis,
 		"stock_name":          stockName,
@@ -919,7 +925,7 @@ func (h *DatabaseHandler) getLatestTimesfmValChunkHandler(c *gin.Context) {
 }
 
 // 获取指定 unique_key 的所有验证分块（按 chunk_index ASC 排序）
-func (h *DatabaseHandler) getTimesfmValChunkListHandler(c *gin.Context) {
+func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 	uniqueKey := c.Query("unique_key")
 	if strings.TrimSpace(uniqueKey) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
@@ -940,13 +946,13 @@ func (h *DatabaseHandler) getTimesfmValChunkListHandler(c *gin.Context) {
             change_base_value,
             change_base_date::text,
             COALESCE(dates, '[]'::jsonb) AS dates,
-            COALESCE(prediction_type, 'non_cov') AS prediction_type,
+            COALESCE(prediction_type, 'mtf-lite') AS prediction_type,
             COALESCE(covariate_config, '{}'::jsonb) AS covariate_config,
             COALESCE(covariate_signature, '') AS covariate_signature,
             COALESCE(covariate_analysis, '{}'::jsonb) AS covariate_analysis,
             COALESCE(stock_name, '') AS stock_name,
             COALESCE(stock_type, 1) AS stock_type
-        FROM timesfm_best_validation_chunks
+        FROM mtf_best_validation_chunks
         WHERE unique_key = $1
         ORDER BY chunk_index ASC`, uniqueKey).Rows()
 	if err != nil {
@@ -969,7 +975,6 @@ func (h *DatabaseHandler) getTimesfmValChunkListHandler(c *gin.Context) {
 		ChangeBaseDate     *string                `json:"change_base_date"`
 		Dates              []string               `json:"dates"`
 		PredictionType     string                 `json:"prediction_type"`
-		CovariateConfig    map[string]interface{} `json:"covariate_config"`
 		CovariateSignature string                 `json:"covariate_signature"`
 		CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
 		StockName          string                 `json:"stock_name"`
@@ -1048,7 +1053,6 @@ func (h *DatabaseHandler) getTimesfmValChunkListHandler(c *gin.Context) {
 			ActualChangePct:    actualChange,
 			Dates:              dates,
 			PredictionType:     predictionType,
-			CovariateConfig:    covConfig,
 			CovariateSignature: covSignature,
 			CovariateAnalysis:  covAnalysis,
 			StockName:          stockName,
@@ -1071,12 +1075,12 @@ func (h *DatabaseHandler) getTimesfmValChunkListHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: list})
 }
 
-func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
+func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 	var req struct {
 		UniqueKey            string                 `json:"unique_key"`
 		Symbol               string                 `json:"symbol"`
 		StockType            int                    `json:"stock_type"`
-		TimesfmVersion       string                 `json:"timesfm_version"`
+		MTFVersion           string                 `json:"mtf_version"`
 		ContextLen           int                    `json:"context_len"`
 		HorizonLen           int                    `json:"horizon_len"`
 		FutureDates          []string               `json:"future_dates"`
@@ -1098,17 +1102,17 @@ func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
 		return
 	}
 	req.Symbol = strings.TrimSpace(req.Symbol)
-	req.TimesfmVersion = strings.TrimSpace(req.TimesfmVersion)
+	req.MTFVersion = strings.TrimSpace(req.MTFVersion)
 	futureDatesKey := buildFutureDatesKey(req.FutureDates)
-	if req.Symbol == "" || req.TimesfmVersion == "" || req.ContextLen <= 0 || req.HorizonLen <= 0 || futureDatesKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol, timesfm_version, context_len, horizon_len and future_dates are required"})
+	if req.Symbol == "" || req.MTFVersion == "" || req.ContextLen <= 0 || req.HorizonLen <= 0 || futureDatesKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol, mtf_version, context_len, horizon_len and future_dates are required"})
 		return
 	}
 	if req.StockType <= 0 {
 		req.StockType = 1
 	}
 	if req.UniqueKey == "" {
-		req.UniqueKey = buildTimesfmDirectUniqueKey(req.Symbol, req.StockType, req.HorizonLen, req.ContextLen, futureDatesKey)
+		req.UniqueKey = buildMTFDirectUniqueKey(req.Symbol, req.StockType, req.HorizonLen, req.ContextLen, futureDatesKey)
 	}
 	if req.ShortName == "" {
 		if req.StockType == 2 {
@@ -1165,8 +1169,8 @@ func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
 	}
 
 	err = h.db.Exec(`
-        INSERT INTO timesfm_direct_predictions (
-            unique_key, symbol, stock_type, timesfm_version, context_len, horizon_len,
+        INSERT INTO mtf_direct_predictions (
+            unique_key, symbol, stock_type, mtf_version, context_len, horizon_len,
             future_dates_key, future_dates, request_end_date, latest_data_date,
             latest_close, history_rows, best_prediction_item, best_prediction_values,
             predictions, covariate_config, covariate_signature, covariate_analysis, short_name, user_id
@@ -1178,7 +1182,7 @@ func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
         )
         ON CONFLICT (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature) DO UPDATE SET
             unique_key = EXCLUDED.unique_key,
-            timesfm_version = EXCLUDED.timesfm_version,
+            mtf_version = EXCLUDED.mtf_version,
             request_end_date = EXCLUDED.request_end_date,
             latest_data_date = EXCLUDED.latest_data_date,
             latest_close = EXCLUDED.latest_close,
@@ -1192,13 +1196,13 @@ func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
             short_name = EXCLUDED.short_name,
             user_id = EXCLUDED.user_id,
             updated_at = CURRENT_TIMESTAMP`,
-		req.UniqueKey, req.Symbol, req.StockType, req.TimesfmVersion, req.ContextLen, req.HorizonLen,
+		req.UniqueKey, req.Symbol, req.StockType, req.MTFVersion, req.ContextLen, req.HorizonLen,
 		futureDatesKey, string(futureDatesJSON), req.RequestEndDate, req.LatestDataDate,
 		latestCloseArg, historyRowsArg, req.BestPredictionItem, string(bestPredictionValuesJSON),
 		string(predictionsJSON), covConfigJSON, covSignature, covAnalysisJSON, req.ShortName, userIDArg,
 	).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert timesfm_direct_predictions: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert mtf_direct_predictions: %v", err)})
 		return
 	}
 
@@ -1208,7 +1212,7 @@ func (h *DatabaseHandler) saveTimesfmDirectHandler(c *gin.Context) {
 	}})
 }
 
-func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
+func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 	symbol := strings.TrimSpace(c.Query("symbol"))
 	stockType, err := strconv.Atoi(strings.TrimSpace(c.DefaultQuery("stock_type", "1")))
 	if err != nil {
@@ -1232,14 +1236,14 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 	}
 	covariateSignature := strings.TrimSpace(c.DefaultQuery("covariate_signature", ""))
 	predictionType := normalizedPredictionType(c.Query("prediction_type"))
-	timesfmVersion := strings.TrimSpace(c.Query("timesfm_version"))
+	mtfVersion := strings.TrimSpace(c.Query("mtf_version"))
 
 	selectSQL := `
 		SELECT
 			unique_key,
 			symbol,
 			stock_type,
-			timesfm_version,
+			mtf_version,
 			context_len,
 			horizon_len,
 			future_dates,
@@ -1257,13 +1261,13 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 			user_id,
 			created_at,
 			updated_at
-		FROM timesfm_direct_predictions
+		FROM mtf_direct_predictions
 		WHERE symbol = $1 AND stock_type = $2 AND horizon_len = $3 AND context_len = $4`
 	args := []interface{}{symbol, stockType, horizonLen, contextLen}
 	nextArg := 5
-	if timesfmVersion != "" {
-		selectSQL += fmt.Sprintf(` AND timesfm_version = $%d`, nextArg)
-		args = append(args, timesfmVersion)
+	if mtfVersion != "" {
+		selectSQL += fmt.Sprintf(` AND mtf_version = $%d`, nextArg)
+		args = append(args, mtfVersion)
 		nextArg++
 	}
 	if futureDatesCSV != "" {
@@ -1276,7 +1280,7 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 		selectSQL += fmt.Sprintf(` AND COALESCE(covariate_signature, '') = $%d`, nextArg)
 		args = append(args, covariateSignature)
 		nextArg++
-	} else if predictionType == "cov" {
+	} else if predictionTypeUsesCovariates(predictionType) {
 		selectSQL += ` AND COALESCE(covariate_signature, '') <> ''`
 	} else {
 		selectSQL += fmt.Sprintf(` AND COALESCE(covariate_signature, '') = $%d`, nextArg)
@@ -1296,7 +1300,7 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 			UniqueKey          string
 			Symbol             string
 			StockType          int
-			TimesfmVersion     string
+			MTFVersion         string
 			ContextLen         int
 			HorizonLen         int
 			RequestEndDate     string
@@ -1321,7 +1325,7 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 		&item.UniqueKey,
 		&item.Symbol,
 		&item.StockType,
-		&item.TimesfmVersion,
+		&item.MTFVersion,
 		&item.ContextLen,
 		&item.HorizonLen,
 		&futureDatesJSON,
@@ -1382,7 +1386,7 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 		"unique_key":             item.UniqueKey,
 		"stock_code":             item.Symbol,
 		"stock_type":             item.StockType,
-		"timesfm_version":        item.TimesfmVersion,
+		"mtf_version":            item.MTFVersion,
 		"context_len":            item.ContextLen,
 		"horizon_len":            item.HorizonLen,
 		"future_dates":           futureDates,
@@ -1391,7 +1395,6 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 		"best_prediction_item":   item.BestPredictionItem,
 		"best_prediction_values": bestPredictionValues,
 		"predictions":            predictions,
-		"covariate_config":       covConfig,
 		"covariate_signature":    covSignature,
 		"covariate_analysis":     covAnalysis,
 		"short_name":             item.ShortName,
@@ -1411,11 +1414,11 @@ func (h *DatabaseHandler) getTimesfmDirectByRequestHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: response})
 }
 
-func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
+func (h *DatabaseHandler) saveMTFBacktestHandler(c *gin.Context) {
 	var req struct {
 		UniqueKey                              string                   `json:"unique_key"`
 		Symbol                                 string                   `json:"symbol"`
-		TimesfmVersion                         string                   `json:"timesfm_version"`
+		MTFVersion                             string                   `json:"mtf_version"`
 		ContextLen                             int                      `json:"context_len"`
 		HorizonLen                             int                      `json:"horizon_len"`
 		UserID                                 *int                     `json:"user_id"`
@@ -1451,8 +1454,8 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
 	}
-	if strings.TrimSpace(req.UniqueKey) == "" || strings.TrimSpace(req.Symbol) == "" || strings.TrimSpace(req.TimesfmVersion) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key, symbol, timesfm_version are required"})
+	if strings.TrimSpace(req.UniqueKey) == "" || strings.TrimSpace(req.Symbol) == "" || strings.TrimSpace(req.MTFVersion) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key, symbol, mtf_version are required"})
 		return
 	}
 	posJSON, _ := json.Marshal(req.PositionControl)
@@ -1490,14 +1493,14 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
 	} else {
 		var spID int
 		if req.UserID != nil {
-			row := h.db.Raw(`SELECT id FROM timesfm_strategy_params WHERE unique_key = $1 AND user_id = $2 LIMIT 1`, req.UniqueKey, *req.UserID).Row()
+			row := h.db.Raw(`SELECT id FROM mtf_strategy_params WHERE unique_key = $1 AND user_id = $2 LIMIT 1`, req.UniqueKey, *req.UserID).Row()
 			if err := row.Scan(&spID); err == nil {
 				spIDArg = spID
 			} else {
 				spIDArg = nil
 			}
 		} else {
-			row := h.db.Raw(`SELECT id FROM timesfm_strategy_params WHERE unique_key = $1 LIMIT 1`, req.UniqueKey).Row()
+			row := h.db.Raw(`SELECT id FROM mtf_strategy_params WHERE unique_key = $1 LIMIT 1`, req.UniqueKey).Row()
 			if err := row.Scan(&spID); err == nil {
 				spIDArg = spID
 			} else {
@@ -1506,8 +1509,8 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
 		}
 	}
 	err = h.db.Exec(`
-        INSERT INTO timesfm_backtests (
-            unique_key, user_id, strategy_params_id, symbol, timesfm_version, context_len, horizon_len,
+        INSERT INTO mtf_backtests (
+            unique_key, user_id, strategy_params_id, symbol, mtf_version, context_len, horizon_len,
             covariate_config, covariate_signature, covariate_analysis,
             used_quantile, buy_threshold_pct, sell_threshold_pct, trade_fee_rate, total_fees_paid, actual_total_return_pct,
             benchmark_return_pct, benchmark_annualized_return_pct, period_days,
@@ -1527,7 +1530,7 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
             user_id = EXCLUDED.user_id,
             strategy_params_id = EXCLUDED.strategy_params_id,
             symbol = EXCLUDED.symbol,
-            timesfm_version = EXCLUDED.timesfm_version,
+            mtf_version = EXCLUDED.mtf_version,
             context_len = EXCLUDED.context_len,
             horizon_len = EXCLUDED.horizon_len,
             covariate_config = EXCLUDED.covariate_config,
@@ -1557,7 +1560,7 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
             actual_end_prices = EXCLUDED.actual_end_prices,
             trades = EXCLUDED.trades,
             updated_at = CURRENT_TIMESTAMP`,
-		req.UniqueKey, uidArg, spIDArg, req.Symbol, req.TimesfmVersion, req.ContextLen, req.HorizonLen,
+		req.UniqueKey, uidArg, spIDArg, req.Symbol, req.MTFVersion, req.ContextLen, req.HorizonLen,
 		covConfigJSON, covSignatureArg, covAnalysisJSON,
 		req.UsedQuantile, req.BuyThresholdPct, req.SellThresholdPct, req.TradeFeeRate, req.TotalFeesPaid, req.ActualTotalReturnPct,
 		req.BenchmarkReturnPct, req.BenchmarkAnnualizedReturnPct, req.PeriodDays,
@@ -1566,7 +1569,7 @@ func (h *DatabaseHandler) saveTimesfmBacktestHandler(c *gin.Context) {
 		string(eqValsJSON), string(eqPctJSON), string(eqPctGrossJSON), string(curveDatesJSON), string(actualEndJSON), string(tradesJSON),
 	).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert timesfm_backtests: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert mtf_backtests: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: gin.H{"unique_key": req.UniqueKey}})
@@ -1603,7 +1606,7 @@ func (h *DatabaseHandler) saveStrategyParamsHandler(c *gin.Context) {
 		uidArg = nil
 	}
 	err := h.db.Exec(`
-        INSERT INTO timesfm_strategy_params (
+        INSERT INTO mtf_strategy_params (
             unique_key, user_id,
             buy_threshold_pct, sell_threshold_pct, initial_cash,
             enable_rebalance, max_position_pct, min_position_pct,
@@ -1637,7 +1640,7 @@ func (h *DatabaseHandler) saveStrategyParamsHandler(c *gin.Context) {
 		req.TradeFeeRate, req.TakeProfitThresholdPct, req.TakeProfitSellFrac,
 	).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert timesfm_strategy_params: %v", err)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert mtf_strategy_params: %v", err)})
 		return
 	}
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: gin.H{"unique_key": req.UniqueKey}})
@@ -1661,7 +1664,7 @@ func (h *DatabaseHandler) getStrategyParamsByUniqueKeyHandler(c *gin.Context) {
                slope_position_per_pct, rebalance_tolerance_pct,
                trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac,
                created_at, updated_at
-        FROM timesfm_strategy_params
+        FROM mtf_strategy_params
         WHERE unique_key = $1 AND user_id = $2
         LIMIT 1`, uniqueKey, userId).Row()
 	var item StrategyParams
@@ -1726,7 +1729,7 @@ func (h *DatabaseHandler) getStrategyParamsByUserHandler(c *gin.Context) {
                slope_position_per_pct, rebalance_tolerance_pct,
                trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac,
                created_at, updated_at
-        FROM timesfm_strategy_params
+        FROM mtf_strategy_params
         WHERE user_id = $1
         ORDER BY updated_at DESC`, uid).Rows()
 	if err != nil {

@@ -23,12 +23,6 @@
 - `xpu = 2`
 - `rocm = 1`
 
-当前仅启用：
-
-- `timesfm_version = 2.5`
-
-`2.0` 已关闭；请求中如显式传入 `2.0`，网关会直接拒绝。
-
 ## 2. 端口约定
 
 Docker Compose 当前对外暴露端口如下：
@@ -124,7 +118,7 @@ curl http://127.0.0.1:59010/health
   "years": 15,
   "horizon_len": 7,
   "context_len": 2048,
-  "timesfm_version": "2.5",
+  "prediction_type": "mtf-lite",
   "user_id": 1
 }
 ```
@@ -139,7 +133,7 @@ curl http://127.0.0.1:59010/health
 | `years` | `number` | 否 | `15` | 历史数据年数 |
 | `horizon_len` | `number` | 否 | `7` | 预测步长 |
 | `context_len` | `number` | 否 | `2048` | 上下文长度 |
-| `timesfm_version` | `string` | 否 | `2.5` | 仅支持 `2.5` |
+| `prediction_type` | `string` | 否 | `mtf-lite` | `mtf-lite` 为轻量 MTF，`mtf-pro` 为市场协变量增强；兼容旧值 `mtf-lite`/`mtf-pro` |
 | `user_id` | `number` | 否 | `null` | 用户 ID |
 
 示例：
@@ -154,7 +148,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
     "years": 15,
     "horizon_len": 7,
     "context_len": 2048,
-    "timesfm_version": "2.5",
+    "prediction_type": "mtf-lite",
     "user_id": 1
   }'
 ```
@@ -162,7 +156,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
 去重规则：
 
 - Redis 去重键由 `目标内部推理路径 + stock_code + stock_type + time_step + years + horizon_len + context_len` 组成
-- `user_id` 和 `timesfm_version` 不参与去重
+- `user_id` 不参与去重
 - `/predict_for_best` 与 `/predict_once` 的去重空间彼此独立，不会互相复用
 - 如果上述字段完全相同，且已有任务状态为 `queued`、`running` 或 `succeeded`，网关会直接复用已有任务，不会再次入队
 - 如果已有任务状态为 `failed`，网关会允许重试，并重新生成新的 `job_id` 入队
@@ -274,7 +268,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
   "years": 15,
   "horizon_len": 7,
   "context_len": 2048,
-  "timesfm_version": "2.5",
+  "prediction_type": "mtf-lite",
   "user_id": 1
 }
 ```
@@ -291,7 +285,7 @@ curl -X POST http://127.0.0.1:59010/predict_once \
     "years": 15,
     "horizon_len": 7,
     "context_len": 2048,
-    "timesfm_version": "2.5",
+    "prediction_type": "mtf-lite",
     "user_id": 1
   }'
 ```
@@ -324,7 +318,7 @@ curl -X POST http://127.0.0.1:59010/predict_once \
 
 单次预测结果会落库到 PostgreSQL，对应表为：
 
-- `timesfm_direct_predictions`
+- `mtf_direct_predictions`
 
 重复命中规则为：
 
@@ -342,16 +336,16 @@ curl -X POST http://127.0.0.1:59010/predict_once \
 - 调用方需要先调用 `/predict_for_best` 生成 best，再调用 `/predict_once`
 - `force_enqueue=true` 只会强制重跑单次预测，不会触发 best 训练
 
-`timesfm_best_predictions` 的落库唯一键则进一步收敛为：
+`mtf_best_predictions` 的落库唯一键则进一步收敛为。对外请求使用 `prediction_type=mtf-lite` / `mtf-pro`，落库 key 后缀使用 MTF 命名：
 
-- `non_cov`
+- `mtf-lite`
   - `{stock}_best_hlen_{h}_clen_{c}_v_{ver}`
-- `cov`
-  - `{stock}_best_hlen_{h}_clen_{c}_v_{ver}_cov`
+- `mtf-pro`
+  - `{stock}_best_hlen_{h}_clen_{c}_v_{ver}_mtf-pro`
 
-也就是说，同一股票在 `cov` 模式下只保留一套 best；`covariate_config` / `covariate_signature` 单独存字段，不再拆成多套 `..._cov_<signature>` best 方案。历史旧 key 仍兼容读取。
+也就是说，同一股票在 `mtf-pro` 模式下只保留一套 best；`covariate_config` / `covariate_signature` 单独存字段，不再拆成多套按 signature 区分的 best 方案。数据库迁移会将历史旧 key 规范化为 MTF 命名。。
 
-单次预测结果只写入 `timesfm_direct_predictions`；best 仍只由 `/predict_for_best` 写入。
+单次预测结果只写入 `mtf_direct_predictions`；best 仍只由 `/predict_for_best` 写入。
 
 ### 4.3 查询任务状态
 
@@ -559,9 +553,8 @@ redis-server --appendonly yes --save 60 1000
 以下字段不会参与去重：
 
 - `user_id`
-- `timesfm_version`
 
-因此，同一只股票、同一组推理参数，即使换了 `user_id` 或 `timesfm_version`，也会直接返回已有任务的当前状态。
+因此，同一只股票、同一组推理参数，即使换了 `user_id`，也会直接返回已有任务的当前状态。
 
 唯一例外是该任务已经 `failed`，这时网关会允许重新入队重试。
 

@@ -44,7 +44,7 @@ func buildMTFAgentStandardTools() []map[string]interface{} {
 			map[string]interface{}{
 				"symbol":          map[string]interface{}{"type": "string", "description": "股票代码，如 601766.SH 或 601766"},
 				"unique_key":      map[string]interface{}{"type": "string", "description": "MTF prediction unique_key"},
-				"prediction_type": map[string]interface{}{"type": "string", "enum": []string{"non_cov", "cov"}},
+				"prediction_type": map[string]interface{}{"type": "string", "enum": []string{"mtf-lite", "mtf-pro"}},
 				"horizon_len":     map[string]interface{}{"type": "integer"},
 				"limit":           map[string]interface{}{"type": "integer", "minimum": 1, "maximum": mtfAgentMaxHistoryLimit},
 				"chunk_limit":     map[string]interface{}{"type": "integer", "minimum": 1, "maximum": mtfAgentMaxChunkLimit},

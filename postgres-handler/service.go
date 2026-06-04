@@ -132,7 +132,7 @@ func (h *DatabaseHandler) UpsertEtfDaily(data *EtfDailyData) error {
 	).Error
 }
 
-func (h *DatabaseHandler) BatchInsertTimesfmForecast(list []TimesfmForecast) error {
+func (h *DatabaseHandler) BatchInsertMTFForecast(list []MTFForecast) error {
 	if len(list) == 0 {
 		return fmt.Errorf("empty list")
 	}
@@ -141,7 +141,7 @@ func (h *DatabaseHandler) BatchInsertTimesfmForecast(list []TimesfmForecast) err
 		return tx.Error
 	}
 	insertSQL := `
-        INSERT INTO timesfm_forecast (
+        INSERT INTO mtf_forecast (
             symbol, ds, tsf, tsf_01, tsf_02, tsf_03, tsf_04, tsf_05, tsf_06, tsf_07, tsf_08, tsf_09,
             chunk_index, best_quantile, best_quantile_pct, best_pred_pct, actual_pct, diff_pct, mse, mae, combined_score,
             version, horizon_len

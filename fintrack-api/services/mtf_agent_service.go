@@ -706,7 +706,7 @@ func (s *MTFAgentService) predictionSummary(userID int) string {
 	}
 	rows, err := s.db.Conn.Query(`
 		SELECT p.symbol, COALESCE(p.short_name, ''), p.best_prediction_item, p.prediction_type, p.updated_at
-		FROM timesfm_best_predictions p
+		FROM mtf_best_predictions p
 		WHERE EXISTS (
 			SELECT 1 FROM user_watchlist uw
 			WHERE uw.user_id = $1 AND LOWER(uw.symbol) = LOWER(p.symbol)

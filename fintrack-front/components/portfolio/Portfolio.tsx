@@ -15,10 +15,10 @@ interface PortfolioProps {
 
 interface BacktestConfig {
     uniqueKey: string;
-    predictionType: 'non_cov' | 'cov';
+    predictionType: 'mtf-lite' | 'mtf-pro';
     horizonLen: number;
     contextLen: number;
-    timesfmVersion: string;
+    mtfVersion: string;
     updatedAt?: string;
     chunkCount: number;
 }
@@ -272,7 +272,7 @@ const normalizeSymbol = (value: string): string => {
 const getItemSymbol = (item: any) => item?.stock?.symbol || '';
 const getItemCompanyName = (item: any) => item?.stock?.company_name || getItemSymbol(item);
 const getBacktestUniqueKey = (item: any) => item?.unique_key || '';
-const BACKTEST_MODEL_OPTIONS: Array<'non_cov' | 'cov'> = ['non_cov', 'cov'];
+const BACKTEST_MODEL_OPTIONS: Array<'mtf-lite' | 'mtf-pro'> = ['mtf-lite', 'mtf-pro'];
 const BACKTEST_HORIZON_OPTIONS = [7, 14, 28];
 const BACKTEST_CONTEXT_OPTIONS = [256, 512, 1024, 2048];
 const liteMetricHeaderStyle = {
@@ -284,7 +284,7 @@ const proMetricHeaderStyle = {
 
 const isCovPrediction = (item: PublicPredictionItem) => {
     const type = String(item.best.prediction_type || '').trim().toLowerCase();
-    return type === 'cov' || String(item.best.unique_key || '').includes('_cov');
+    return type === 'mtf-pro' || String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
 };
 
 const buildBacktestConfigs = (items: PublicPredictionItem[], symbol: string): BacktestConfig[] => {
@@ -293,10 +293,10 @@ const buildBacktestConfigs = (items: PublicPredictionItem[], symbol: string): Ba
         .filter(item => normalizeSymbol(item.best.symbol) === normalizedSymbol)
         .map(item => ({
             uniqueKey: item.best.unique_key,
-            predictionType: isCovPrediction(item) ? 'cov' : 'non_cov',
+            predictionType: isCovPrediction(item) ? 'mtf-pro' : 'mtf-lite',
             horizonLen: Number(item.best.horizon_len || 0),
             contextLen: Number(item.best.context_len || 0),
-            timesfmVersion: String(item.best.timesfm_version || '2.5'),
+            mtfVersion: String(item.best.mtf_version || '2.5'),
             updatedAt: item.best.updated_at,
             chunkCount: item.chunks?.length || 0,
         }))
@@ -304,7 +304,7 @@ const buildBacktestConfigs = (items: PublicPredictionItem[], symbol: string): Ba
         .sort((a, b) => {
             const timeDiff = new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
             if (timeDiff) return timeDiff;
-            if (a.predictionType !== b.predictionType) return a.predictionType === 'cov' ? -1 : 1;
+            if (a.predictionType !== b.predictionType) return a.predictionType === 'mtf-pro' ? -1 : 1;
             return b.contextLen - a.contextLen || b.horizonLen - a.horizonLen;
         });
 };
@@ -322,7 +322,7 @@ const BacktestConfigModal: React.FC<BacktestConfigModalProps> = ({
 }) => {
     const { language } = useLanguage();
     const [configs, setConfigs] = useState<BacktestConfig[]>([]);
-    const [selectedType, setSelectedType] = useState<'non_cov' | 'cov'>('non_cov');
+    const [selectedType, setSelectedType] = useState<'mtf-lite' | 'mtf-pro'>('mtf-lite');
     const [selectedHorizon, setSelectedHorizon] = useState<number>(7);
     const [selectedContext, setSelectedContext] = useState<number>(2048);
     const [isLoading, setIsLoading] = useState(false);
@@ -335,7 +335,7 @@ const BacktestConfigModal: React.FC<BacktestConfigModalProps> = ({
         && config.horizonLen === selectedHorizon
         && config.contextLen === selectedContext,
     );
-    const hasModelConfig = (type: 'non_cov' | 'cov') => configs.some(config => config.predictionType === type);
+    const hasModelConfig = (type: 'mtf-lite' | 'mtf-pro') => configs.some(config => config.predictionType === type);
     const hasHorizonConfig = (horizon: number) => configs.some(config =>
         config.predictionType === selectedType && config.horizonLen === horizon,
     );
@@ -498,12 +498,12 @@ const BacktestConfigModal: React.FC<BacktestConfigModalProps> = ({
                                         <div className="flex flex-wrap gap-2">
                                             {BACKTEST_MODEL_OPTIONS.map(option => renderOptionButton(
                                                 option,
-                                                option === 'cov'
+                                                option === 'mtf-pro'
                                                     ? (language === 'zh' ? 'Pro 模型' : 'Pro Model')
                                                     : (language === 'zh' ? 'Lite 模型' : 'Lite Model'),
                                                 selectedType === option,
                                                 () => setSelectedType(option),
-                                                option === 'cov',
+                                                option === 'mtf-pro',
                                                 !hasModelConfig(option),
                                             ))}
                                         </div>
@@ -687,11 +687,11 @@ const BacktestChartModal: React.FC<BacktestChartModalProps> = ({
     const renderConfigTabLabel = (config: BacktestConfig) => (
         <>
             <span className={`rounded px-1.5 py-0.5 text-[10px] font-black leading-none ${
-                config.predictionType === 'cov'
+                config.predictionType === 'mtf-pro'
                     ? 'bg-amber-300/20 text-amber-100'
                     : 'bg-white/10 text-white/65'
             }`}>
-                {config.predictionType === 'cov' ? 'Pro' : 'Lite'}
+                {config.predictionType === 'mtf-pro' ? 'Pro' : 'Lite'}
             </span>
             <span className="font-mono text-xs font-bold leading-none">
                 {config.horizonLen > 0 ? `P${config.horizonLen}` : 'P—'}
@@ -870,7 +870,7 @@ tr:first-child td { font-weight: 700; background: #f2f2f2; }
                                                             ? 'border-primary/60 bg-primary/15 text-primary'
                                                             : 'border-white/10 bg-white/[0.04] text-white/65 hover:bg-white/[0.08] hover:text-white'
                                                     } disabled:cursor-not-allowed disabled:opacity-45`}
-                                                    title={`${config.predictionType === 'cov' ? 'Pro' : 'Lite'} · ${config.horizonLen > 0 ? `P${config.horizonLen}` : 'P—'} · ${config.contextLen > 0 ? formatContextLen(config.contextLen) : '—'}`}
+                                                    title={`${config.predictionType === 'mtf-pro' ? 'Pro' : 'Lite'} · ${config.horizonLen > 0 ? `P${config.horizonLen}` : 'P—'} · ${config.contextLen > 0 ? formatContextLen(config.contextLen) : '—'}`}
                                                 >
                                                     {active && isLoading ? (
                                                         <span className="material-symbols-outlined animate-spin text-[15px] leading-none">progress_activity</span>
@@ -1342,7 +1342,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ onAuthError }) => {
         });
         const uniqueKey = String(data.unique_key || fallbackUniqueKey || '');
         const covariateSignature = String(data.covariate_signature || '').trim();
-        const theme: PredictionChartTheme = uniqueKey.includes('_cov') || !!covariateSignature ? 'pro' : 'lite';
+        const theme: PredictionChartTheme = uniqueKey.includes('_mtf-pro') || uniqueKey.includes('_mtf_pro') || !!covariateSignature ? 'pro' : 'lite';
         const actualStart = actuals[0];
         const actualCurrent = actuals.length ? actuals[actuals.length - 1] : undefined;
         const assetStart = assets[0];
@@ -1652,10 +1652,10 @@ const Portfolio: React.FC<PortfolioProps> = ({ onAuthError }) => {
             if (!orderedConfigs.length) {
                 orderedConfigs.push({
                     uniqueKey: targetUniqueKey,
-                    predictionType: targetUniqueKey.includes('_cov') ? 'cov' : 'non_cov',
+                    predictionType: targetUniqueKey.includes('_mtf-pro') || targetUniqueKey.includes('_mtf_pro') ? 'mtf-pro' : 'mtf-lite',
                     horizonLen: 0,
                     contextLen: 0,
-                    timesfmVersion: '2.5',
+                    mtfVersion: '2.5',
                     chunkCount: 0,
                 });
             }
