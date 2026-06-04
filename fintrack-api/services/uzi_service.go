@@ -120,7 +120,7 @@ func (s *UZIService) OpenAnalyzeStream(req *models.UZIAnalyzeRequest, aiConfig *
 	if resp.StatusCode != http.StatusOK || !strings.Contains(contentType, "text/event-stream") {
 		defer resp.Body.Close()
 
-		body, readErr := readPythonJSONResponse(resp, requestURL, "decode uzi analyze response")
+		body, readErr := readGatewayJSONResponse(resp, requestURL, "decode uzi analyze response")
 		if readErr != nil {
 			return nil, &UZIUpstreamError{
 				StatusCode: resp.StatusCode,
@@ -544,7 +544,7 @@ func (s *UZIService) fetchReportFromUZI(cleanedPath string) (*http.Response, err
 }
 
 func (s *UZIService) fetchReportFromSignedURL(reportURL string) (*http.Response, error) {
-	client := newPythonServiceHTTPClient(s.config.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.Timeout)
 
 	req, err := http.NewRequest(http.MethodGet, strings.TrimSpace(reportURL), nil)
 	if err != nil {
@@ -573,7 +573,7 @@ func (s *UZIService) doJSONRequest(method string, endpoint string, payload []byt
 	}
 	defer resp.Body.Close()
 
-	body, readErr := readPythonJSONResponse(resp, requestURL, "decode uzi response")
+	body, readErr := readGatewayJSONResponse(resp, requestURL, "decode uzi response")
 	if readErr != nil {
 		return resp.StatusCode, nil, requestURL, readErr
 	}
@@ -587,7 +587,7 @@ func (s *UZIService) doQueueJSONRequest(method string, endpoint string, payload 
 	}
 	defer resp.Body.Close()
 
-	body, readErr := readPythonJSONResponse(resp, requestURL, "decode uzi queue response")
+	body, readErr := readGatewayJSONResponse(resp, requestURL, "decode uzi queue response")
 	if readErr != nil {
 		return resp.StatusCode, nil, requestURL, readErr
 	}
@@ -595,7 +595,7 @@ func (s *UZIService) doQueueJSONRequest(method string, endpoint string, payload 
 }
 
 func (s *UZIService) doRawRequest(method string, endpoint string, payload []byte, contentType string) (*http.Response, string, error) {
-	client := newPythonServiceHTTPClient(s.config.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.Timeout)
 	attemptErrors := make([]string, 0)
 
 	for _, baseURL := range s.baseURLCandidates() {
@@ -619,7 +619,7 @@ func (s *UZIService) doRawRequest(method string, endpoint string, payload []byte
 }
 
 func (s *UZIService) doRawQueueRequest(method string, endpoint string, payload []byte, contentType string) (*http.Response, string, error) {
-	client := newPythonServiceHTTPClient(s.config.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.Timeout)
 	attemptErrors := make([]string, 0)
 
 	for _, baseURL := range s.queueBaseURLCandidates() {

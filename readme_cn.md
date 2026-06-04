@@ -41,7 +41,7 @@ cp postgres-handler/.env.example postgres-handler/.env
 
 关键服务 URL：
 
-- `PYTHON_SERVICE_URL`：`fintrack-api` 调用的推理网关地址
+- `INFERENCE_GATEWAY_URL`：`fintrack-api` 调用的推理网关地址
 - `POSTGRES_HANDLER_URL`：API 和 gateway 流程使用的数据服务地址
 - `UZI_SERVICE_URL`：UZI 报告服务地址
 - `MTF_AGENT_RUNTIME_URL`：启用 MTF Agent 时的运行时地址

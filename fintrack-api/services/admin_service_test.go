@@ -68,8 +68,8 @@ func TestGetGatewayQueueStatusParsesHealthSnapshot(t *testing.T) {
 	defer server.Close()
 
 	service := NewAdminService(nil, &config.Config{
-		PythonService: config.PythonServiceConfig{BaseURL: server.URL, Timeout: 2},
-		UZI:           config.UZIServiceConfig{QueueBaseURL: server.URL},
+		InferenceGateway: config.InferenceGatewayConfig{BaseURL: server.URL, Timeout: 2},
+		UZI:              config.UZIServiceConfig{QueueBaseURL: server.URL},
 	})
 
 	status, err := service.GetGatewayQueueStatus()

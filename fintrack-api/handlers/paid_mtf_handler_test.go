@@ -59,22 +59,22 @@ func TestPaidPredictOnceVerifiesCredentialAndForwards(t *testing.T) {
 	}))
 	defer alipay.Close()
 
-	var pythonPayload map[string]any
-	python := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var gatewayPayload map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/predict_once" {
-			t.Fatalf("python path = %s", r.URL.Path)
+			t.Fatalf("gateway path = %s", r.URL.Path)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&pythonPayload); err != nil {
-			t.Fatalf("decode python request: %v", err)
+		if err := json.NewDecoder(r.Body).Decode(&gatewayPayload); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true,"job_id":"job-paid-once"}`))
 	}))
-	defer python.Close()
+	defer gateway.Close()
 
 	cfg := &config.Config{
-		PythonService: config.PythonServiceConfig{
-			BaseURL: python.URL,
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: gateway.URL,
 			Timeout: 1,
 		},
 		AlipayService: config.AlipayServiceConfig{
@@ -117,8 +117,8 @@ func TestPaidPredictOnceVerifiesCredentialAndForwards(t *testing.T) {
 	if alipayCredential != "paid-token" {
 		t.Fatalf("credential = %q", alipayCredential)
 	}
-	if pythonPayload["stock_code"] != "000002" {
-		t.Fatalf("stock_code = %#v", pythonPayload["stock_code"])
+	if gatewayPayload["stock_code"] != "000002" {
+		t.Fatalf("stock_code = %#v", gatewayPayload["stock_code"])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -132,16 +132,16 @@ func TestPaidPredictOnceReturns402ForInvalidCredential(t *testing.T) {
 	}))
 	defer alipay.Close()
 
-	calledPython := false
-	python := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calledPython = true
+	calledGateway := false
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calledGateway = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer python.Close()
+	defer gateway.Close()
 
 	cfg := &config.Config{
-		PythonService: config.PythonServiceConfig{
-			BaseURL: python.URL,
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: gateway.URL,
 			Timeout: 1,
 		},
 		AlipayService: config.AlipayServiceConfig{
@@ -167,8 +167,8 @@ func TestPaidPredictOnceReturns402ForInvalidCredential(t *testing.T) {
 	if rec.Code != http.StatusPaymentRequired {
 		t.Fatalf("status = %d, want 402; body=%s", rec.Code, rec.Body.String())
 	}
-	if calledPython {
-		t.Fatal("python service was called for invalid payment credential")
+	if calledGateway {
+		t.Fatal("gateway service was called for invalid payment credential")
 	}
 }
 
@@ -179,12 +179,12 @@ func TestPaidPredictOnceReturnsStoredResultWithinSamePeriod(t *testing.T) {
 	}))
 	defer alipay.Close()
 
-	pythonCalled := false
-	python := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pythonCalled = true
+	gatewayCalled := false
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer python.Close()
+	defer gateway.Close()
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -198,8 +198,8 @@ func TestPaidPredictOnceReturnsStoredResultWithinSamePeriod(t *testing.T) {
 			AddRow("fulfilled", 200, `{"success":true,"job_id":"stored-job"}`))
 
 	cfg := &config.Config{
-		PythonService: config.PythonServiceConfig{
-			BaseURL: python.URL,
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: gateway.URL,
 			Timeout: 1,
 		},
 		AlipayService: config.AlipayServiceConfig{
@@ -229,8 +229,8 @@ func TestPaidPredictOnceReturnsStoredResultWithinSamePeriod(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "stored-job") {
 		t.Fatalf("body = %s, want stored job response", rec.Body.String())
 	}
-	if pythonCalled {
-		t.Fatal("python service was called for stored paid prediction")
+	if gatewayCalled {
+		t.Fatal("gateway service was called for stored paid prediction")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -244,12 +244,12 @@ func TestPaidPredictOnceReturns409WhenSamePeriodIsProcessing(t *testing.T) {
 	}))
 	defer alipay.Close()
 
-	pythonCalled := false
-	python := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pythonCalled = true
+	gatewayCalled := false
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer python.Close()
+	defer gateway.Close()
 
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -263,8 +263,8 @@ func TestPaidPredictOnceReturns409WhenSamePeriodIsProcessing(t *testing.T) {
 			AddRow("processing", nil, nil))
 
 	cfg := &config.Config{
-		PythonService: config.PythonServiceConfig{
-			BaseURL: python.URL,
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: gateway.URL,
 			Timeout: 1,
 		},
 		AlipayService: config.AlipayServiceConfig{
@@ -291,8 +291,8 @@ func TestPaidPredictOnceReturns409WhenSamePeriodIsProcessing(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
-	if pythonCalled {
-		t.Fatal("python service was called for processing paid prediction")
+	if gatewayCalled {
+		t.Fatal("gateway service was called for processing paid prediction")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

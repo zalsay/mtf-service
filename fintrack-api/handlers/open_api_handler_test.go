@@ -184,12 +184,12 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 		WithArgs(3).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	pythonCalled := false
-	python := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pythonCalled = true
+	gatewayCalled := false
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
-	defer python.Close()
+	defer gateway.Close()
 
 	postgres := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
@@ -204,7 +204,7 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	defer postgres.Close()
 
 	cfg := &config.Config{
-		PythonService: config.PythonServiceConfig{BaseURL: python.URL, Timeout: 1},
+		InferenceGateway: config.InferenceGatewayConfig{BaseURL: gateway.URL, Timeout: 1},
 		PostgresHandler: config.PostgresHandlerConfig{
 			BaseURL: postgres.URL,
 			Timeout: 1,
@@ -229,8 +229,8 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if pythonCalled {
-		t.Fatal("expected cached response without calling python predict_once")
+	if gatewayCalled {
+		t.Fatal("expected cached response without calling gateway predict_once")
 	}
 	if !strings.Contains(rec.Body.String(), `"cache_hit":true`) {
 		t.Fatalf("expected cache_hit response, body=%s", rec.Body.String())

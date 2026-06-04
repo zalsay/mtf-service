@@ -26,6 +26,15 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
+func getenvWithAliases(keys []string, fallback string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
 func getenvInt(key string, fallback int) int {
 	raw := os.Getenv(key)
 	if raw == "" {
@@ -125,8 +134,9 @@ func main() {
 	rocmURL := getenv("ROCM_BACKEND_URL", "http://ai-functions-rocm:9009")
 	cpuXregURL := strings.TrimSpace(os.Getenv("CPU_XREG_BACKEND_URL"))
 	uziURL := strings.TrimSpace(getenv("UZI_BACKEND_URL", "http://ai-functions-uzi:9011"))
+	apiToken := getenvWithAliases([]string{"MTF_SERVICE_TOKEN", "GATEWAY_API_TOKEN"}, "fintrack-dev-token")
 	deepSeekTUIBackendURL := strings.TrimSpace(os.Getenv("DEEPSEEK_TUI_BACKEND_URL"))
-	deepSeekTUIProxyToken := strings.TrimSpace(os.Getenv("DEEPSEEK_TUI_PROXY_TOKEN"))
+	deepSeekTUIProxyToken := getenvWithAliases([]string{"MTF_SERVICE_TOKEN", "DEEPSEEK_TUI_PROXY_TOKEN", "GATEWAY_API_TOKEN"}, apiToken)
 	deepSeekTUIProxyPath := getenv("DEEPSEEK_TUI_PROXY_PATH", "/deepseek-tui")
 	deepSeekTUIAuthConfigPath := strings.TrimSpace(os.Getenv("DEEPSEEK_TUI_AUTH_CONFIG_PATH"))
 	inferenceTimeBenchmarkPath := getenv("INFERENCE_TIME_BENCHMARK_PATH", "/app/config/inference_time_benchmarks.json")
@@ -141,7 +151,6 @@ func main() {
 	redisPrefix := getenv("REDIS_PREFIX", "ai-functions")
 	postgresHandlerURL := getenv("POSTGRES_HANDLER_URL", "http://ai-functions-postgres-handler:58004")
 	historyServiceURL := getenv("HISTORY_SERVICE_URL", getenv("AKSHARE_SERVICE_URL", postgresHandlerURL))
-	apiToken := getenv("GATEWAY_API_TOKEN", "fintrack-dev-token")
 	dailyStockSyncEnabled := getenvBool("DAILY_STOCK_SYNC_ENABLED", true)
 	dailyStockSyncMode := strings.TrimSpace(strings.ToLower(os.Getenv("DAILY_STOCK_SYNC_MODE")))
 	dailyStockSyncHour := getenvInt("DAILY_STOCK_SYNC_HOUR", 22)

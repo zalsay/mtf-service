@@ -101,7 +101,7 @@ func applyWatchlistOverflow(items []models.WatchlistItem, limit int) {
 	}
 }
 
-func newPythonServiceHTTPClient(timeoutSeconds int) *http.Client {
+func newInferenceGatewayHTTPClient(timeoutSeconds int) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	return &http.Client{
@@ -110,7 +110,7 @@ func newPythonServiceHTTPClient(timeoutSeconds int) *http.Client {
 	}
 }
 
-func readPythonJSONResponse(resp *http.Response, requestURL string, operation string) (map[string]interface{}, error) {
+func readGatewayJSONResponse(resp *http.Response, requestURL string, operation string) (map[string]interface{}, error) {
 	if resp == nil {
 		return nil, fmt.Errorf("%s: empty http response", operation)
 	}
@@ -834,7 +834,7 @@ func (s *WatchlistService) getWatchlistItemByID(watchlistID int) (*models.Watchl
 	return &item, nil
 }
 
-// SyncStockData calls the Python service to sync stock data
+// SyncStockData calls the inference gateway to sync stock data.
 func (s *WatchlistService) SyncStockData(symbol string) {
 	// Parse exchange prefix to determine stock type
 	stockType := 1 // default to Shanghai (sh)
@@ -858,19 +858,19 @@ func (s *WatchlistService) SyncStockData(symbol string) {
 		return
 	}
 
-	// Call Python service
-	url := fmt.Sprintf("%s/api/sync-stock", s.config.PythonService.BaseURL)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
+	// Call inference gateway.
+	url := fmt.Sprintf("%s/api/sync-stock", s.config.InferenceGateway.BaseURL)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
 
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		log.Printf("Failed to call Python sync service: %v", err)
+		log.Printf("Failed to call inference gateway sync service: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Python sync service returned non-200 status: %d", resp.StatusCode)
+		log.Printf("Inference gateway sync service returned non-200 status: %d", resp.StatusCode)
 		return
 	}
 
@@ -1109,14 +1109,14 @@ func (s *WatchlistService) TriggerMTFPredict(req *models.MTFPredictRequest) (int
 	if err != nil {
 		return 0, nil, fmt.Errorf("marshal predict payload: %v", err)
 	}
-	url := fmt.Sprintf("%s/predict_for_best", s.config.PythonService.BaseURL)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
+	url := fmt.Sprintf("%s/predict_for_best", s.config.InferenceGateway.BaseURL)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return 0, nil, fmt.Errorf("call python predict: %v", err)
+		return 0, nil, fmt.Errorf("call inference gateway predict: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := readPythonJSONResponse(resp, url, "decode python predict response")
+	body, err := readGatewayJSONResponse(resp, url, "decode inference gateway predict response")
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
@@ -1124,7 +1124,7 @@ func (s *WatchlistService) TriggerMTFPredict(req *models.MTFPredictRequest) (int
 }
 
 func (s *WatchlistService) triggerStaleMTFBestRefresh(item models.MTFBestPrediction) error {
-	if s == nil || s.config == nil || strings.TrimSpace(s.config.PythonService.BaseURL) == "" {
+	if s == nil || s.config == nil || strings.TrimSpace(s.config.InferenceGateway.BaseURL) == "" {
 		return nil
 	}
 	if item.UpdatedAt.IsZero() || time.Since(item.UpdatedAt) <= mtfBestStaleRefreshAfter {
@@ -1211,14 +1211,14 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	if err != nil {
 		return 0, nil, fmt.Errorf("marshal predict once payload: %v", err)
 	}
-	url := fmt.Sprintf("%s/predict_once", s.config.PythonService.BaseURL)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
+	url := fmt.Sprintf("%s/predict_once", s.config.InferenceGateway.BaseURL)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return 0, nil, fmt.Errorf("call python predict once: %v", err)
+		return 0, nil, fmt.Errorf("call inference gateway predict once: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := readPythonJSONResponse(resp, url, "decode python predict once response")
+	body, err := readGatewayJSONResponse(resp, url, "decode inference gateway predict once response")
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
@@ -1263,7 +1263,7 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	if timeout <= 0 {
 		timeout = 10
 	}
-	client := newPythonServiceHTTPClient(timeout)
+	client := newInferenceGatewayHTTPClient(timeout)
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, nil, fmt.Errorf("query postgres direct prediction cache: %v", err)
@@ -1318,14 +1318,14 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 }
 
 func (s *WatchlistService) GetMTFJobStatus(jobID string) (int, map[string]interface{}, error) {
-	url := fmt.Sprintf("%s/jobs/%s", s.config.PythonService.BaseURL, jobID)
-	client := newPythonServiceHTTPClient(s.config.PythonService.Timeout)
+	url := fmt.Sprintf("%s/jobs/%s", s.config.InferenceGateway.BaseURL, jobID)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
 	resp, err := client.Get(url)
 	if err != nil {
-		return 0, nil, fmt.Errorf("call python job status: %v", err)
+		return 0, nil, fmt.Errorf("call inference gateway job status: %v", err)
 	}
 	defer resp.Body.Close()
-	body, err := readPythonJSONResponse(resp, url, "decode python job status response")
+	body, err := readGatewayJSONResponse(resp, url, "decode inference gateway job status response")
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}

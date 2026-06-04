@@ -89,7 +89,7 @@ func TestTriggerMTFPredictDoesNotForwardMTFVersion(t *testing.T) {
 	defer server.Close()
 
 	service := NewWatchlistService(nil, &config.Config{
-		PythonService: config.PythonServiceConfig{
+		InferenceGateway: config.InferenceGatewayConfig{
 			BaseURL: server.URL,
 			Timeout: 1,
 		},
@@ -132,7 +132,7 @@ func TestTriggerStaleMTFBestRefreshSubmitsBackgroundGatewayJob(t *testing.T) {
 	defer server.Close()
 
 	service := NewWatchlistService(nil, &config.Config{
-		PythonService: config.PythonServiceConfig{
+		InferenceGateway: config.InferenceGatewayConfig{
 			BaseURL: server.URL,
 			Timeout: 1,
 		},
@@ -313,7 +313,7 @@ func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	defer server.Close()
 
 	service := NewWatchlistService(nil, &config.Config{
-		PythonService: config.PythonServiceConfig{
+		InferenceGateway: config.InferenceGatewayConfig{
 			BaseURL: server.URL,
 			Timeout: 1,
 		},

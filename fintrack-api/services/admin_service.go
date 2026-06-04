@@ -212,7 +212,7 @@ func (s *AdminService) GetGatewayQueueStatus() (*models.AdminGatewayQueueStatus,
 		}, nil
 	}
 
-	client := newPythonServiceHTTPClient(s.gatewayTimeoutSeconds())
+	client := newInferenceGatewayHTTPClient(s.gatewayTimeoutSeconds())
 	attemptErrors := make([]string, 0, len(candidates))
 	for _, baseURL := range candidates {
 		requestURL := strings.TrimRight(baseURL, "/") + "/health"
@@ -276,8 +276,8 @@ func (s *AdminService) getSystemStrategyByUniqueKey(uniqueKey string) (*models.S
 }
 
 func (s *AdminService) gatewayTimeoutSeconds() int {
-	if s != nil && s.config != nil && s.config.PythonService.Timeout > 0 && s.config.PythonService.Timeout < 5 {
-		return s.config.PythonService.Timeout
+	if s != nil && s.config != nil && s.config.InferenceGateway.Timeout > 0 && s.config.InferenceGateway.Timeout < 5 {
+		return s.config.InferenceGateway.Timeout
 	}
 	return 5
 }
@@ -303,7 +303,7 @@ func (s *AdminService) gatewayBaseURLCandidates() []string {
 
 	primary := strings.TrimSpace(s.config.UZI.QueueBaseURL)
 	if primary == "" {
-		primary = strings.TrimSpace(s.config.PythonService.BaseURL)
+		primary = strings.TrimSpace(s.config.InferenceGateway.BaseURL)
 	}
 	addCandidate(primary)
 
@@ -338,7 +338,7 @@ func (s *AdminService) gatewayBaseURLCandidates() []string {
 
 func decodeGatewayHealthResponse(resp *http.Response, requestURL string) (*models.AdminGatewayQueueStatus, error) {
 	defer resp.Body.Close()
-	body, err := readPythonJSONResponse(resp, requestURL, "decode gateway health response")
+	body, err := readGatewayJSONResponse(resp, requestURL, "decode gateway health response")
 	if err != nil {
 		return nil, err
 	}

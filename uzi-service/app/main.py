@@ -44,7 +44,8 @@ AKSHARE_SERVICE_URL = (
     or "http://ai-functions-postgres-handler:58004"
 ).strip().rstrip("/")
 AKSHARE_SERVICE_TOKEN = (
-    os.getenv("HISTORY_SERVICE_TOKEN")
+    os.getenv("MTF_SERVICE_TOKEN")
+    or os.getenv("HISTORY_SERVICE_TOKEN")
     or os.getenv("AKSHARE_SERVICE_TOKEN")
     or os.getenv("POSTGRES_HANDLER_TOKEN")
     or ""

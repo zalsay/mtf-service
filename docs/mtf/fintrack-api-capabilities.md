@@ -23,7 +23,7 @@
 核心依赖：
 
 - PostgreSQL：保存用户、session、自选股、MTF 预测/回测、MTF Agent、UZI 报告、AI 支付记录等数据。
-- Python/网关推理服务：`PYTHON_SERVICE_URL`，用于 `/predict_for_best`、`/predict_once`、`/jobs/:id`、`/api/sync-stock`。
+- 推理网关服务：`INFERENCE_GATEWAY_URL`，用于 `/predict_for_best`、`/predict_once`、`/jobs/:id`、`/api/sync-stock`。
 - postgres-handler：`POSTGRES_HANDLER_URL`，用于单次预测缓存查询和 LLM token usage 记录。
 - DeepSeek TUI runtime：`MTF_AGENT_RUNTIME_URL`，用于 MTF Agent thread/turn 交互。
 - UZI service / gateway：`UZI_SERVICE_URL` 和 `UZI_GATEWAY_URL`，用于研报生成、报告文件和队列任务。
@@ -35,11 +35,12 @@
 
 - `DB_HOST`、`DB_PORT`、`DB_USER`、`DB_PASSWORD`、`DB_NAME`、`DB_SSLMODE`
 - `JWT_SECRET`、`JWT_EXPIRATION_HOURS`
+- `MTF_SERVICE_TOKEN`
 - `CORS_ALLOWED_ORIGINS`、`CORS_ALLOWED_METHODS`、`CORS_ALLOWED_HEADERS`
-- `PYTHON_SERVICE_URL`、`PYTHON_SERVICE_TIMEOUT`
-- `POSTGRES_HANDLER_URL`、`POSTGRES_HANDLER_TOKEN`、`POSTGRES_HANDLER_TIMEOUT`
+- `INFERENCE_GATEWAY_URL`、`INFERENCE_GATEWAY_TIMEOUT`
+- `POSTGRES_HANDLER_URL`、`POSTGRES_HANDLER_TIMEOUT`
 - `UZI_ENABLED`、`UZI_SERVICE_URL`、`UZI_GATEWAY_URL`、`UZI_SERVICE_TIMEOUT`、`UZI_OPEN_TOKEN_TTL_SECONDS`
-- `MTF_AGENT_ENABLED`、`MTF_AGENT_RUNTIME_URL`、`MTF_AGENT_RUNTIME_TOKEN`、`MTF_AGENT_TIMEOUT`、`MTF_AGENT_MODEL`
+- `MTF_AGENT_ENABLED`、`MTF_AGENT_RUNTIME_URL`、`MTF_AGENT_TIMEOUT`、`MTF_AGENT_MODEL`
 - `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_DEFAULT_MODEL`、`OPENAI_MAX_CONTEXT_ROUNDS`、`OPENAI_TIMEOUT`
 - `ALIPAY_SERVICE_URL`、`ALIPAY_SERVICE_TOKEN`、`ALIPAY_RESOURCE_ID`、`ALIPAY_RESOURCE_NAME`、`ALIPAY_AI_PAY_AMOUNT_CENTS`
 - `OSS_*`：UZI 报告对象存储相关配置。
@@ -112,11 +113,11 @@
 
 | 方法 | 路径 | 鉴权 | 能力 |
 | --- | --- | --- | --- |
-| POST | `/api/v1/mtf/predict` | 否 | 直接代理到 Python 服务 `/predict_for_best`。 |
+| POST | `/api/v1/mtf/predict` | 否 | 直接代理到推理网关 `/predict_for_best`。 |
 | POST | `/api/v1/mtf/predict-best` | 是 | 按会员权限规范化最佳分位训练请求，再代理 `/predict_for_best`。 |
 | POST | `/api/v1/mtf/predict-once` | 是 | 按会员权限规范化单次预测请求，再代理 `/predict_once`。 |
 | POST | `/api/v1/mtf/predict-once/cached` | 是 | 从 postgres-handler 查询单次预测缓存。 |
-| GET | `/api/v1/mtf/jobs/:jobID` | 是 | 查询 Python 推理 job 状态。 |
+| GET | `/api/v1/mtf/jobs/:jobID` | 是 | 查询推理网关 job 状态。 |
 | POST | `/api/v1/mtf/backtest` | 是 | 代理 MTF 回测请求。 |
 | GET | `/api/v1/mtf/backtest/by-unique?unique_key=` | 是 | 按 unique key 查询已落库回测结果。 |
 
@@ -321,7 +322,7 @@ MTF Agent 依赖 DeepSeek TUI runtime：
 
 - `fintrack-api` 本身不执行 MTF 模型推理；它负责权限、参数规范化、代理调用和结果落库。
 - `/api/v1/save-predictions/*` 当前未加鉴权，适合作为内部写入接口使用，公网暴露时需要额外网关或鉴权保护。
-- `/api/v1/mtf/predict` 当前未加鉴权，是直通 Python `/predict_for_best` 的代理入口。
+- `/api/v1/mtf/predict` 当前未加鉴权，是直通推理网关 `/predict_for_best` 的代理入口。
 - MTF Agent 的后台 job 存在内存 map 中，服务重启会丢失 job 状态。
 - `MTF Agent` 的 SSE 接口当前会先返回整段 assistant 文本作为一次 `delta`，不是逐 token 流式输出。
 - UZI 状态 hub 是进程内状态，服务重启后只保留数据库中的报告记录，不保留运行中状态。

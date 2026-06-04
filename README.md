@@ -43,7 +43,7 @@ secret stores.
 
 Important service URLs:
 
-- `PYTHON_SERVICE_URL`: inference gateway URL used by `fintrack-api`
+- `INFERENCE_GATEWAY_URL`: inference gateway URL used by `fintrack-api`
 - `POSTGRES_HANDLER_URL`: data service URL used by API and gateway flows
 - `UZI_SERVICE_URL`: UZI report service URL
 - `MTF_AGENT_RUNTIME_URL`: MTF agent runtime URL when enabled

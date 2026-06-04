@@ -17,6 +17,15 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
+func getEnvWithAliases(keys []string, defaultValue string) string {
+	for _, key := range keys {
+		if value := os.Getenv(key); value != "" {
+			return value
+		}
+	}
+	return defaultValue
+}
+
 func NewDatabaseHandler() (*DatabaseHandler, error) {
 	_ = godotenv.Load()
 

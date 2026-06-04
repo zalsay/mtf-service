@@ -25,7 +25,7 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	apiToken := getEnv("API_TOKEN", "fintrack-dev-token")
+	apiToken := getEnvWithAliases([]string{"MTF_SERVICE_TOKEN", "API_TOKEN"}, "fintrack-dev-token")
 	RegisterRoutes(r, handler, apiToken)
 
 	port := getEnv("PORT", "58004")

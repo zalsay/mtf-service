@@ -39,8 +39,8 @@ const aStockQuickPhrases: QuickPhrase[] = [
 
 const isAuthError = (message: string) => (
     message.includes('Authorization header required') ||
-    message.includes('Unauthorized') ||
-    message.includes('401')
+    message.trim() === 'Unauthorized' ||
+    message.trim() === 'HTTP error! status: 401'
 );
 
 const MTFAgentPanel: React.FC<MTFAgentPanelProps> = ({

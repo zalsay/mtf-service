@@ -9,20 +9,20 @@ import (
 )
 
 type Config struct {
-	Database        DatabaseConfig
-	Server          ServerConfig
-	JWT             JWTConfig
-	CORS            CORSConfig
-	External        ExternalAPIConfig
-	Redis           RedisConfig
-	PythonService   PythonServiceConfig
-	UZI             UZIServiceConfig
-	OSS             OSSConfig
-	LLM             LLMConfig
-	PostgresHandler PostgresHandlerConfig
-	DSABridge       DSABridgeConfig
-	MTFAgent        MTFAgentConfig
-	AlipayService   AlipayServiceConfig
+	Database         DatabaseConfig
+	Server           ServerConfig
+	JWT              JWTConfig
+	CORS             CORSConfig
+	External         ExternalAPIConfig
+	Redis            RedisConfig
+	InferenceGateway InferenceGatewayConfig
+	UZI              UZIServiceConfig
+	OSS              OSSConfig
+	LLM              LLMConfig
+	PostgresHandler  PostgresHandlerConfig
+	DSABridge        DSABridgeConfig
+	MTFAgent         MTFAgentConfig
+	AlipayService    AlipayServiceConfig
 }
 
 type DatabaseConfig struct {
@@ -63,7 +63,7 @@ type RedisConfig struct {
 	DB       int
 }
 
-type PythonServiceConfig struct {
+type InferenceGatewayConfig struct {
 	BaseURL string
 	Timeout int // seconds
 }
@@ -169,14 +169,14 @@ func LoadConfig() (*Config, error) {
 			Password: getEnv("REDIS_PASSWORD", ""),
 			DB:       getEnvAsInt("REDIS_DB", 0),
 		},
-		PythonService: PythonServiceConfig{
-			BaseURL: getEnv("PYTHON_SERVICE_URL", defaultPythonServiceURL()),
-			Timeout: getEnvAsInt("PYTHON_SERVICE_TIMEOUT", 30),
+		InferenceGateway: InferenceGatewayConfig{
+			BaseURL: getEnvWithAliases([]string{"INFERENCE_GATEWAY_URL", "PYTHON_SERVICE_URL"}, defaultInferenceGatewayURL()),
+			Timeout: getEnvAsIntWithAliases([]string{"INFERENCE_GATEWAY_TIMEOUT", "PYTHON_SERVICE_TIMEOUT"}, 30),
 		},
 		UZI: UZIServiceConfig{
 			Enabled:      getEnvAsBool("UZI_ENABLED", true),
 			BaseURL:      getEnv("UZI_SERVICE_URL", defaultUZIServiceURL()),
-			QueueBaseURL: getEnv("UZI_GATEWAY_URL", getEnv("PYTHON_SERVICE_URL", defaultPythonServiceURL())),
+			QueueBaseURL: getEnv("UZI_GATEWAY_URL", getEnvWithAliases([]string{"INFERENCE_GATEWAY_URL", "PYTHON_SERVICE_URL"}, defaultInferenceGatewayURL())),
 			Timeout:      getEnvAsInt("UZI_SERVICE_TIMEOUT", 1800),
 			OpenTokenTTL: getEnvAsInt("UZI_OPEN_TOKEN_TTL_SECONDS", 45),
 		},
@@ -205,7 +205,7 @@ func LoadConfig() (*Config, error) {
 		},
 		PostgresHandler: PostgresHandlerConfig{
 			BaseURL:  getEnv("POSTGRES_HANDLER_URL", "http://host.docker.internal:58004"),
-			APIToken: getEnv("POSTGRES_HANDLER_TOKEN", ""),
+			APIToken: getMTFServiceToken(),
 			Timeout:  getEnvAsInt("POSTGRES_HANDLER_TIMEOUT", 10),
 		},
 		DSABridge: DSABridgeConfig{
@@ -216,7 +216,7 @@ func LoadConfig() (*Config, error) {
 			Enabled:      getEnvAsBool("MTF_AGENT_ENABLED", true),
 			BaseURL:      strings.TrimRight(getEnv("MTF_AGENT_RUNTIME_URL", "http://ai-functions-gateway:9010/deepseek-tui"), "/"),
 			Timeout:      getEnvAsInt("MTF_AGENT_TIMEOUT", 120),
-			RuntimeToken: getEnv("MTF_AGENT_RUNTIME_TOKEN", ""),
+			RuntimeToken: getMTFServiceToken(),
 			DefaultModel: getEnv("MTF_AGENT_MODEL", "deepseek-v4-pro"),
 		},
 		AlipayService: AlipayServiceConfig{
@@ -249,6 +249,16 @@ func getEnvWithAliases(keys []string, defaultValue string) string {
 		}
 	}
 	return defaultValue
+}
+
+func getMTFServiceToken() string {
+	return getEnvWithAliases([]string{
+		"MTF_SERVICE_TOKEN",
+		"POSTGRES_HANDLER_TOKEN",
+		"MTF_AGENT_RUNTIME_TOKEN",
+		"GATEWAY_API_TOKEN",
+		"DEEPSEEK_TUI_PROXY_TOKEN",
+	}, "fintrack-dev-token")
 }
 
 func getEnvAsInt(key string, defaultValue int) int {
@@ -303,7 +313,7 @@ func normalizeEnvironment(raw string) string {
 		return "development"
 	}
 }
-func defaultPythonServiceURL() string {
+func defaultInferenceGatewayURL() string {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return "http://host.docker.internal:59010"
 	}
