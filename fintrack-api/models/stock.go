@@ -236,6 +236,8 @@ type MTFPredictRequest struct {
 	StockType          interface{}            `json:"stock_type,omitempty"`
 	TimeStep           *int                   `json:"time_step,omitempty"`
 	Years              *int                   `json:"years,omitempty"`
+	StartDate          *string                `json:"start_date,omitempty"`
+	EndDate            *string                `json:"end_date,omitempty"`
 	PredictionType     string                 `json:"prediction_type,omitempty"`
 	HorizonLen         *int                   `json:"horizon_len,omitempty"`
 	ContextLen         *int                   `json:"context_len,omitempty"`
@@ -244,6 +246,9 @@ type MTFPredictRequest struct {
 	ForceRequeue       *bool                  `json:"force_requeue,omitempty"`
 	QueuePriority      string                 `json:"queue_priority,omitempty"`
 	RefreshReason      string                 `json:"refresh_reason,omitempty"`
+	BestMaxAgeDays     *int                   `json:"best_max_age_days,omitempty"`
+	PredictFromBestEnd *bool                  `json:"predict_from_best_val_end,omitempty"`
+	ChunkUntilLatest   *bool                  `json:"chunk_until_latest,omitempty"`
 	CovariatePreset    *string                `json:"covariate_preset,omitempty"`
 	CovariateSignature string                 `json:"covariate_signature,omitempty"`
 	CovariateConfig    map[string]interface{} `json:"covariate_config,omitempty"`

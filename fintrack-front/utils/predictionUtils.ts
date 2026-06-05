@@ -8,6 +8,32 @@ export interface ResolvedPublicPrediction {
     pro?: PublicPredictionItem;
 }
 
+export type MTFPredictionType = 'mtf-lite' | 'mtf-pro';
+
+export const normalizeMTFPredictionType = (value: unknown): MTFPredictionType | null => {
+    const normalized = String(value || '').trim().toLowerCase().replace(/_/g, '-');
+    if (normalized === 'mtf-pro' || normalized === 'mtf-lite') {
+        return normalized;
+    }
+    return null;
+};
+
+export const isMTFProUniqueKey = (value: unknown): boolean => {
+    const normalized = String(value || '').toLowerCase();
+    return normalized.includes('_mtf-pro') || normalized.includes('_mtf_pro');
+};
+
+export const isMTFProPredictionItem = (item?: PublicPredictionItem | null): boolean => {
+    if (!item) {
+        return false;
+    }
+    const predictionType = normalizeMTFPredictionType(item.best.prediction_type);
+    if (predictionType) {
+        return predictionType === 'mtf-pro';
+    }
+    return isMTFProUniqueKey(item.best.unique_key);
+};
+
 const getSeriesChangePercent = (values: number[] | undefined): number | undefined => {
     if (!values?.length) {
         return undefined;
@@ -43,13 +69,8 @@ const selectLatestItem = (
     return compareUpdatedAt(current.best.updated_at, next.best.updated_at) <= 0 ? next : current;
 };
 
-const isCovPrediction = (item: PublicPredictionItem): boolean => {
-    const predictionType = String(item.best.prediction_type || '').trim().toLowerCase();
-    if (predictionType) {
-        return predictionType === 'mtf-pro' || predictionType === 'cov';
-    }
-    const uniqueKey = String(item.best.unique_key || '');
-    return uniqueKey.includes('_mtf-pro') || uniqueKey.includes('_mtf_pro');
+const isMTFProPrediction = (item: PublicPredictionItem): boolean => {
+    return isMTFProPredictionItem(item);
 };
 
 const buildPredictionGroupKey = (item: PublicPredictionItem): string => {
@@ -215,7 +236,7 @@ export const resolvePublicPredictionItems = (items: PublicPredictionItem[] = [])
         const key = buildPredictionGroupKey(item);
         const bucket = grouped.get(key) || {};
 
-        if (isCovPrediction(item)) {
+        if (isMTFProPrediction(item)) {
             bucket.pro = selectLatestItem(bucket.pro, item);
         } else {
             bucket.primary = selectLatestItem(bucket.primary, item);
@@ -248,7 +269,7 @@ export const mapResolvedPredictionToStockData = (
     const contextLen = primary.best.context_len;
     const horizonLen = primary.best.horizon_len;
     const series = extractSeriesFromChunks(primary.chunks, bestItemKey);
-    const isProOnly = isCovPrediction(primary) && !resolved.pro;
+    const isProOnly = isMTFProPrediction(primary) && !resolved.pro;
 
     if (!series) {
         return null;

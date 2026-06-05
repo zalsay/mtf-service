@@ -1021,8 +1021,6 @@ export interface MTFBestKeysByConfig {
   context_len: number;
   mtf_lite_unique_key: string;
   mtf_pro_unique_key: string;
-  non_cov_unique_key?: string;
-  cov_unique_key?: string;
 }
 
 export const getMTFBestKeysByConfig = async (
@@ -1072,9 +1070,9 @@ export interface MTFQueueStatus {
 
 export interface AdminGatewayBackendStatus extends TimesfmQueueBackendStatus {
   role?: string;
-  supports_cov?: boolean;
+  supports_mtf_pro?: boolean;
   supports_direct_cov?: boolean;
-  supports_non_cov?: boolean;
+  supports_mtf_lite?: boolean;
   supports_uzi?: boolean;
 }
 

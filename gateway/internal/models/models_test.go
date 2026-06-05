@@ -220,3 +220,42 @@ func TestInferenceRequestBackgroundPriorityAndRefreshKey(t *testing.T) {
 		t.Fatalf("expected background queue priority to be enabled")
 	}
 }
+
+func TestInferenceRequestPredictOnceBestContinuationKey(t *testing.T) {
+	baseRequest := InferenceRequest{
+		StockCode:  "600246",
+		StockType:  "stock",
+		HorizonLen: 28,
+		ContextLen: 2048,
+	}
+	continuationRequest := InferenceRequest{
+		StockCode:          "600246",
+		StockType:          "stock",
+		HorizonLen:         28,
+		ContextLen:         2048,
+		BestMaxAgeDays:     180,
+		PredictFromBestEnd: true,
+		ChunkUntilLatest:   true,
+	}
+
+	baseKey, err := baseRequest.RequestKey()
+	if err != nil {
+		t.Fatalf("base request key error: %v", err)
+	}
+	continuationKey, err := continuationRequest.RequestKey()
+	if err != nil {
+		t.Fatalf("continuation request key error: %v", err)
+	}
+	if baseKey == continuationKey {
+		t.Fatalf("expected continuation request key to differ from base request key")
+	}
+	if !strings.Contains(continuationKey, `"best_max_age_days":180`) {
+		t.Fatalf("continuation key missing best_max_age_days: %s", continuationKey)
+	}
+	if !strings.Contains(continuationKey, `"predict_from_best_val_end":true`) {
+		t.Fatalf("continuation key missing predict_from_best_val_end: %s", continuationKey)
+	}
+	if !strings.Contains(continuationKey, `"chunk_until_latest":true`) {
+		t.Fatalf("continuation key missing chunk_until_latest: %s", continuationKey)
+	}
+}

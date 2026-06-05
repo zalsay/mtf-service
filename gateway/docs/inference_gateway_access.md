@@ -316,6 +316,12 @@ curl -X POST http://127.0.0.1:59010/predict_once \
 - `latest_data_date`
 - `request_end_date`
 
+Best 命中规则：
+
+- `best_max_age_days` 默认由 fintrack-api 注入为 `180`。best 的 `val_end_date` 距当前请求日期不超过该天数时，应视为可用。
+- `predict_from_best_val_end=true` 时，单次预测应从命中的 best `val_end_date` 开始续跑，而不是要求 best 已覆盖到当前最新数据日。
+- `chunk_until_latest=true` 时，后端应生成从 best 结束日期到当前最新可用数据对应 chunk 的预测。
+
 单次预测结果会落库到 PostgreSQL，对应表为：
 
 - `mtf_direct_predictions`

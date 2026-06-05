@@ -338,6 +338,100 @@ func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	if received["force_requeue"] != true {
 		t.Fatalf("expected force_requeue=true in payload, got %#v", received["force_requeue"])
 	}
+	if received["best_max_age_days"] != float64(180) {
+		t.Fatalf("best_max_age_days = %#v, want 180", received["best_max_age_days"])
+	}
+	if received["predict_from_best_val_end"] != true {
+		t.Fatalf("predict_from_best_val_end = %#v, want true", received["predict_from_best_val_end"])
+	}
+	if received["chunk_until_latest"] != true {
+		t.Fatalf("chunk_until_latest = %#v, want true", received["chunk_until_latest"])
+	}
+}
+
+func TestTriggerMTFPredictOnceAllowsBestContinuationOverrides(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"job_id":"job-test","status":"queued"}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 1,
+		},
+	})
+	bestMaxAgeDays := 90
+	predictFromBestEnd := false
+	chunkUntilLatest := false
+	req := &models.MTFPredictRequest{
+		StockCode:          "600246",
+		BestMaxAgeDays:     &bestMaxAgeDays,
+		PredictFromBestEnd: &predictFromBestEnd,
+		ChunkUntilLatest:   &chunkUntilLatest,
+	}
+
+	status, _, err := service.TriggerMTFPredictOnce(req)
+	if err != nil {
+		t.Fatalf("expected predict once proxy to pass, got error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if received["best_max_age_days"] != float64(90) {
+		t.Fatalf("best_max_age_days = %#v, want 90", received["best_max_age_days"])
+	}
+	if received["predict_from_best_val_end"] != false {
+		t.Fatalf("predict_from_best_val_end = %#v, want false", received["predict_from_best_val_end"])
+	}
+	if received["chunk_until_latest"] != false {
+		t.Fatalf("chunk_until_latest = %#v, want false", received["chunk_until_latest"])
+	}
+}
+
+func TestTriggerMTFPredictOncePassesContinuationDates(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"job_id":"job-test","status":"queued"}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 1,
+		},
+	})
+	startDate := "2026-04-30"
+	endDate := "2026-06-01"
+	req := &models.MTFPredictRequest{
+		StockCode: "600246",
+		StartDate: &startDate,
+		EndDate:   &endDate,
+	}
+
+	status, _, err := service.TriggerMTFPredictOnce(req)
+	if err != nil {
+		t.Fatalf("expected predict once proxy to pass, got error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if received["start_date"] != startDate {
+		t.Fatalf("start_date = %#v, want %s", received["start_date"], startDate)
+	}
+	if received["end_date"] != endDate {
+		t.Fatalf("end_date = %#v, want %s", received["end_date"], endDate)
+	}
 }
 
 func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {

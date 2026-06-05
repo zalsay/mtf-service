@@ -18,6 +18,7 @@ import {
     WatchlistItem,
 } from '../../services/apiService';
 import {
+    isMTFProPredictionItem,
     mapResolvedPredictionToStockData,
     ResolvedPublicPrediction,
 } from '../../utils/predictionUtils';
@@ -84,6 +85,8 @@ interface ChartPredictionOption {
 
 const DEFAULT_MTF_YEARS = 15;
 const DEFAULT_MTF_VERSION = '2.5';
+const CHART_HORIZON_CONTROLS = [7, 14, 28] as const;
+const CHART_CONTEXT_CONTROLS = [512, 1024, 2048] as const;
 const BEST_TRAIN_POLL_INTERVAL_MS = 2000;
 const BEST_TRAIN_MAX_POLL_ATTEMPTS = 180;
 const PRO_PROGRESS_GRADIENT = 'linear-gradient(90deg, #FFF1B8 0%, #FCD34D 24%, #F59E0B 52%, #FB923C 78%, #F97316 100%)';
@@ -194,15 +197,8 @@ const matchesTrainResultPreference = (
     return true;
 };
 
-const isCovPredictionItem = (item?: PublicPredictionItem | null): boolean => {
-    if (!item) {
-        return false;
-    }
-    const predictionType = normalizeOptionalText(item.best.prediction_type);
-    if (predictionType) {
-        return predictionType === 'mtf-pro';
-    }
-    return String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
+const isMTFProPredictionItemLocal = (item?: PublicPredictionItem | null): boolean => {
+    return isMTFProPredictionItem(item);
 };
 
 const getPredictionItemForType = (
@@ -216,13 +212,13 @@ const getPredictionItemForType = (
         if (resolved.pro) {
             return resolved.pro;
         }
-        return isCovPredictionItem(resolved.primary) ? resolved.primary : null;
+        return isMTFProPredictionItemLocal(resolved.primary) ? resolved.primary : null;
     }
-    return isCovPredictionItem(resolved.primary) ? null : resolved.primary;
+    return isMTFProPredictionItemLocal(resolved.primary) ? null : resolved.primary;
 };
 
 const getLoadedPredictionType = (resolved: ResolvedPublicPrediction): TrainPredictionType => (
-    isCovPredictionItem(resolved.primary) && !resolved.pro ? 'mtf-pro' : 'mtf-lite'
+    isMTFProPredictionItemLocal(resolved.primary) && !resolved.pro ? 'mtf-pro' : 'mtf-lite'
 );
 
 const comparePredictionUpdatedAt = (left?: string, right?: string): number => {
@@ -253,9 +249,9 @@ const getChartModelMeta = (
     resolved: ResolvedPublicPrediction,
     language: string,
 ): { group: ChartModelGroup; label: string } => {
-    const primaryIsCov = isCovPredictionItem(resolved.primary);
-    const hasLite = !primaryIsCov;
-    const hasPro = Boolean(resolved.pro) || primaryIsCov;
+    const primaryIsPro = isMTFProPredictionItemLocal(resolved.primary);
+    const hasLite = !primaryIsPro;
+    const hasPro = Boolean(resolved.pro) || primaryIsPro;
 
     if (hasLite && hasPro) {
         return { group: 'lite_pro', label: language === 'zh' ? 'Lite + Pro' : 'Lite + Pro' };
@@ -369,7 +365,7 @@ const renderChartParameterGroup = (
     children: React.ReactNode,
 ): React.ReactElement => (
     <div className="space-y-2">
-        <div className="text-xs font-semibold text-white/50">{label}</div>
+        <div className="shrink-0 text-xs font-semibold text-white/50">{label}</div>
         <div className="flex flex-wrap gap-2">{children}</div>
     </div>
 );
@@ -387,7 +383,7 @@ const renderChartParameterButton = (
         type="button"
         onClick={onClick}
         disabled={disabled}
-        className={`min-h-9 rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${buildChartParameterButtonClass(active, proStyle)}`}
+        className={`min-h-9 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${buildChartParameterButtonClass(active, proStyle)}`}
     >
         {label}
     </button>
@@ -415,7 +411,7 @@ const buildChartPredictionOptions = (
             item.best.mtf_version ?? '',
         ].join('|');
         const bucket = grouped.get(key) || {};
-        if (isCovPredictionItem(item)) {
+        if (isMTFProPredictionItemLocal(item)) {
             bucket.pro = selectLatestPredictionItem(bucket.pro, item);
         } else {
             bucket.primary = selectLatestPredictionItem(bucket.primary, item);
@@ -840,10 +836,6 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     const activeChartPredictionOption = chartPredictionOptions.find(
         option => option.id === activeChartPredictionOptionId,
     );
-    const chartModelParameterOptions = getUniqueChartOptions(
-        chartPredictionOptions,
-        option => option.modelGroup,
-    ).sort((left, right) => getChartModelSortWeight(left.modelGroup) - getChartModelSortWeight(right.modelGroup));
     const chartHorizonParameterOptions = getUniqueChartOptions(
         chartPredictionOptions,
         option => option.horizonLen,
@@ -856,6 +848,16 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
         chartPredictionOptions,
         option => option.mtfVersion,
     ).sort((left, right) => left.mtfVersion.localeCompare(right.mtfVersion));
+    const chartAvailableHorizons = new Set(chartHorizonParameterOptions.map(option => option.horizonLen));
+    const chartAvailableContexts = new Set(chartContextParameterOptions.map(option => option.contextLen));
+    const chartSummaryHorizonOptions = CHART_HORIZON_CONTROLS.map(value => ({
+        value,
+        available: chartAvailableHorizons.has(value),
+    }));
+    const chartSummaryContextOptions = CHART_CONTEXT_CONTROLS.map(value => ({
+        value,
+        available: chartAvailableContexts.has(value),
+    }));
     const openStandalonePredictionModal = (item: WatchlistItem) => {
         if (isWatchlistItemOverLimit(item)) {
             setError(language === 'zh' ? '超出当前会员等级上限。删除其他关注或升级会员后可继续预测。' : 'Over current membership limit. Delete other items or upgrade to enable predictions.');
@@ -1584,57 +1586,27 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
             return null;
         }
 
-        const parameterGridClass = chartVersionParameterOptions.length > 1
-            ? 'grid min-w-[760px] flex-1 gap-3 md:grid-cols-4 lg:min-w-0 lg:grid-cols-4'
-            : 'grid min-w-[620px] flex-1 gap-3 md:grid-cols-3 lg:min-w-0 lg:grid-cols-3';
+        const shouldShowVersionSelector = chartVersionParameterOptions.length > 1;
 
         return (
-            <div className={`${className} overflow-x-auto overscroll-x-contain`.trim()}>
-                <div className="flex w-max min-w-full items-end gap-4">
-                    <div className={parameterGridClass}>
-                        {renderChartParameterGroup(
-                            language === 'zh' ? '模型模式' : 'Model Mode',
-                            chartModelParameterOptions.map(option => renderChartParameterButton(
-                                option.modelGroup,
-                                option.modelLabel,
-                                activeChartPredictionOption?.modelGroup === option.modelGroup,
-                                () => handleChartParameterChange({ modelGroup: option.modelGroup }),
-                                isTrainingBest || isChartLoading,
-                                option.modelGroup !== 'lite',
-                            )),
-                        )}
-
-                        {renderChartParameterGroup(
-                            language === 'zh' ? '预测周期' : 'Period',
-                            chartHorizonParameterOptions.map(option => renderChartParameterButton(
-                                String(option.horizonLen),
-                                formatChartHorizonLabel(option.horizonLen, language),
-                                activeChartPredictionOption?.horizonLen === option.horizonLen,
-                                () => handleChartParameterChange({ horizonLen: option.horizonLen }),
-                                isTrainingBest || isChartLoading,
-                            )),
-                        )}
-
-                        {renderChartParameterGroup(
-                            language === 'zh' ? '预测深度' : 'Depth',
-                            chartContextParameterOptions.map(option => renderChartParameterButton(
-                                String(option.contextLen),
-                                option.contextLabel,
-                                activeChartPredictionOption?.contextLen === option.contextLen,
-                                () => handleChartParameterChange({ contextLen: option.contextLen }),
-                                isTrainingBest || isChartLoading,
-                            )),
-                        )}
-
-                        {chartVersionParameterOptions.length > 1 && renderChartParameterGroup(
-                            language === 'zh' ? '模型版本' : 'Version',
-                            chartVersionParameterOptions.map(option => renderChartParameterButton(
-                                option.mtfVersion,
-                                `v${option.mtfVersion}`,
-                                activeChartPredictionOption?.mtfVersion === option.mtfVersion,
-                                () => handleChartParameterChange({ mtfVersion: option.mtfVersion }),
-                                isTrainingBest || isChartLoading,
-                            )),
+            <div className={className.trim()}>
+                <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start md:justify-between md:gap-4">
+                    <div className="min-w-0 flex-1">
+                        <p className="text-lg font-bold text-white">{selectedStock?.companyName || selectedStock?.symbol}</p>
+                        <p className="text-sm text-white/55">{selectedStock?.symbol}</p>
+                        {shouldShowVersionSelector && (
+                            <div className="mt-3">
+                                {renderChartParameterGroup(
+                                    language === 'zh' ? '模型版本' : 'Version',
+                                    chartVersionParameterOptions.map(option => renderChartParameterButton(
+                                        option.mtfVersion,
+                                        `v${option.mtfVersion}`,
+                                        activeChartPredictionOption?.mtfVersion === option.mtfVersion,
+                                        () => handleChartParameterChange({ mtfVersion: option.mtfVersion }),
+                                        isTrainingBest || isChartLoading,
+                                    )),
+                                )}
+                            </div>
                         )}
                     </div>
                     {actionSlot && (
@@ -1822,6 +1794,12 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                                             className="mb-4 rounded-2xl border border-white/10 bg-black/20 p-3"
                                             nameColumnClassName="md:min-w-[100px] md:max-w-[100px] md:flex-[0_0_100px] lg:min-w-[120px] lg:max-w-[120px] lg:flex-[0_0_120px]"
                                             showChartModeToggle={false}
+                                            horizonOptions={chartSummaryHorizonOptions}
+                                            selectedHorizon={activeChartPredictionOption?.horizonLen}
+                                            onHorizonChange={value => handleChartParameterChange({ horizonLen: value })}
+                                            contextOptions={chartSummaryContextOptions}
+                                            selectedContext={activeChartPredictionOption?.contextLen}
+                                            onContextChange={value => handleChartParameterChange({ contextLen: value })}
                                         />
                                      )}
 

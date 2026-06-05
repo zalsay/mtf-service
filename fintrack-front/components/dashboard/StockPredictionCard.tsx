@@ -18,6 +18,9 @@ interface StockPredictionCardProps {
   horizonOptions?: Array<{ value: number; available: boolean }>;
   selectedHorizon?: number;
   onHorizonChange?: (value: number) => void;
+  contextOptions?: Array<{ value: number; available: boolean }>;
+  selectedContext?: number;
+  onContextChange?: (value: number) => void;
 }
 
 const liteHeaderStyle = {
@@ -40,6 +43,9 @@ interface StockPredictionSummaryProps {
     horizonOptions?: Array<{ value: number; available: boolean }>;
     selectedHorizon?: number;
     onHorizonChange?: (value: number) => void;
+    contextOptions?: Array<{ value: number; available: boolean }>;
+    selectedContext?: number;
+    onContextChange?: (value: number) => void;
     className?: string;
     nameColumnClassName?: string;
     showChartModeToggle?: boolean;
@@ -53,6 +59,9 @@ export const StockPredictionSummary: React.FC<StockPredictionSummaryProps> = ({
     horizonOptions,
     selectedHorizon,
     onHorizonChange,
+    contextOptions,
+    selectedContext,
+    onContextChange,
     className = '',
     nameColumnClassName = 'md:min-w-[140px] md:max-w-[140px] md:flex-[0_0_140px] lg:min-w-[180px] lg:max-w-[180px] lg:flex-[0_0_180px]',
     showChartModeToggle = true,
@@ -84,6 +93,7 @@ export const StockPredictionSummary: React.FC<StockPredictionSummaryProps> = ({
     const hasMetrics = hasLiteMetrics || hasProMetrics;
     const hasChartData = Boolean(stock.prediction?.chartData);
     const hasHorizonOptions = Boolean(horizonOptions?.length);
+    const hasContextOptions = Boolean(contextOptions?.length);
     const isChangeMode = chartMode === 'change';
     const chartModeLabel = isChangeMode
         ? (language === 'zh' ? '价格' : 'Price')
@@ -114,30 +124,116 @@ export const StockPredictionSummary: React.FC<StockPredictionSummaryProps> = ({
             setIsAddingToWatchlist(false);
         }
     };
+    const formatContextOption = (value: number) => (
+        value < 1024 ? `${Number((value / 1024).toFixed(1))}k` : `${Math.round(value / 1024)}k`
+    );
+    const parameterControls = (hasHorizonOptions || hasContextOptions) ? (
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+            {hasHorizonOptions && (
+                <div
+                    className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] p-1"
+                    aria-label={language === 'zh' ? '预测周期' : 'Prediction period'}
+                >
+                    {horizonOptions!.map(option => {
+                        const isActive = selectedHorizon === option.value;
+                        return (
+                            <button
+                                key={option.value}
+                                type="button"
+                                disabled={!option.available}
+                                onClick={() => option.available && onHorizonChange?.(option.value)}
+                                className={`h-8 w-11 rounded-md text-[11px] font-bold transition-colors ${
+                                    isActive
+                                        ? 'bg-primary text-black shadow-sm'
+                                        : option.available
+                                            ? 'bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white'
+                                            : 'cursor-not-allowed bg-white/[0.025] text-white/25'
+                                }`}
+                                title={option.available
+                                    ? `${option.value}d`
+                                    : (language === 'zh' ? `暂无 ${option.value}d 数据` : `No ${option.value}d data`)}
+                            >
+                                {option.value}d
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+            {hasContextOptions && (
+                <div
+                    className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.035] p-1"
+                    aria-label={language === 'zh' ? '上下文长度' : 'Context length'}
+                >
+                    {contextOptions!.map(option => {
+                        const isActive = selectedContext === option.value;
+                        const label = formatContextOption(option.value);
+                        return (
+                            <button
+                                key={option.value}
+                                type="button"
+                                disabled={!option.available}
+                                onClick={() => option.available && onContextChange?.(option.value)}
+                                className={`h-8 w-11 rounded-md text-[11px] font-bold transition-colors ${
+                                    isActive
+                                        ? 'bg-primary/85 text-black shadow-sm'
+                                        : option.available
+                                            ? 'bg-white/[0.05] text-white/68 hover:bg-white/10 hover:text-white'
+                                            : 'cursor-not-allowed bg-white/[0.02] text-white/22'
+                                }`}
+                                title={option.available
+                                    ? label
+                                    : (language === 'zh' ? `暂无 ${label} 数据` : `No ${label} data`)}
+                            >
+                                {label}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    ) : null;
 
     return (
         <div className={`flex flex-wrap md:flex-nowrap justify-between items-start gap-x-2 gap-y-3 ${className}`.trim()}>
             <div className={`min-w-0 ${nameColumnClassName}`.trim()}>
                 <p className="text-white text-lg font-bold leading-normal md:truncate">{stock.companyName}</p>
                 <p className="text-white/60 text-sm truncate max-w-[150px]">{stock.symbol}</p>
-                {showChartModeToggle && hasChartData && (
-                    <button
-                        type="button"
-                        aria-label={chartModeTitle}
-                        title={chartModeTitle}
-                        onClick={() => onChartModeChange(chartMode === 'change' ? 'price' : 'change')}
-                        className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-white/70 shadow-sm transition-colors hover:bg-white/10 hover:text-white"
-                    >
-                        <span className="material-symbols-outlined text-[16px] leading-none">
-                            {isChangeMode ? 'show_chart' : 'percent'}
-                        </span>
-                        <span>{chartModeLabel}</span>
-                    </button>
+                {((showChartModeToggle && hasChartData) || hasMetrics) && (
+                    <div className="mt-3 flex items-center gap-2">
+                        {showChartModeToggle && hasChartData && (
+                            <button
+                                type="button"
+                                aria-label={chartModeTitle}
+                                title={chartModeTitle}
+                                onClick={() => onChartModeChange(chartMode === 'change' ? 'price' : 'change')}
+                                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.06] px-2.5 text-[11px] font-semibold text-white/70 shadow-sm transition-colors hover:bg-white/10 hover:text-white"
+                            >
+                                <span className="material-symbols-outlined text-[16px] leading-none">
+                                    {isChangeMode ? 'show_chart' : 'percent'}
+                                </span>
+                                <span>{chartModeLabel}</span>
+                            </button>
+                        )}
+                        {hasMetrics && (
+                            <button
+                                type="button"
+                                onClick={() => setIsMetricsExpanded(prev => !prev)}
+                                aria-label={isMetricsExpanded ? t('prediction.hideMetrics') : t('prediction.showMetrics')}
+                                title={isMetricsExpanded ? t('prediction.hideMetrics') : t('prediction.showMetrics')}
+                                className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-white/70 transition-colors hover:bg-white/10 hover:text-white md:hidden"
+                            >
+                                <span className={`material-symbols-outlined text-[18px] transition-transform duration-300 ${isMetricsExpanded ? 'rotate-180' : ''}`}>
+                                    expand_more
+                                </span>
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
             {hasMetrics && (
                 <div className={`order-3 w-full overflow-hidden transition-all duration-300 ease-out md:order-none md:min-w-0 md:flex-1 ${isMetricsExpanded ? 'max-h-[640px] opacity-100' : 'max-h-0 opacity-0 md:max-h-none md:opacity-100'}`}>
-                    <div className="flex flex-col gap-2 pt-1 md:pt-0">
+                    <div className="flex flex-col gap-2 pt-1 md:flex-row md:items-start md:justify-between md:gap-3 md:pt-0">
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
                     {hasLiteMetrics && (
                     <div className={metricsRowClass}>
                         <div className={liteMetricCardClass}>
@@ -318,6 +414,8 @@ export const StockPredictionSummary: React.FC<StockPredictionSummaryProps> = ({
                         </div>
                     )}
                     </div>
+                    {parameterControls}
+                    </div>
                 </div>
             )}
             <div className="flex flex-wrap items-center justify-end gap-2 ml-auto order-2 md:order-none">
@@ -347,49 +445,6 @@ export const StockPredictionSummary: React.FC<StockPredictionSummaryProps> = ({
                         </span>
                     </button>
                 )}
-                {hasHorizonOptions && (
-                    <div
-                        className="flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] p-1"
-                        aria-label={language === 'zh' ? '预测周期' : 'Prediction period'}
-                    >
-                        {horizonOptions!.map(option => {
-                            const isActive = selectedHorizon === option.value;
-                            return (
-                                <button
-                                    key={option.value}
-                                    type="button"
-                                    disabled={!option.available}
-                                    onClick={() => option.available && onHorizonChange?.(option.value)}
-                                    className={`h-8 rounded-md px-2.5 text-[11px] font-bold transition-colors ${
-                                        isActive
-                                            ? 'bg-primary text-black shadow-sm'
-                                            : option.available
-                                                ? 'bg-white/[0.06] text-white/70 hover:bg-white/10 hover:text-white'
-                                                : 'cursor-not-allowed bg-white/[0.025] text-white/25'
-                                    }`}
-                                    title={option.available
-                                        ? `P${option.value}`
-                                        : (language === 'zh' ? `暂无 P${option.value} 数据` : `No P${option.value} data`)}
-                                >
-                                    P{option.value}
-                                </button>
-                            );
-                        })}
-                    </div>
-                )}
-                {hasMetrics && (
-                    <button
-                        type="button"
-                        onClick={() => setIsMetricsExpanded(prev => !prev)}
-                        aria-label={isMetricsExpanded ? t('prediction.hideMetrics') : t('prediction.showMetrics')}
-                        title={isMetricsExpanded ? t('prediction.hideMetrics') : t('prediction.showMetrics')}
-                        className="flex md:hidden items-center justify-center w-10 h-10 rounded-lg border border-white/10 bg-white/5 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-                    >
-                        <span className={`material-symbols-outlined text-[22px] transition-transform duration-300 ${isMetricsExpanded ? 'rotate-180' : ''}`}>
-                            expand_more
-                        </span>
-                    </button>
-                )}
             </div>
         </div>
     );
@@ -407,6 +462,9 @@ const StockPredictionCard: React.FC<StockPredictionCardProps> = ({
     horizonOptions,
     selectedHorizon,
     onHorizonChange,
+    contextOptions,
+    selectedContext,
+    onContextChange,
 }) => {
     const { t } = useLanguage();
     const [internalChartMode, setInternalChartMode] = useState<PredictionChartMode>('price');
@@ -433,6 +491,9 @@ const StockPredictionCard: React.FC<StockPredictionCardProps> = ({
                     horizonOptions={horizonOptions}
                     selectedHorizon={selectedHorizon}
                     onHorizonChange={onHorizonChange}
+                    contextOptions={contextOptions}
+                    selectedContext={selectedContext}
+                    onContextChange={onContextChange}
                 />
             )}
             <div className={`flex flex-1 flex-col gap-4 py-4 ${chartHeightClassName}`.trim()}>

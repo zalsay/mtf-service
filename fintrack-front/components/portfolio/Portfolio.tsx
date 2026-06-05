@@ -8,6 +8,7 @@ import { watchlistAPI, strategyAPI, backtestAPI, authAPI, getAccessiblePredictio
 import { type PredictionChartMarker, type PredictionChartTheme } from '../common/PredictionChart';
 import PredictionChartPanel from '../common/PredictionChartPanel';
 import type { PublicPredictionItem } from '../../types';
+import { isMTFProPredictionItem, isMTFProUniqueKey } from '../../utils/predictionUtils';
 
 interface PortfolioProps {
     onAuthError?: () => void;
@@ -282,9 +283,8 @@ const proMetricHeaderStyle = {
     backgroundImage: 'linear-gradient(90deg, rgba(255,241,184,0.75) 0%, rgba(252,211,77,0.75) 34%, rgba(245,158,11,0.75) 68%, rgba(249,115,22,0.75) 100%)',
 };
 
-const isCovPrediction = (item: PublicPredictionItem) => {
-    const type = String(item.best.prediction_type || '').trim().toLowerCase();
-    return type === 'mtf-pro' || String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
+const isMTFProPrediction = (item: PublicPredictionItem) => {
+    return isMTFProPredictionItem(item);
 };
 
 const buildBacktestConfigs = (items: PublicPredictionItem[], symbol: string): BacktestConfig[] => {
@@ -293,7 +293,7 @@ const buildBacktestConfigs = (items: PublicPredictionItem[], symbol: string): Ba
         .filter(item => normalizeSymbol(item.best.symbol) === normalizedSymbol)
         .map(item => ({
             uniqueKey: item.best.unique_key,
-            predictionType: isCovPrediction(item) ? 'mtf-pro' : 'mtf-lite',
+            predictionType: isMTFProPrediction(item) ? 'mtf-pro' : 'mtf-lite',
             horizonLen: Number(item.best.horizon_len || 0),
             contextLen: Number(item.best.context_len || 0),
             mtfVersion: String(item.best.mtf_version || '2.5'),
@@ -1342,7 +1342,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ onAuthError }) => {
         });
         const uniqueKey = String(data.unique_key || fallbackUniqueKey || '');
         const covariateSignature = String(data.covariate_signature || '').trim();
-        const theme: PredictionChartTheme = uniqueKey.includes('_mtf-pro') || uniqueKey.includes('_mtf_pro') || !!covariateSignature ? 'pro' : 'lite';
+        const theme: PredictionChartTheme = isMTFProUniqueKey(uniqueKey) || !!covariateSignature ? 'pro' : 'lite';
         const actualStart = actuals[0];
         const actualCurrent = actuals.length ? actuals[actuals.length - 1] : undefined;
         const assetStart = assets[0];
@@ -1652,7 +1652,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ onAuthError }) => {
             if (!orderedConfigs.length) {
                 orderedConfigs.push({
                     uniqueKey: targetUniqueKey,
-                    predictionType: targetUniqueKey.includes('_mtf-pro') || targetUniqueKey.includes('_mtf_pro') ? 'mtf-pro' : 'mtf-lite',
+                    predictionType: isMTFProUniqueKey(targetUniqueKey) ? 'mtf-pro' : 'mtf-lite',
                     horizonLen: 0,
                     contextLen: 0,
                     mtfVersion: '2.5',

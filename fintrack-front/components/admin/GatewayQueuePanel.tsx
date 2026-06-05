@@ -106,9 +106,9 @@ const GatewayQueuePanel: React.FC<GatewayQueuePanelProps> = ({ status, isLoading
                 <td>{backend.available}</td>
                 <td>
                   <div className="flex flex-wrap gap-1.5">
-                    {backend.supports_cov && <Badge>COV</Badge>}
+                    {backend.supports_mtf_pro && <Badge>MTF-PRO</Badge>}
                     {backend.supports_direct_cov && <Badge>DIRECT</Badge>}
-                    {backend.supports_non_cov && <Badge>NON-COV</Badge>}
+                    {backend.supports_mtf_lite && <Badge>MTF-LITE</Badge>}
                     {backend.supports_uzi && <Badge>UZI</Badge>}
                   </div>
                 </td>

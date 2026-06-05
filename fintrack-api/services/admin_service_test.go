@@ -59,8 +59,8 @@ func TestGetGatewayQueueStatusParsesHealthSnapshot(t *testing.T) {
 					"capacity": 2,
 					"in_flight": 1,
 					"available": 1,
-					"supports_cov": true,
-					"supports_non_cov": true
+					"supports_mtf_pro": true,
+					"supports_mtf_lite": true
 				}]
 			}
 		}`))
@@ -90,6 +90,9 @@ func TestGetGatewayQueueStatusParsesHealthSnapshot(t *testing.T) {
 	}
 	if len(status.Backends) != 1 || status.Backends[0].Name != "xpu" || status.Backends[0].InFlight != 1 {
 		t.Fatalf("backends = %#v, want one xpu backend with in_flight=1", status.Backends)
+	}
+	if !status.Backends[0].SupportsMTFPro || !status.Backends[0].SupportsMTFLite {
+		t.Fatalf("backend capabilities = %#v, want mtf-pro and mtf-lite", status.Backends[0])
 	}
 }
 

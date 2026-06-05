@@ -45,8 +45,12 @@ type InferenceRequest struct {
 	ContextLen          any    `json:"context_len,omitempty"`
 	UserID              any    `json:"user_id,omitempty"`
 	ForceEnqueue        any    `json:"force_enqueue,omitempty"`
+	ForceRequeue        any    `json:"force_requeue,omitempty"`
 	QueuePriority       string `json:"queue_priority,omitempty"`
 	RefreshReason       string `json:"refresh_reason,omitempty"`
+	BestMaxAgeDays      any    `json:"best_max_age_days,omitempty"`
+	PredictFromBestEnd  any    `json:"predict_from_best_val_end,omitempty"`
+	ChunkUntilLatest    any    `json:"chunk_until_latest,omitempty"`
 	PredictionTypeValue string `json:"prediction_type,omitempty"`
 	CovariatePreset     string `json:"covariate_preset,omitempty"`
 	CovariateConfig     any    `json:"covariate_config,omitempty"`
@@ -105,6 +109,9 @@ type requestKeyPayload struct {
 	CovariatePreset    string `json:"covariate_preset,omitempty"`
 	CovariateSignature string `json:"covariate_signature,omitempty"`
 	RefreshReason      string `json:"refresh_reason,omitempty"`
+	BestMaxAgeDays     int    `json:"best_max_age_days,omitempty"`
+	PredictFromBestEnd bool   `json:"predict_from_best_val_end,omitempty"`
+	ChunkUntilLatest   bool   `json:"chunk_until_latest,omitempty"`
 }
 
 func (r InferenceRequest) RequestKey() (string, error) {
@@ -122,6 +129,9 @@ func (r InferenceRequest) RequestKey() (string, error) {
 		CovariatePreset:    covariatePreset,
 		CovariateSignature: normalizedCovariateSignature(covariateConfig),
 		RefreshReason:      strings.TrimSpace(r.RefreshReason),
+		BestMaxAgeDays:     normalizeIntValue(r.BestMaxAgeDays, 0),
+		PredictFromBestEnd: normalizeBoolValue(r.PredictFromBestEnd, false),
+		ChunkUntilLatest:   normalizeBoolValue(r.ChunkUntilLatest, false),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

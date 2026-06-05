@@ -45,6 +45,7 @@ func (s *WatchlistService) Config() *config.Config {
 var ErrSymbolNotFound = errors.New("symbol not found")
 
 const mtfBestStaleRefreshAfter = 180 * 24 * time.Hour
+const mtfPredictOnceBestMaxAgeDays = 180
 
 var ErrDuplicateSymbol = errors.New("duplicate symbol")
 
@@ -208,6 +209,24 @@ func inferLookupStockTypes(symbol string) []int {
 	return []int{1, 2}
 }
 
+func canonicalWatchlistSymbol(symbol string, stockType int) string {
+	lower := strings.ToLower(strings.TrimSpace(symbol))
+	code := normalizeMarketQuoteCode(lower)
+	if code == "" || !isDigitsOnly(code) {
+		return lower
+	}
+	if stockType == 2 {
+		if strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16") || strings.HasPrefix(code, "18") {
+			return "sz" + code
+		}
+		return "sh" + code
+	}
+	if strings.HasPrefix(code, "6") {
+		return "sh" + code
+	}
+	return "sz" + code
+}
+
 func (s *WatchlistService) lookupDisplayName(symbol string) string {
 	for _, stockType := range inferLookupStockTypes(symbol) {
 		name, err := s.LookupStockName(symbol, stockType)
@@ -243,7 +262,7 @@ func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlist
 	}
 
 	var name sql.NullString
-	symLower := strings.ToLower(req.Symbol)
+	symLower := canonicalWatchlistSymbol(req.Symbol, stockType)
 
 	var exists bool
 	if err := s.db.Conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_watchlist WHERE user_id = $1 AND symbol = $2)`, userID, symLower).Scan(&exists); err != nil {
@@ -1163,7 +1182,43 @@ func (s *WatchlistService) triggerStaleMTFBestRefresh(item models.MTFBestPredict
 	return err
 }
 
+func (s *WatchlistService) applyPredictOnceBestContinuation(req *models.MTFPredictRequest) {
+	if s == nil || s.db == nil || req == nil {
+		return
+	}
+	predictFromBestEnd := true
+	if req.PredictFromBestEnd != nil {
+		predictFromBestEnd = *req.PredictFromBestEnd
+	}
+	if !predictFromBestEnd || (req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "") {
+		return
+	}
+	horizonLen := intValueOrDefault(req.HorizonLen, 7)
+	contextLen := intValueOrDefault(req.ContextLen, 2048)
+	keys, err := s.GetMTFBestUniqueKeysByConfig(req.StockCode, horizonLen, contextLen, "")
+	if err != nil || keys == nil {
+		return
+	}
+	var uniqueKey string
+	switch normalizeTrainPredictionType(req.PredictionType) {
+	case "mtf-pro":
+		uniqueKey = strings.TrimSpace(keys.MTFProUniqueKey)
+	default:
+		uniqueKey = strings.TrimSpace(keys.MTFLiteUniqueKey)
+	}
+	if uniqueKey == "" {
+		return
+	}
+	best, err := s.GetMTFBestByUniqueKey(uniqueKey)
+	if err != nil || best == nil || best.ValEndDate.IsZero() {
+		return
+	}
+	startDate := best.ValEndDate.Format("2006-01-02")
+	req.StartDate = &startDate
+}
+
 func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) (int, map[string]interface{}, error) {
+	s.applyPredictOnceBestContinuation(req)
 	payload := map[string]interface{}{
 		"stock_code": req.StockCode,
 	}
@@ -1175,6 +1230,12 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	}
 	if req.Years != nil {
 		payload["years"] = *req.Years
+	}
+	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
+		payload["start_date"] = strings.TrimSpace(*req.StartDate)
+	}
+	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
+		payload["end_date"] = strings.TrimSpace(*req.EndDate)
 	}
 	if strings.TrimSpace(req.PredictionType) != "" {
 		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)
@@ -1194,6 +1255,21 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	if req.ForceRequeue != nil {
 		payload["force_requeue"] = *req.ForceRequeue
 	}
+	bestMaxAgeDays := mtfPredictOnceBestMaxAgeDays
+	if req.BestMaxAgeDays != nil && *req.BestMaxAgeDays > 0 {
+		bestMaxAgeDays = *req.BestMaxAgeDays
+	}
+	payload["best_max_age_days"] = bestMaxAgeDays
+	predictFromBestEnd := true
+	if req.PredictFromBestEnd != nil {
+		predictFromBestEnd = *req.PredictFromBestEnd
+	}
+	payload["predict_from_best_val_end"] = predictFromBestEnd
+	chunkUntilLatest := true
+	if req.ChunkUntilLatest != nil {
+		chunkUntilLatest = *req.ChunkUntilLatest
+	}
+	payload["chunk_until_latest"] = chunkUntilLatest
 	if req.CovariatePreset != nil && strings.TrimSpace(*req.CovariatePreset) != "" {
 		payload["covariate_preset"] = strings.TrimSpace(*req.CovariatePreset)
 	}

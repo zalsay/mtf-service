@@ -7,9 +7,9 @@ type AdminGatewayBackendStatus struct {
 	Capacity          int    `json:"capacity"`
 	InFlight          int    `json:"in_flight"`
 	Available         int    `json:"available"`
-	SupportsCov       bool   `json:"supports_cov,omitempty"`
+	SupportsMTFPro    bool   `json:"supports_mtf_pro,omitempty"`
 	SupportsDirectCov bool   `json:"supports_direct_cov,omitempty"`
-	SupportsNonCov    bool   `json:"supports_non_cov,omitempty"`
+	SupportsMTFLite   bool   `json:"supports_mtf_lite,omitempty"`
 	SupportsUZI       bool   `json:"supports_uzi,omitempty"`
 }
 

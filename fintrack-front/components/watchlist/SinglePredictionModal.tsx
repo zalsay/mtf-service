@@ -11,7 +11,7 @@ import {
     mtfAPI,
 } from '../../services/apiService';
 import type { PredictionChartData, PublicPredictionItem } from '../../types';
-import { resolvePublicPredictionItems } from '../../utils/predictionUtils';
+import { isMTFProPredictionItem, resolvePublicPredictionItems } from '../../utils/predictionUtils';
 
 interface SinglePredictionModalProps {
     isOpen: boolean;
@@ -124,15 +124,8 @@ const normalizePredictionSymbol = (value: string): string => {
 
 const normalizeOptionalText = (value: unknown): string => String(value || '').trim().toLowerCase();
 
-const isCovPredictionItem = (item?: PublicPredictionItem | null): boolean => {
-    if (!item) {
-        return false;
-    }
-    const predictionType = normalizeOptionalText(item.best.prediction_type);
-    if (predictionType) {
-        return predictionType === 'mtf-pro';
-    }
-    return String(item.best.unique_key || '').includes('_mtf-pro') || String(item.best.unique_key || '').includes('_mtf_pro');
+const isMTFProPredictionItemLocal = (item?: PublicPredictionItem | null): boolean => {
+    return isMTFProPredictionItem(item);
 };
 
 const parseChunkDateTime = (value: unknown): number => {
@@ -218,8 +211,8 @@ const pickHistoricalBestItem = (
 
     for (const resolved of resolvedItems) {
         const candidate = predictionType === 'mtf-pro'
-            ? (resolved.pro || (isCovPredictionItem(resolved.primary) ? resolved.primary : undefined))
-            : (isCovPredictionItem(resolved.primary) ? undefined : resolved.primary);
+            ? (resolved.pro || (isMTFProPredictionItemLocal(resolved.primary) ? resolved.primary : undefined))
+            : (isMTFProPredictionItemLocal(resolved.primary) ? undefined : resolved.primary);
         if (!candidate) {
             continue;
         }

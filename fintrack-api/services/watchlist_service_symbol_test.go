@@ -119,6 +119,31 @@ func TestInferLookupStockTypes(t *testing.T) {
 	}
 }
 
+func TestCanonicalWatchlistSymbol(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		stockType int
+		want      string
+	}{
+		{name: "sh stock from plain code", input: "600246", stockType: 1, want: "sh600246"},
+		{name: "sh stock from uppercase prefixed code", input: "SH600246", stockType: 1, want: "sh600246"},
+		{name: "sz stock from plain code", input: "000001", stockType: 1, want: "sz000001"},
+		{name: "sh etf from plain code", input: "510300", stockType: 2, want: "sh510300"},
+		{name: "sz etf from plain code", input: "159919", stockType: 2, want: "sz159919"},
+		{name: "non digit fallback", input: " BABA ", stockType: 1, want: "baba"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := canonicalWatchlistSymbol(tc.input, tc.stockType)
+			if got != tc.want {
+				t.Fatalf("canonicalWatchlistSymbol(%q, %d) = %q, want %q", tc.input, tc.stockType, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLatestPreviousTradingQuoteFromKlinesSkipsCurrentDate(t *testing.T) {
 	loc := time.FixedZone("CST", 8*60*60)
 	now := time.Date(2026, 4, 30, 9, 0, 0, 0, loc)

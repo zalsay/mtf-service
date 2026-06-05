@@ -16,7 +16,9 @@ interface DashboardProps {
 }
 
 const PREDICTION_HORIZONS = [7, 14, 28] as const;
+const PREDICTION_CONTEXTS = [512, 1024, 2048] as const;
 type PredictionHorizon = typeof PREDICTION_HORIZONS[number];
+type PredictionContext = typeof PREDICTION_CONTEXTS[number];
 
 const FilterChip: React.FC<{ label: string; active?: boolean; onClick: () => void; }> = ({ label, active, onClick }) => (
     <div
@@ -52,6 +54,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
     const [activeFilter, setActiveFilter] = useState('All');
     const [activeAssetType, setActiveAssetType] = useState<1 | 2>(1);
     const [selectedHorizonBySymbol, setSelectedHorizonBySymbol] = useState<Record<string, PredictionHorizon>>({});
+    const [selectedContextBySymbol, setSelectedContextBySymbol] = useState<Record<string, PredictionContext>>({});
     const [isModalOpen, setIsModalOpen] = useState(false);
     const filters = ['All', 'Highest Confidence', 'Potential Growth', 'Bullish', 'Bearish'];
     
@@ -166,9 +169,16 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
     const pickDefaultHorizon = (horizons: PredictionHorizon[]): PredictionHorizon => (
         horizons.includes(7) ? 7 : (horizons[0] || 7)
     );
+    const pickDefaultContext = (contexts: PredictionContext[]): PredictionContext => (
+        contexts.includes(2048) ? 2048 : (contexts.includes(1024) ? 1024 : (contexts[0] || 512))
+    );
     const groupedStocks = Array.from(displayStocks.reduce((groups, stock) => {
         const horizonLen = stock.prediction?.horizonLen;
+        const contextLen = stock.prediction?.contextLen;
         if (!horizonLen || !PREDICTION_HORIZONS.includes(horizonLen as PredictionHorizon)) {
+            return groups;
+        }
+        if (!contextLen || !PREDICTION_CONTEXTS.includes(contextLen as PredictionContext)) {
             return groups;
         }
         const key = stock.symbol;
@@ -180,6 +190,8 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
         const sortedItems = [...items].sort((left, right) => (
             PREDICTION_HORIZONS.indexOf((left.prediction?.horizonLen || 7) as PredictionHorizon)
             - PREDICTION_HORIZONS.indexOf((right.prediction?.horizonLen || 7) as PredictionHorizon)
+            || PREDICTION_CONTEXTS.indexOf((left.prediction?.contextLen || 512) as PredictionContext)
+            - PREDICTION_CONTEXTS.indexOf((right.prediction?.contextLen || 512) as PredictionContext)
         ));
         const availableHorizons = Array.from(new Set(sortedItems
             .map(item => item.prediction?.horizonLen)
@@ -188,13 +200,25 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
         const activeHorizon = preferredHorizon && availableHorizons.includes(preferredHorizon)
             ? preferredHorizon
             : pickDefaultHorizon(availableHorizons);
-        const activeStock = sortedItems.find(item => item.prediction?.horizonLen === activeHorizon) || sortedItems[0];
+        const contextItems = sortedItems.filter(item => item.prediction?.horizonLen === activeHorizon);
+        const availableContexts = Array.from(new Set(contextItems
+            .map(item => item.prediction?.contextLen)
+            .filter((value): value is PredictionContext => PREDICTION_CONTEXTS.includes(value as PredictionContext))));
+        const preferredContext = selectedContextBySymbol[symbol];
+        const activeContext = preferredContext && availableContexts.includes(preferredContext)
+            ? preferredContext
+            : pickDefaultContext(availableContexts);
+        const activeStock = contextItems.find(item => item.prediction?.contextLen === activeContext)
+            || contextItems[0]
+            || sortedItems[0];
 
         return {
             symbol,
             stock: activeStock,
             activeHorizon,
+            activeContext,
             availableHorizons,
+            availableContexts,
         };
     });
 
@@ -343,6 +367,17 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
                                 setSelectedHorizonBySymbol(current => ({
                                     ...current,
                                     [group.symbol]: value as PredictionHorizon,
+                                }));
+                            }}
+                            contextOptions={PREDICTION_CONTEXTS.map(value => ({
+                                value,
+                                available: group.availableContexts.includes(value),
+                            }))}
+                            selectedContext={group.activeContext}
+                            onContextChange={value => {
+                                setSelectedContextBySymbol(current => ({
+                                    ...current,
+                                    [group.symbol]: value as PredictionContext,
                                 }));
                             }}
                         />
