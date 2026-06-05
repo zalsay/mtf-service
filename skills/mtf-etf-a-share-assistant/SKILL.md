@@ -11,6 +11,12 @@ description: "当需要作为 MTF A 股 ETF 助手处理 ETF 筛选、热门 ETF
 
 ## 核心流程
 
+主要参考：
+
+- 当前 API 能力：`docs/mtf/fintrack-api-capabilities.md`
+- Open API 合约：`docs/mtf/fintrack-open-api-contract.md`
+- 生产 Open API base URL：`https://go-api.meetlife.com.cn:9001`
+
 1. **明确目标**
    - ETF 范围：热门 ETF 列表、用户提供的代码、自选股、行业/主题，或所有可访问的 ETF 预测。
    - 目标：短线筛选、MTF 预测、策略/回测、自选股更新，或可用于报告的解释。
@@ -51,6 +57,33 @@ description: "当需要作为 MTF A 股 ETF 助手处理 ETF 筛选、热门 ETF
 ## API 使用
 
 外部 skill 调用方和服务间访问只能使用 `/api/open/v1` 下的 API key 鉴权 Open API。不得从本 skill 调用浏览器/JWT 路由。
+
+默认 Open API base URL：
+
+```text
+https://go-api.meetlife.com.cn:9001
+```
+
+当外部调用方需要 MTF Open API key 时，使用本 skill 绑定脚本：
+
+```bash
+# 从 `mtf-service` 仓库根目录执行。
+MTF_API_USERNAME="<username>" \
+MTF_API_PASSWORD="<password>" \
+skills/mtf-etf-a-share-assistant/scripts/get_open_api_key.sh
+```
+
+脚本会调用 `POST /api/open/v1/auth/api-key`，把 `MTF_API_BASE_URL` 和 `FINTRACK_OPEN_API_KEY` 写入 `.env.open-api`，再把 raw `api_key` 打印一次。`.env.open-api` 已加入 gitignore。非默认环境可设置 `MTF_API_BASE_URL` 或传 `--base-url`；只需要 stdout 时传 `--no-write-env`。
+
+调用文档中的 Open API 时，优先使用 Python 客户端：
+
+```bash
+# 自动读取 `.env.open-api` 中的 FINTRACK_OPEN_API_KEY。
+skills/mtf-etf-a-share-assistant/scripts/call_open_api.py etf-hot
+skills/mtf-etf-a-share-assistant/scripts/call_open_api.py etf-quotes 510300 159919
+skills/mtf-etf-a-share-assistant/scripts/call_open_api.py mtf-best --stock-type 2 --include-validation true
+skills/mtf-etf-a-share-assistant/scripts/call_open_api.py mtf-predict-once --stock-code 510300 --stock-type 2 --prediction-type mtf-lite --horizon-len 7 --context-len 256 --prefer-cache
+```
 
 外部 skill 预期访问方式：
 
