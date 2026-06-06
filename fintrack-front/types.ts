@@ -55,7 +55,6 @@ export interface MTFBest {
   mtf_lite_unique_key?: string;
   mtf_pro_unique_key?: string;
   covariate_signature?: string;
-  covariate_config?: string | Record<string, unknown> | null;
   covariate_analysis?: string | Record<string, unknown> | null;
   is_public: number;
   short_name?: string;

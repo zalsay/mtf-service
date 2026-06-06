@@ -34,6 +34,8 @@ type postgresHandlerDirectPredictionResponse struct {
 	Error   string                 `json:"error"`
 }
 
+const directPredictionCacheDateLayout = "2006-01-02"
+
 func NewWatchlistService(db *database.DB, cfg *config.Config) *WatchlistService {
 	return &WatchlistService{db: db, config: cfg}
 }
@@ -1322,9 +1324,6 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	query.Set("horizon_len", strconv.Itoa(horizonLen))
 	query.Set("context_len", strconv.Itoa(contextLen))
 	query.Set("prediction_type", normalizeTrainPredictionType(req.PredictionType))
-	if signature := strings.TrimSpace(req.CovariateSignature); signature != "" {
-		query.Set("covariate_signature", signature)
-	}
 	requestURL := fmt.Sprintf("%s/api/v1/save-predictions/mtf-direct/by-request?%s", baseURL, query.Encode())
 
 	httpReq, err := http.NewRequest(http.MethodGet, requestURL, nil)
@@ -1351,12 +1350,7 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 		return resp.StatusCode, nil, fmt.Errorf("decode postgres direct prediction cache response: %v", err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return http.StatusNotFound, map[string]interface{}{
-			"success":    false,
-			"stock_code": stockCode,
-			"message":    "未找到单次预测缓存",
-			"error":      "prediction cache not found",
-		}, nil
+		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := strings.TrimSpace(decoded.Error)
@@ -1373,24 +1367,99 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 		}, nil
 	}
 	if decoded.Data == nil {
-		return http.StatusNotFound, map[string]interface{}{
-			"success":    false,
-			"stock_code": stockCode,
-			"message":    "未找到单次预测缓存",
-			"error":      "prediction cache not found",
-		}, nil
+		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
 	}
-	decoded.Data["cache_hit"] = true
+	if !isDirectPredictionCacheFresh(decoded.Data, time.Now().UTC()) {
+		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "单次预测缓存已过期", "prediction cache stale"), nil
+	}
+	data := slimDirectPredictionCacheData(decoded.Data)
 	body := map[string]interface{}{
 		"success":    true,
 		"stock_code": stockCode,
 		"message":    "单次预测缓存命中",
-		"data":       decoded.Data,
+		"data":       data,
 	}
-	if gpuID := strings.TrimSpace(fmt.Sprint(decoded.Data["gpu_id"])); gpuID != "" && gpuID != "<nil>" {
+	if gpuID := strings.TrimSpace(fmt.Sprint(data["gpu_id"])); gpuID != "" && gpuID != "<nil>" {
 		body["gpu_id"] = gpuID
 	}
 	return http.StatusOK, body, nil
+}
+
+func directPredictionCacheNotFoundBody(stockCode, message, errorCode string) map[string]interface{} {
+	return map[string]interface{}{
+		"success":    false,
+		"stock_code": stockCode,
+		"message":    message,
+		"error":      errorCode,
+	}
+}
+
+func isDirectPredictionCacheFresh(data map[string]interface{}, now time.Time) bool {
+	lastDate, ok := latestDirectPredictionFutureDate(data["future_dates"])
+	if !ok {
+		return false
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return !lastDate.Before(today)
+}
+
+func latestDirectPredictionFutureDate(value interface{}) (time.Time, bool) {
+	var rawDates []interface{}
+	switch typed := value.(type) {
+	case []interface{}:
+		rawDates = typed
+	case []string:
+		rawDates = make([]interface{}, 0, len(typed))
+		for _, item := range typed {
+			rawDates = append(rawDates, item)
+		}
+	default:
+		return time.Time{}, false
+	}
+
+	var latest time.Time
+	for _, item := range rawDates {
+		dateText := strings.TrimSpace(fmt.Sprint(item))
+		if dateText == "" || dateText == "<nil>" {
+			continue
+		}
+		parsed, err := time.Parse(directPredictionCacheDateLayout, dateText)
+		if err != nil {
+			continue
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	if latest.IsZero() {
+		return time.Time{}, false
+	}
+	return latest, true
+}
+
+func slimDirectPredictionCacheData(data map[string]interface{}) map[string]interface{} {
+	allowedKeys := []string{
+		"stock_code",
+		"stock_type",
+		"prediction_type",
+		"context_len",
+		"horizon_len",
+		"request_end_date",
+		"latest_data_date",
+		"latest_close",
+		"future_dates",
+		"best_prediction_item",
+		"best_prediction_values",
+		"short_name",
+		"gpu_id",
+	}
+	slim := make(map[string]interface{}, len(allowedKeys))
+	for _, key := range allowedKeys {
+		if value, ok := data[key]; ok {
+			slim[key] = value
+		}
+	}
+	return slim
 }
 
 func (s *WatchlistService) GetMTFJobStatus(jobID string) (int, map[string]interface{}, error) {
@@ -1405,7 +1474,72 @@ func (s *WatchlistService) GetMTFJobStatus(jobID string) (int, map[string]interf
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
-	return resp.StatusCode, body, nil
+	return resp.StatusCode, slimMTFJobStatusBody(body), nil
+}
+
+func slimMTFJobStatusBody(body map[string]interface{}) map[string]interface{} {
+	allowedKeys := []string{
+		"job_id",
+		"status",
+		"stock_code",
+		"prediction_type",
+		"covariate_signature",
+		"current_stage",
+		"error",
+		"created_at",
+		"started_at",
+		"finished_at",
+		"queue_position",
+	}
+	slim := make(map[string]interface{}, len(allowedKeys)+1)
+	for _, key := range allowedKeys {
+		value, ok := body[key]
+		if !ok || isEmptyJobStatusValue(value) {
+			continue
+		}
+		slim[key] = value
+	}
+	if result, ok := slimMTFJobResult(body["result"]); ok {
+		slim["result"] = result
+	}
+	return slim
+}
+
+func isEmptyJobStatusValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	default:
+		return false
+	}
+}
+
+func slimMTFJobResult(value interface{}) (map[string]interface{}, bool) {
+	result, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	allowedKeys := []string{
+		"success",
+		"message",
+		"stock_code",
+		"gpu_id",
+		"error",
+	}
+	slim := make(map[string]interface{}, len(allowedKeys)+1)
+	for _, key := range allowedKeys {
+		item, exists := result[key]
+		if !exists || isEmptyJobStatusValue(item) {
+			continue
+		}
+		slim[key] = item
+	}
+	if data, ok := result["data"].(map[string]interface{}); ok {
+		slim["data"] = slimDirectPredictionCacheData(data)
+	}
+	return slim, len(slim) > 0
 }
 
 // 保存MTF最佳分位预测结果到PG（UPSERT by unique_key）

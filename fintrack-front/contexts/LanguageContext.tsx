@@ -177,6 +177,7 @@ const translations = {
     'singlePrediction.errorMissingJob': 'Job accepted but job ID is missing.',
     'singlePrediction.errorMissingResult': 'Prediction completed but result payload is missing.',
     'singlePrediction.errorTimeout': 'Prediction timed out while waiting for completion.',
+    'singlePrediction.errorMissingBest': 'No historical best model exists for this model and parameter set. Train MTF first.',
     
     // Pricing
     'pricing.title': 'Unlock Premium Features',
@@ -510,6 +511,7 @@ const translations = {
     'singlePrediction.errorMissingJob': '任务已提交，但未返回任务 ID。',
     'singlePrediction.errorMissingResult': '任务已完成，但结果载荷缺失。',
     'singlePrediction.errorTimeout': '等待预测结果超时。',
+    'singlePrediction.errorMissingBest': '当前模型和参数组合没有历史 best，请先训练 MTF 模型。',
     
     // Pricing
     'pricing.title': '解锁高级功能',

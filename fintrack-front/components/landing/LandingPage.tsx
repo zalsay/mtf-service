@@ -20,7 +20,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onRegister, onDemo }
                     </div>
                     <div className="flex flex-col">
                         <span className="text-l font-bold text-white tracking-tight">MeetLife AI</span>
-                        <span className="text-sm text-white/80 tracking-tight">MTF v1.5</span>
+                        <span className="text-sm text-white/80 tracking-tight">MTF v2.5</span>
                     </div>
                 </div>
                 <div className="flex gap-4">

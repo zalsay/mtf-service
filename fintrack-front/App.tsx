@@ -16,7 +16,7 @@ import { View, StockData } from './types';
 import { getStockPredictions } from './services/geminiService';
 import { INITIAL_STOCKS } from './constants';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
-import { authAPI } from './services/apiService';
+import { authAPI, clearAuthToken } from './services/apiService';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const AppContent: React.FC = () => {
@@ -48,7 +48,7 @@ const AppContent: React.FC = () => {
                     setIsAdmin(Boolean(profile.is_admin));
                     setIsAuthenticated(true);
                 } catch {
-                    localStorage.removeItem('authToken');
+                    clearAuthToken();
                     setIsAdmin(false);
                     setIsAuthenticated(false);
                 }
@@ -59,9 +59,9 @@ const AppContent: React.FC = () => {
     }, []);
 
     const handleAuthError = useCallback(() => {
+        clearAuthToken();
         setAuthRedirecting(true);
         setTimeout(() => {
-            localStorage.removeItem('authToken');
             setIsAuthenticated(false);
             setIsAdmin(false);
             setIsDemoMode(false);
@@ -128,7 +128,7 @@ const AppContent: React.FC = () => {
         } catch (error) {
             console.error('Logout error:', error);
         } finally {
-            localStorage.removeItem('authToken');  // 修复：使用正确的 key
+            clearAuthToken();
             setIsAuthenticated(false);
             setIsAdmin(false);
             setIsDemoMode(false); // Exit demo mode on logout

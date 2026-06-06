@@ -456,8 +456,9 @@ export const setAuthToken = (token: string) => {
 
 // 获取认证token
 export const getAuthToken = (): string | null => {
-  if (!authToken) {
-    authToken = localStorage.getItem('authToken');
+  const storedToken = localStorage.getItem('authToken');
+  if (storedToken !== authToken) {
+    authToken = storedToken;
   }
   return authToken;
 };
@@ -481,6 +482,26 @@ const apiRequest = async (endpoint: string, options: RequestInit = {}): Promise<
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || errorData.error || `HTTP error! status: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+const publicAPIRequest = async (endpoint: string, options: RequestInit = {}): Promise<any> => {
+  const url = buildAPIURL(endpoint);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string>),
+  };
 
   const response = await fetch(url, {
     ...options,
@@ -849,7 +870,7 @@ export const authAPI = {
 
   // 用户登录
   login: async (email: string, password: string): Promise<AuthResponse> => {
-    const response = await apiRequest('/auth/login', {
+    const response = await publicAPIRequest('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     });
@@ -1102,8 +1123,7 @@ export interface DirectPredictionResult {
   future_dates: string[];
   best_prediction_item?: string | null;
   best_prediction_values?: number[] | null;
-  predictions: Record<string, number[]>;
-  cache_hit?: boolean;
+  predictions?: Record<string, number[]>;
 }
 
 export interface MTFPredictOnceRequest {
@@ -1118,8 +1138,6 @@ export interface MTFPredictOnceRequest {
   force_enqueue?: boolean;
   covariate_preset?: string;
   covariate_signature?: string;
-  covariate_config?: Record<string, unknown> | boolean | null;
-  covariates?: Record<string, unknown> | boolean | null;
 }
 
 export interface MTFPredictBestRequest {
@@ -1132,8 +1150,6 @@ export interface MTFPredictBestRequest {
   force_enqueue?: boolean;
   covariate_preset?: string;
   covariate_signature?: string;
-  covariate_config?: Record<string, unknown> | boolean | null;
-  covariates?: Record<string, unknown> | boolean | null;
 }
 
 export interface MTFPredictAcceptedResponse {
@@ -1210,18 +1226,8 @@ export const mtfAPI = {
     });
   },
   getPredictOnceCached: async (params: MTFPredictOnceRequest): Promise<MTFPredictOnceCachedResponse | null> => {
-    const url = buildAPIURL('/mtf/predict-once/cached');
-    const token = getAuthToken();
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-
-    const response = await fetch(url, {
+    const response = await apiFetch('/mtf/predict-once/cached', {
       method: 'POST',
-      headers,
       body: JSON.stringify(params),
     });
 

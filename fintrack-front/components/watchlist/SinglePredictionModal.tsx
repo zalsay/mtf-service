@@ -128,6 +128,34 @@ const isMTFProPredictionItemLocal = (item?: PublicPredictionItem | null): boolea
     return isMTFProPredictionItem(item);
 };
 
+const doesHistoricalBestMatchSelection = (
+    candidate: PublicPredictionItem | null | undefined,
+    symbol: string,
+    predictionType: 'mtf-lite' | 'mtf-pro',
+    contextLen: number,
+    horizonLen: number,
+    mtfVersion: string,
+): boolean => {
+    if (!candidate) {
+        return false;
+    }
+    if (normalizePredictionSymbol(candidate.best.symbol) !== normalizePredictionSymbol(symbol)) {
+        return false;
+    }
+    if (Number(candidate.best.context_len || 0) !== contextLen) {
+        return false;
+    }
+    if (Number(candidate.best.horizon_len || 0) !== horizonLen) {
+        return false;
+    }
+    if (String(candidate.best.mtf_version || '').trim() !== mtfVersion) {
+        return false;
+    }
+    return predictionType === 'mtf-pro'
+        ? isMTFProPredictionItemLocal(candidate)
+        : !isMTFProPredictionItemLocal(candidate);
+};
+
 const parseChunkDateTime = (value: unknown): number => {
     const raw = String(value || '').trim();
     if (!raw) {
@@ -216,16 +244,7 @@ const pickHistoricalBestItem = (
         if (!candidate) {
             continue;
         }
-        if (normalizePredictionSymbol(candidate.best.symbol) !== normalizedSymbol) {
-            continue;
-        }
-        if (Number(candidate.best.context_len || 0) !== contextLen) {
-            continue;
-        }
-        if (Number(candidate.best.horizon_len || 0) !== horizonLen) {
-            continue;
-        }
-        if (String(candidate.best.mtf_version || '').trim() !== mtfVersion) {
+        if (!doesHistoricalBestMatchSelection(candidate, normalizedSymbol, predictionType, contextLen, horizonLen, mtfVersion)) {
             continue;
         }
         return candidate;
@@ -413,7 +432,15 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     const effectivePredictionType = predictionType || selectedPredictionType;
     const shouldLookupCached = enableCachedLookup ?? mode === 'standalone';
     const effectiveMTFVersion = mtfVersion || DEFAULT_MTF_VERSION;
-    const effectiveHistoricalBestItem = historicalBestItem || fetchedHistoricalBestItem;
+    const matchingHistoricalBestItem = doesHistoricalBestMatchSelection(
+        historicalBestItem,
+        symbol,
+        effectivePredictionType,
+        contextLen,
+        horizonLen,
+        effectiveMTFVersion,
+    ) ? historicalBestItem : null;
+    const effectiveHistoricalBestItem = matchingHistoricalBestItem || fetchedHistoricalBestItem;
     const effectiveCovariateSignature = effectivePredictionType === 'mtf-pro'
         ? String(covariateSignature || effectiveHistoricalBestItem?.best.covariate_signature || '').trim()
         : '';
@@ -442,10 +469,6 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             ? {
                 covariate_preset: 'market_cov_v1',
                 ...(effectiveCovariateSignature ? { covariate_signature: effectiveCovariateSignature } : {}),
-                covariate_config: {
-                    enabled: true,
-                    xreg_mode: 'mtf + xreg',
-                },
             }
             : {}),
     };
@@ -460,7 +483,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             effectiveCovariateSignature,
         ].join('|')
         : '';
-    const historicalLookupKey = isOpen && item && !historicalBestItem
+    const historicalLookupKey = isOpen && item && !matchingHistoricalBestItem
         ? [
             symbol,
             effectivePredictionType,
@@ -469,6 +492,14 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
             effectiveMTFVersion,
         ].join('|')
         : '';
+    const hasCompletedHistoricalLookup = Boolean(historicalLookupKey)
+        && checkedHistoricalLookupKey === historicalLookupKey;
+    const hasUsableHistoricalBest = Boolean(effectiveHistoricalBestItem)
+        && (effectivePredictionType !== 'mtf-pro' || Boolean(effectiveCovariateSignature));
+    const isMissingHistoricalBest = shouldLookupCached
+        && Boolean(item)
+        && !hasUsableHistoricalBest
+        && (!historicalLookupKey || hasCompletedHistoricalLookup);
     const hasReadonlyResult = Boolean(predictionResult) && shouldLookupCached;
     const activeJobSnapshot = jobStatus || acceptedJob;
     const activeJobProgressLabel = getJobProgressLabel(activeJobSnapshot, language);
@@ -477,9 +508,13 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         && !effectiveCovariateSignature
         && Boolean(historicalLookupKey)
         && checkedHistoricalLookupKey !== historicalLookupKey;
+    const isCheckingHistoricalBest = shouldLookupCached
+        && Boolean(historicalLookupKey)
+        && checkedHistoricalLookupKey !== historicalLookupKey;
     const shouldShowCheckingExisting = (
         isCheckingExisting
         || isAwaitingCovariateSignature
+        || isCheckingHistoricalBest
         || (Boolean(cacheLookupKey) && checkedLookupKey !== cacheLookupKey)
     ) && !predictionResult && !isSubmitting && !error;
 
@@ -518,7 +553,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     }, [isOpen, item?.id, mode, predictionType, initialPredictionType, initialHorizonLen, initialContextLen, mtfVersion]);
 
     useEffect(() => {
-        if (!isOpen || !item || historicalBestItem) {
+        if (!isOpen || !item || matchingHistoricalBestItem) {
             return;
         }
 
@@ -566,7 +601,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
         isOpen,
         item?.id,
         symbol,
-        historicalBestItem,
+        matchingHistoricalBestItem,
         effectivePredictionType,
         contextLen,
         horizonLen,
@@ -610,10 +645,6 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                 ? {
                     covariate_preset: 'market_cov_v1',
                     ...(effectiveCovariateSignature ? { covariate_signature: effectiveCovariateSignature } : {}),
-                    covariate_config: {
-                        enabled: true,
-                        xreg_mode: 'mtf + xreg',
-                    },
                 }
                 : {}),
         };
@@ -713,6 +744,13 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
 
     const handlePredict = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (shouldShowCheckingExisting) {
+            return;
+        }
+        if (isMissingHistoricalBest) {
+            setError(t('singlePrediction.errorMissingBest'));
+            return;
+        }
         requestSeqRef.current += 1;
         const requestSeq = requestSeqRef.current;
 
@@ -801,9 +839,11 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                                                 type="button"
                                                 onClick={() => {
                                                     setCheckedLookupKey(null);
+                                                    setError(null);
+                                                    setPredictionResult(null);
                                                     setSelectedPredictionType(option);
                                                 }}
-                                                disabled={isSubmitting || Boolean(predictionType)}
+                                                disabled={isSubmitting}
                                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                                                     isActive
                                                         ? activeClass
@@ -829,6 +869,8 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                                         type="button"
                                         onClick={() => {
                                             setCheckedLookupKey(null);
+                                            setError(null);
+                                            setPredictionResult(null);
                                             setHorizonLen(option);
                                         }}
                                         disabled={isSubmitting}
@@ -853,6 +895,8 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                                         type="button"
                                         onClick={() => {
                                             setCheckedLookupKey(null);
+                                            setError(null);
+                                            setPredictionResult(null);
                                             setContextLen(option);
                                         }}
                                         disabled={isSubmitting}
@@ -871,7 +915,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                         {!hasReadonlyResult && (
                             <button
                                 type="submit"
-                                disabled={isSubmitting || shouldShowCheckingExisting}
+                                disabled={isSubmitting || shouldShowCheckingExisting || isMissingHistoricalBest}
                                 className="h-11 px-5 rounded-lg bg-primary text-black text-sm font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                             >
                                 {isCheckingExisting || shouldShowCheckingExisting ? (
@@ -894,6 +938,12 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                     {error && (
                         <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-300">
                             {error}
+                        </div>
+                    )}
+
+                    {!error && isMissingHistoricalBest && (
+                        <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-4 text-sm text-amber-200">
+                            {t('singlePrediction.errorMissingBest')}
                         </div>
                     )}
 

@@ -458,8 +458,8 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 		if query.Has("mtf_version") {
 			t.Fatalf("query must not include mtf_version: %s", r.URL.RawQuery)
 		}
-		if query.Get("covariate_signature") != "sig123" {
-			t.Fatalf("covariate_signature query = %q, want sig123", query.Get("covariate_signature"))
+		if query.Has("covariate_signature") {
+			t.Fatalf("query must not include covariate_signature: %s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -467,10 +467,18 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 			"message": "Success",
 			"data": {
 				"stock_code": "510050",
-				"future_dates": ["2026-01-01"],
+				"stock_type": 2,
+				"prediction_type": "mtf-pro",
+				"mtf_version": "2.5",
+				"context_len": 2048,
+				"horizon_len": 7,
+				"latest_data_date": "2026-06-05",
+				"future_dates": ["2026-06-05"],
 				"best_prediction_item": "mtf-0.5",
 				"best_prediction_values": [1.23],
 				"predictions": {"mtf-0.5": [1.23]},
+				"cache_hit": true,
+				"covariate_analysis": {"debug": true},
 				"covariate_signature": "sig123"
 			}
 		}`))
@@ -508,7 +516,148 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	if !ok {
 		t.Fatalf("data = %#v, want object", body["data"])
 	}
-	if data["cache_hit"] != true {
-		t.Fatalf("cache_hit = %#v, want true", data["cache_hit"])
+	if data["best_prediction_item"] != "mtf-0.5" {
+		t.Fatalf("best_prediction_item = %#v, want mtf-0.5", data["best_prediction_item"])
+	}
+	if _, exists := data["cache_hit"]; exists {
+		t.Fatalf("cache_hit must be omitted from public response: %#v", data["cache_hit"])
+	}
+	if _, exists := data["predictions"]; exists {
+		t.Fatalf("predictions must be omitted from cached response")
+	}
+	if _, exists := data["covariate_analysis"]; exists {
+		t.Fatalf("covariate_analysis must be omitted from cached response")
+	}
+	if _, exists := data["mtf_version"]; exists {
+		t.Fatalf("mtf_version must be omitted from cached response")
+	}
+	if _, exists := data["history_rows"]; exists {
+		t.Fatalf("history_rows must be omitted from cached response")
+	}
+	if _, exists := data["covariate_signature"]; exists {
+		t.Fatalf("covariate_signature must be omitted from cached response")
+	}
+}
+
+func TestGetMTFJobStatusReturnsSlimResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/jobs/job-test" {
+			t.Fatalf("path = %s, want /jobs/job-test", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"backend":"xpu",
+			"covariate_signature":"sig123",
+			"created_at":"2026-06-05T10:27:27Z",
+			"current_stage":"",
+			"error":"",
+			"finished_at":"2026-06-05T10:27:28Z",
+			"force_enqueue":true,
+			"job_id":"job-test",
+			"job_kind":"inference",
+			"prediction_type":"mtf-pro",
+			"request_key":"/internal/predict_once_sync:{}",
+			"result":{
+				"data":{
+					"stock_code":"300442",
+					"stock_type":1,
+					"prediction_type":"mtf-pro",
+					"mtf_version":"2.5",
+					"context_len":2048,
+					"horizon_len":7,
+					"latest_data_date":"2026-06-05",
+					"latest_close":78.17,
+					"future_dates":["2026-06-05"],
+					"best_prediction_item":"mtf-0.6",
+					"best_prediction_values":[81.45],
+					"cache_hit":true,
+					"covariate_analysis":{"debug":true},
+					"covariate_config":{"enabled":true},
+					"covariate_signature":"sig123",
+					"history_rows":2676,
+					"predictions":{"mtf-0.6":[81.45]},
+					"timesfm_version":"2.5",
+					"unique_key":"internal-key"
+				},
+				"gpu_id":"0",
+				"message":"单次预测完成",
+				"stock_code":"300442",
+				"success":true
+			},
+			"started_at":"2026-06-05T10:27:27Z",
+			"status":"succeeded",
+			"stock_code":"300442",
+			"target_path":"/internal/predict_once_sync",
+			"ticker":"300442",
+			"upstream_status":200
+		}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 2,
+		},
+	})
+
+	status, body, err := service.GetMTFJobStatus("job-test")
+	if err != nil {
+		t.Fatalf("GetMTFJobStatus returned error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if _, exists := body["request_key"]; exists {
+		t.Fatalf("request_key must be omitted from job response")
+	}
+	if _, exists := body["target_path"]; exists {
+		t.Fatalf("target_path must be omitted from job response")
+	}
+	if _, exists := body["backend"]; exists {
+		t.Fatalf("backend must be omitted from job response")
+	}
+	result, ok := body["result"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result = %#v, want object", body["result"])
+	}
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.data = %#v, want object", result["data"])
+	}
+	if data["best_prediction_item"] != "mtf-0.6" {
+		t.Fatalf("best_prediction_item = %#v, want mtf-0.6", data["best_prediction_item"])
+	}
+	for _, key := range []string{
+		"cache_hit",
+		"covariate_analysis",
+		"covariate_config",
+		"covariate_signature",
+		"history_rows",
+		"mtf_version",
+		"predictions",
+		"timesfm_version",
+		"unique_key",
+	} {
+		if _, exists := data[key]; exists {
+			t.Fatalf("%s must be omitted from job result data", key)
+		}
+	}
+}
+
+func TestDirectPredictionCacheFreshness(t *testing.T) {
+	staleData := map[string]interface{}{
+		"future_dates": []interface{}{"2026-06-01", "2026-06-02", "2026-06-03"},
+	}
+	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
+	if isDirectPredictionCacheFresh(staleData, now) {
+		t.Fatal("cache ending on 2026-06-03 must be stale on 2026-06-05")
+	}
+
+	freshData := map[string]interface{}{
+		"future_dates": []interface{}{"2026-06-05", "2026-06-08"},
+	}
+	if !isDirectPredictionCacheFresh(freshData, now) {
+		t.Fatal("cache covering 2026-06-05 must be fresh")
 	}
 }

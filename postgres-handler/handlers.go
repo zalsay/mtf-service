@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
 	"database/sql"
 	"encoding/json"
@@ -65,6 +66,79 @@ func normalizedPredictionType(value string) string {
 
 func predictionTypeUsesCovariates(value string) bool {
 	return normalizedPredictionType(value) == "mtf-pro"
+}
+
+func (h *DatabaseHandler) buildActualValuesForDates(ctx context.Context, symbol string, stockType int, startDateStr string, endDateStr string, dates []string) ([]float64, string, error) {
+	if len(dates) == 0 {
+		return nil, "", fmt.Errorf("dates are required")
+	}
+	if strings.TrimSpace(startDateStr) == "" {
+		startDateStr = dates[0]
+	}
+	if strings.TrimSpace(endDateStr) == "" {
+		endDateStr = dates[len(dates)-1]
+	}
+
+	records, _, provider, err := h.LoadTickflowHistory(ctx, TickflowHistoryRequest{
+		Symbol:    symbol,
+		StockType: stockType,
+		StartDate: startDateStr,
+		EndDate:   endDateStr,
+		Adjust:    "none",
+	})
+	if err == nil && len(records) > 0 {
+		closeByDate := make(map[string]float64, len(records))
+		for _, record := range records {
+			dateKey := strings.TrimSpace(record.DateStr)
+			if dateKey == "" {
+				dateKey = strings.TrimSpace(record.TradeDate)
+			}
+			if dateKey == "" && len(record.Datetime) >= len("2006-01-02") {
+				dateKey = record.Datetime[:len("2006-01-02")]
+			}
+			if dateKey != "" {
+				closeByDate[dateKey] = record.Close
+			}
+		}
+		values := make([]float64, 0, len(dates))
+		for _, date := range dates {
+			value, ok := closeByDate[date]
+			if !ok {
+				return nil, provider, fmt.Errorf("provider %s missing close for date %s", provider, date)
+			}
+			values = append(values, value)
+		}
+		return values, provider, nil
+	}
+
+	sd, parseStartErr := time.Parse("2006-01-02", startDateStr)
+	if parseStartErr != nil {
+		return nil, provider, fmt.Errorf("invalid start_date format (YYYY-MM-DD)")
+	}
+	ed, parseEndErr := time.Parse("2006-01-02", endDateStr)
+	if parseEndErr != nil {
+		return nil, provider, fmt.Errorf("invalid end_date format (YYYY-MM-DD)")
+	}
+	rows, stockDataErr := h.GetStockDataByDateRange(symbol, stockType, sd, ed)
+	if stockDataErr != nil {
+		if err != nil {
+			return nil, provider, fmt.Errorf("provider failed: %v; stock_data failed: %v", err, stockDataErr)
+		}
+		return nil, provider, fmt.Errorf("stock_data failed: %v", stockDataErr)
+	}
+	closeByDate := make(map[string]float64, len(rows))
+	for _, row := range rows {
+		closeByDate[row.Datetime.Format("2006-01-02")] = row.Close
+	}
+	values := make([]float64, 0, len(dates))
+	for _, date := range dates {
+		value, ok := closeByDate[date]
+		if !ok {
+			return nil, "stock_data", fmt.Errorf("stock_data missing close for date %s", date)
+		}
+		values = append(values, value)
+	}
+	return values, "stock_data", nil
 }
 
 func (h *DatabaseHandler) batchInsertMTFForecastHandler(c *gin.Context) {
@@ -389,6 +463,27 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 		return
 	}
 
+	var providerActual []float64
+	var providerActualSource string
+	var providerActualErr error
+	if len(req.Dates) > 0 && strings.TrimSpace(req.Symbol) != "" && req.StockType > 0 {
+		providerActual, providerActualSource, providerActualErr = h.buildActualValuesForDates(
+			c.Request.Context(),
+			req.Symbol,
+			req.StockType,
+			req.StartDate,
+			req.EndDate,
+			req.Dates,
+		)
+		if providerActualErr != nil {
+			slog.Error("failed to build actual_values from provider", "symbol", req.Symbol, "stock_type", req.StockType, "error", providerActualErr)
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("cannot build actual_values from provider: %v", providerActualErr)})
+			return
+		} else {
+			slog.Info("rebuilt actual_values from provider", "symbol", req.Symbol, "stock_type", req.StockType, "provider", providerActualSource, "count", len(providerActual))
+		}
+	}
+
 	// 如果存在，则只更新非空字段；否则执行插入（插入时必须提供所有 NOT NULL 字段）
 	if scanErr == nil {
 		// 动态构造 UPDATE 语句
@@ -416,8 +511,12 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 			setParts = append(setParts, fmt.Sprintf("predictions = $%d::jsonb", len(args)+1))
 			args = append(args, string(predsJSON))
 		}
-		// actual_values 允许为空：若提供则更新（包括空数组 []），若未提供则不动
-		if req.Actual != nil {
+		// 优先按 dates 使用当前行情 provider 重建 actual_values，避免上游或旧 stock_data 口径污染。
+		if providerActual != nil {
+			actualJSON, _ := json.Marshal(providerActual)
+			setParts = append(setParts, fmt.Sprintf("actual_values = $%d::jsonb", len(args)+1))
+			args = append(args, string(actualJSON))
+		} else if req.Actual != nil {
 			actualJSON, _ := json.Marshal(req.Actual)
 			setParts = append(setParts, fmt.Sprintf("actual_values = $%d::jsonb", len(args)+1))
 			args = append(args, string(actualJSON))
@@ -560,7 +659,10 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 	}
 	// actual_values 允许为空：当未提供或为 nil 时，严格按 HorizonLen 从 stock_data 补齐
 	var actualJSON string
-	if req.Actual != nil {
+	if providerActual != nil {
+		b, _ := json.Marshal(providerActual)
+		actualJSON = string(b)
+	} else if req.Actual != nil {
 		b, _ := json.Marshal(req.Actual)
 		actualJSON = string(b)
 	} else {

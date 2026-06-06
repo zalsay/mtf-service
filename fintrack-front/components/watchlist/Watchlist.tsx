@@ -1726,12 +1726,8 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                     item={singlePredictionItem}
                     mode={singlePredictionMode}
                     currentPrice={latestQuotes[getItemSymbol(singlePredictionItem)]?.latest_price ?? singlePredictionItem.current_price?.price}
-                    predictionType={singlePredictionMode === 'next_chunk' ? trainPredictionType : undefined}
                     initialPredictionType={trainPredictionType}
                     predictionTypeOptions={trainPolicy.predictionTypes}
-                    covariateSignature={singlePredictionMode === 'next_chunk'
-                        ? String(nextChunkBestItem?.best.covariate_signature || '').trim() || undefined
-                        : undefined}
                     initialContextLen={trainContextLen}
                     initialHorizonLen={trainHorizonLen}
                     contextOptions={trainPolicy.contextLens}
@@ -1740,7 +1736,6 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
                         ? String(nextChunkBestItem?.best.mtf_version || '').trim() || DEFAULT_MTF_VERSION
                         : undefined}
                     enableCachedLookup
-                    historicalBestItem={nextChunkBestItem}
                     onClose={closeSinglePredictionModal}
                     onAuthError={onAuthError}
                     onSubmittingChange={submitting => {

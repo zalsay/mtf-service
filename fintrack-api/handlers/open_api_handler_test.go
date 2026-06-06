@@ -199,7 +199,23 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 			t.Fatalf("stock_type = %q, want 2", r.URL.Query().Get("stock_type"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"message":"ok","data":{"prediction_id":"cached-1"}}`))
+		_, _ = w.Write([]byte(`{
+			"code":0,
+			"message":"ok",
+			"data":{
+				"stock_code":"510300",
+				"stock_type":2,
+				"prediction_type":"mtf-lite",
+				"context_len":256,
+				"horizon_len":7,
+				"latest_data_date":"2026-06-05",
+				"future_dates":["2026-06-05"],
+				"best_prediction_item":"mtf-0.5",
+				"best_prediction_values":[1.23],
+				"predictions":{"mtf-0.5":[1.23]},
+				"cache_hit":true
+			}
+		}`))
 	}))
 	defer postgres.Close()
 
@@ -232,8 +248,14 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	if gatewayCalled {
 		t.Fatal("expected cached response without calling gateway predict_once")
 	}
-	if !strings.Contains(rec.Body.String(), `"cache_hit":true`) {
-		t.Fatalf("expected cache_hit response, body=%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"best_prediction_item":"mtf-0.5"`) {
+		t.Fatalf("expected slim cached response, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"cache_hit"`) {
+		t.Fatalf("cache_hit must be omitted, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"predictions"`) {
+		t.Fatalf("predictions must be omitted, body=%s", rec.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
