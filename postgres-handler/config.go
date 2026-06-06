@@ -328,6 +328,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
         covariate_analysis JSONB,
         stock_name TEXT,
         stock_type INTEGER,
+        adjust_raw_chunks JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT fk_mtf_best FOREIGN KEY (unique_key)
@@ -352,6 +353,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
 	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS adjust_raw_chunks JSONB`).Error
 
 	createMTFBacktestsSQL := `
     CREATE TABLE IF NOT EXISTS mtf_backtests (

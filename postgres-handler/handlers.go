@@ -402,6 +402,7 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 		ActualChangePct    []float64              `json:"actual_change_percent"`
 		ChangeBaseValue    *float64               `json:"change_base_value"`
 		ChangeBaseDate     string                 `json:"change_base_date"`
+		AdjustRawChunks    json.RawMessage        `json:"adjust_raw_chunks"`
 		Dates              []string               `json:"dates"`
 		PredictionType     string                 `json:"prediction_type"`
 		CovariateConfig    map[string]interface{} `json:"covariate_config"`
@@ -597,6 +598,14 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 			setParts = append(setParts, fmt.Sprintf("change_base_date = $%d::date", len(args)+1))
 			args = append(args, req.ChangeBaseDate)
 		}
+		if req.StockType == 1 && len(req.AdjustRawChunks) > 0 {
+			if string(req.AdjustRawChunks) == "null" {
+				setParts = append(setParts, "adjust_raw_chunks = NULL")
+			} else {
+				setParts = append(setParts, fmt.Sprintf("adjust_raw_chunks = $%d::jsonb", len(args)+1))
+				args = append(args, string(req.AdjustRawChunks))
+			}
+		}
 		if req.Dates != nil && len(req.Dates) > 0 {
 			datesJSON, _ := json.Marshal(req.Dates)
 			setParts = append(setParts, fmt.Sprintf("dates = $%d::jsonb", len(args)+1))
@@ -734,19 +743,23 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 	if strings.TrimSpace(req.ChangeBaseDate) != "" {
 		changeBaseDateArg = req.ChangeBaseDate
 	}
+	var adjustRawChunksArg interface{}
+	if req.StockType == 1 && len(req.AdjustRawChunks) > 0 && string(req.AdjustRawChunks) != "null" {
+		adjustRawChunksArg = string(req.AdjustRawChunks)
+	}
 	if err := h.db.Exec(`
         INSERT INTO mtf_best_validation_chunks (
             unique_key, chunk_index, user_id, symbol, start_date, end_date,
             predictions, actual_values, predicted_change_percent, actual_change_percent, change_base_value, change_base_date, dates,
-            prediction_type, covariate_config, covariate_signature, covariate_analysis, stock_name, stock_type
+            prediction_type, covariate_config, covariate_signature, covariate_analysis, stock_name, stock_type, adjust_raw_chunks
         ) VALUES (
             $1, $2, $3, $4, $5::date, $6::date,
             $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12::date, $13::jsonb,
-            $14, $15::jsonb, $16, $17::jsonb, $18, $19
+            $14, $15::jsonb, $16, $17::jsonb, $18, $19, $20::jsonb
         )`,
 		req.UniqueKey, req.ChunkIndex, uidArg, req.Symbol, req.StartDate, req.EndDate,
 		string(predsJSON), actualJSON, predictedChangeJSON, actualChangeJSON, changeBaseValueArg, changeBaseDateArg, string(datesJSON),
-		predictionType, covConfigJSON, covSignature, covAnalysisJSON, req.StockName, req.StockType,
+		predictionType, covConfigJSON, covSignature, covAnalysisJSON, req.StockName, req.StockType, adjustRawChunksArg,
 	).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to insert mtf_best_validation_chunks: %v", err)})
 		return
@@ -923,7 +936,8 @@ func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
             COALESCE(covariate_signature, '') AS covariate_signature,
             COALESCE(covariate_analysis, '{}'::jsonb) AS covariate_analysis,
             COALESCE(stock_name, '') AS stock_name,
-            COALESCE(stock_type, 1) AS stock_type
+            COALESCE(stock_type, 1) AS stock_type,
+            COALESCE(adjust_raw_chunks, 'null'::jsonb) AS adjust_raw_chunks
         FROM mtf_best_validation_chunks
         WHERE unique_key = $1
         ORDER BY chunk_index DESC
@@ -948,9 +962,10 @@ func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
 		covAnalysisJSON  []byte
 		stockName        string
 		stockType        int
+		adjustRawJSON    []byte
 	)
 
-	if err := row.Scan(&uk, &chunkIndex, &startDate, &endDate, &symbol, &predsJSON, &actualJSON, &predChangeJSON, &actualChangeJSON, &changeBaseValue, &changeBaseDate, &datesJSON, &predictionType, &covConfigJSON, &covSignature, &covAnalysisJSON, &stockName, &stockType); err != nil {
+	if err := row.Scan(&uk, &chunkIndex, &startDate, &endDate, &symbol, &predsJSON, &actualJSON, &predChangeJSON, &actualChangeJSON, &changeBaseValue, &changeBaseDate, &datesJSON, &predictionType, &covConfigJSON, &covSignature, &covAnalysisJSON, &stockName, &stockType, &adjustRawJSON); err != nil {
 		if err == sql.ErrNoRows {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -966,6 +981,7 @@ func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
 	var dates []string
 	var covConfig map[string]interface{}
 	var covAnalysis map[string]interface{}
+	var adjustRawChunks interface{}
 	if err := json.Unmarshal(predsJSON, &preds); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal predictions"})
 		return
@@ -992,6 +1008,10 @@ func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
 	}
 	if err := json.Unmarshal(covAnalysisJSON, &covAnalysis); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal covariate_analysis"})
+		return
+	}
+	if err := json.Unmarshal(adjustRawJSON, &adjustRawChunks); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal adjust_raw_chunks"})
 		return
 	}
 
@@ -1023,6 +1043,7 @@ func (h *DatabaseHandler) getLatestMTFValChunkHandler(c *gin.Context) {
 		"covariate_analysis":  covAnalysis,
 		"stock_name":          stockName,
 		"stock_type":          stockType,
+		"adjust_raw_chunks":   adjustRawChunks,
 	}})
 }
 
@@ -1053,7 +1074,8 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
             COALESCE(covariate_signature, '') AS covariate_signature,
             COALESCE(covariate_analysis, '{}'::jsonb) AS covariate_analysis,
             COALESCE(stock_name, '') AS stock_name,
-            COALESCE(stock_type, 1) AS stock_type
+            COALESCE(stock_type, 1) AS stock_type,
+            COALESCE(adjust_raw_chunks, 'null'::jsonb) AS adjust_raw_chunks
         FROM mtf_best_validation_chunks
         WHERE unique_key = $1
         ORDER BY chunk_index ASC`, uniqueKey).Rows()
@@ -1081,6 +1103,7 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 		CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
 		StockName          string                 `json:"stock_name"`
 		StockType          int                    `json:"stock_type"`
+		AdjustRawChunks    interface{}            `json:"adjust_raw_chunks"`
 	}
 	list := make([]Item, 0, 64)
 	for rows.Next() {
@@ -1103,8 +1126,9 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 			covAnalysisJSON  []byte
 			stockName        string
 			stockType        int
+			adjustRawJSON    []byte
 		)
-		if err := rows.Scan(&uk, &chunkIndex, &startDate, &endDate, &symbol, &predsJSON, &actualJSON, &predChangeJSON, &actualChangeJSON, &changeBaseValue, &changeBaseDate, &datesJSON, &predictionType, &covConfigJSON, &covSignature, &covAnalysisJSON, &stockName, &stockType); err != nil {
+		if err := rows.Scan(&uk, &chunkIndex, &startDate, &endDate, &symbol, &predsJSON, &actualJSON, &predChangeJSON, &actualChangeJSON, &changeBaseValue, &changeBaseDate, &datesJSON, &predictionType, &covConfigJSON, &covSignature, &covAnalysisJSON, &stockName, &stockType, &adjustRawJSON); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -1115,6 +1139,7 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 		var dates []string
 		var covConfig map[string]interface{}
 		var covAnalysis map[string]interface{}
+		var adjustRawChunks interface{}
 		if err := json.Unmarshal(predsJSON, &preds); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal predictions"})
 			return
@@ -1143,6 +1168,10 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal covariate_analysis"})
 			return
 		}
+		if err := json.Unmarshal(adjustRawJSON, &adjustRawChunks); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal adjust_raw_chunks"})
+			return
+		}
 		item := Item{
 			UniqueKey:          uk,
 			ChunkIndex:         chunkIndex,
@@ -1159,6 +1188,7 @@ func (h *DatabaseHandler) getMTFValChunkListHandler(c *gin.Context) {
 			CovariateAnalysis:  covAnalysis,
 			StockName:          stockName,
 			StockType:          stockType,
+			AdjustRawChunks:    adjustRawChunks,
 		}
 		if changeBaseValue.Valid {
 			value := changeBaseValue.Float64

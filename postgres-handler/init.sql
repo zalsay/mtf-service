@@ -108,6 +108,7 @@ BEGIN
         EXECUTE 'ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT ''[]''::jsonb';
         EXECUTE 'ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION';
         EXECUTE 'ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date DATE';
+        EXECUTE 'ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS adjust_raw_chunks JSONB';
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'mtf_backtests') THEN
