@@ -917,6 +917,21 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	request.PredictionTypeValue = request.PredictionType()
 	normalized["prediction_type"] = request.PredictionTypeValue
 
+	if targetPath == "/internal/predict_once_sync" || targetPath == "/internal/predict_once_cached_sync" {
+		if _, exists := normalized["best_max_age_days"]; !exists {
+			normalized["best_max_age_days"] = 180
+			request.BestMaxAgeDays = 180
+		}
+		if _, exists := normalized["predict_from_best_val_end"]; !exists {
+			normalized["predict_from_best_val_end"] = true
+			request.PredictFromBestValEnd = true
+		}
+		if _, exists := normalized["chunk_until_latest"]; !exists {
+			normalized["chunk_until_latest"] = true
+			request.ChunkUntilLatest = true
+		}
+	}
+
 	endDate := modelsNormalizeDateOrDefault(request.EndDate, defaultEnd)
 	normalized["end_date"] = endDate
 	request.EndDate = endDate

@@ -45,6 +45,31 @@ func TestRequestKeyIncludesPredictionTypeAndCovariateSignature(t *testing.T) {
 	}
 }
 
+func TestRequestKeyUsesExplicitMTFProPredictionTypeWithPreset(t *testing.T) {
+	request := InferenceRequest{
+		StockCode:             "300442",
+		StockType:             "stock",
+		Years:                 15,
+		StartDate:             "20260430",
+		EndDate:               "20260605",
+		HorizonLen:            7,
+		ContextLen:            2048,
+		PredictionTypeValue:   "mtf-pro",
+		CovariatePreset:       "market_cov_v1",
+		BestMaxAgeDays:        180,
+		PredictFromBestValEnd: true,
+		ChunkUntilLatest:      true,
+	}
+
+	key, err := request.RequestKey()
+	if err != nil {
+		t.Fatalf("RequestKey() error: %v", err)
+	}
+	if want := `"prediction_type":"mtf-pro"`; !strings.Contains(key, want) {
+		t.Fatalf("expected explicit mtf-pro request key to include %s, got %s", want, key)
+	}
+}
+
 func TestNormalizePredictionTypeMapsLegacyNames(t *testing.T) {
 	tests := map[string]string{
 		"":         "",
@@ -229,13 +254,13 @@ func TestInferenceRequestPredictOnceBestContinuationKey(t *testing.T) {
 		ContextLen: 2048,
 	}
 	continuationRequest := InferenceRequest{
-		StockCode:          "600246",
-		StockType:          "stock",
-		HorizonLen:         28,
-		ContextLen:         2048,
-		BestMaxAgeDays:     180,
-		PredictFromBestEnd: true,
-		ChunkUntilLatest:   true,
+		StockCode:             "600246",
+		StockType:             "stock",
+		HorizonLen:            28,
+		ContextLen:            2048,
+		BestMaxAgeDays:        180,
+		PredictFromBestValEnd: true,
+		ChunkUntilLatest:      true,
 	}
 
 	baseKey, err := baseRequest.RequestKey()

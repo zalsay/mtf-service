@@ -173,6 +173,49 @@ func TestNormalizeInferencePayloadMapsLegacyPredictionTypeToMtfLite(t *testing.T
 	}
 }
 
+func TestNormalizeInferencePayloadInjectsPredictOnceDefaults(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "000001",
+		"stock_type": 1,
+		"years": 15,
+		"horizon_len": 28,
+		"context_len": 2048,
+		"prediction_type": "mtf-lite"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if normalized["best_max_age_days"] != float64(180) {
+		t.Fatalf("expected best_max_age_days=180, got %#v", normalized["best_max_age_days"])
+	}
+	if normalized["predict_from_best_val_end"] != true {
+		t.Fatalf("expected predict_from_best_val_end=true, got %#v", normalized["predict_from_best_val_end"])
+	}
+	if normalized["chunk_until_latest"] != true {
+		t.Fatalf("expected chunk_until_latest=true, got %#v", normalized["chunk_until_latest"])
+	}
+	if got := normalizedRequest.BestMaxAgeDays; got != 180 {
+		t.Fatalf("expected request BestMaxAgeDays=180, got %#v", got)
+	}
+	if got := normalizedRequest.PredictFromBestValEnd; got != true {
+		t.Fatalf("expected request PredictFromBestValEnd=true, got %#v", got)
+	}
+	if got := normalizedRequest.ChunkUntilLatest; got != true {
+		t.Fatalf("expected request ChunkUntilLatest=true, got %#v", got)
+	}
+}
+
 func TestNormalizeInferencePayloadForwardsForceEnqueueToBackendBody(t *testing.T) {
 	body := []byte(`{
 		"stock_code": "000001",
