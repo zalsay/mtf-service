@@ -71,6 +71,7 @@ fintrack-api/services/data/
 
 # Environment
 .env
+.env.open-api
 .venv
 env/
 venv/
