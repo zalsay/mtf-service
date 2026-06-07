@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strconv"
@@ -421,6 +422,170 @@ func (h *WatchlistHandler) GetStrategyParamsByUniqueKey(c *gin.Context) {
 	c.JSON(http.StatusOK, item)
 }
 
+func normalizeAdjustRawChunk(value interface{}) map[string]interface{} {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case map[string]interface{}:
+		return typed
+	case []interface{}:
+		for _, item := range typed {
+			if chunk, ok := item.(map[string]interface{}); ok {
+				return chunk
+			}
+		}
+	case []map[string]interface{}:
+		if len(typed) > 0 {
+			return typed[0]
+		}
+	}
+	return nil
+}
+
+func adjustRawSeries(raw map[string]interface{}, field string, bestKey string, toFloatSlice func(interface{}) []float64) []float64 {
+	if raw == nil {
+		return nil
+	}
+	value, ok := raw[field]
+	if !ok {
+		return nil
+	}
+	if bestKey != "" {
+		if byKey, ok := value.(map[string]interface{}); ok {
+			return toFloatSlice(byKey[bestKey])
+		}
+	}
+	return toFloatSlice(value)
+}
+
+func adjustRawDates(raw map[string]interface{}) []string {
+	if raw == nil {
+		return nil
+	}
+	rawDates, ok := raw["dates"].([]interface{})
+	if !ok {
+		return nil
+	}
+	dates := make([]string, 0, len(rawDates))
+	for _, value := range rawDates {
+		date := strings.TrimSpace(fmt.Sprint(value))
+		if date != "" {
+			dates = append(dates, date)
+		}
+	}
+	return dates
+}
+
+func filterFloatByIndexes(values []float64, indexes []int) []float64 {
+	if len(values) == 0 || len(indexes) == 0 {
+		return []float64{}
+	}
+	out := make([]float64, 0, len(indexes))
+	for _, index := range indexes {
+		if index >= 0 && index < len(values) {
+			out = append(out, values[index])
+		}
+	}
+	return out
+}
+
+func filterStringByIndexes(values []string, indexes []int) []string {
+	if len(values) == 0 || len(indexes) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(indexes))
+	for _, index := range indexes {
+		if index >= 0 && index < len(values) {
+			out = append(out, values[index])
+		}
+	}
+	return out
+}
+
+func filterAdjustRawChunk(raw map[string]interface{}, indexes []int, dates []string, actual []float64, pred []float64, actualChange []float64, predChange []float64, bestKey string) map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	filtered := make(map[string]interface{}, len(raw))
+	for key, value := range raw {
+		filtered[key] = value
+	}
+	if len(dates) > 0 {
+		filtered["dates"] = filterStringByIndexes(dates, indexes)
+	}
+	if len(actual) > 0 {
+		filtered["actual_values"] = filterFloatByIndexes(actual, indexes)
+	}
+	if len(pred) > 0 && bestKey != "" {
+		filtered["predictions"] = map[string]interface{}{
+			bestKey: filterFloatByIndexes(pred, indexes),
+		}
+	}
+	if len(actualChange) > 0 {
+		filtered["actual_change_percent"] = filterFloatByIndexes(actualChange, indexes)
+	}
+	if len(predChange) > 0 && bestKey != "" {
+		filtered["predicted_change_percent"] = map[string]interface{}{
+			bestKey: filterFloatByIndexes(predChange, indexes),
+		}
+	}
+	return filtered
+}
+
+func slimMTFBestPredictionResponse(item models.MTFBestPrediction) gin.H {
+	best := gin.H{
+		"unique_key":           item.UniqueKey,
+		"symbol":               item.Symbol,
+		"mtf_version":          item.MTFVersion,
+		"best_prediction_item": item.BestPredictionItem,
+		"best_metrics":         item.BestMetrics,
+		"prediction_type":      item.PredictionType,
+		"short_name":           item.ShortName,
+		"watchlist_count":      item.WatchlistCount,
+		"context_len":          item.ContextLen,
+		"horizon_len":          item.HorizonLen,
+		"stock_type":           item.StockType,
+		"created_at":           item.CreatedAt,
+		"updated_at":           item.UpdatedAt,
+		"covariate_signature":  item.CovariateSignature,
+	}
+	if item.CovariateSignature == "" {
+		delete(best, "covariate_signature")
+	}
+	return best
+}
+
+func slimMTFValidationChunkResponse(chunk models.SaveMTFValChunkRequest) gin.H {
+	out := gin.H{
+		"chunk_index":              chunk.ChunkIndex,
+		"start_date":               chunk.StartDate,
+		"end_date":                 chunk.EndDate,
+		"symbol":                   chunk.Symbol,
+		"stock_type":               chunk.StockType,
+		"predictions":              chunk.Predictions,
+		"actual_values":            chunk.Actual,
+		"predicted_change_percent": chunk.PredictedChangePct,
+		"actual_change_percent":    chunk.ActualChangePct,
+		"change_base_value":        chunk.ChangeBaseValue,
+		"change_base_date":         chunk.ChangeBaseDate,
+		"dates":                    chunk.Dates,
+		"prediction_type":          chunk.PredictionType,
+	}
+	if chunk.ChangeBaseValue == nil {
+		delete(out, "change_base_value")
+	}
+	if chunk.ChangeBaseDate == nil {
+		delete(out, "change_base_date")
+	}
+	if len(chunk.PredictedChangePct) == 0 {
+		delete(out, "predicted_change_percent")
+	}
+	if len(chunk.ActualChangePct) == 0 {
+		delete(out, "actual_change_percent")
+	}
+	return out
+}
+
 func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTFBestPrediction) ([]gin.H, error) {
 	keys := make([]string, 0, len(items))
 	for _, item := range items {
@@ -487,35 +652,61 @@ func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTF
 			if val, ok := chunk.PredictedChangePct[it.BestPredictionItem]; ok {
 				bestPredChange = toFloatSlice(val)
 			}
+			rawChunk := normalizeAdjustRawChunk(chunk.AdjustRawChunks)
+			rawPred := adjustRawSeries(rawChunk, "predictions", it.BestPredictionItem, toFloatSlice)
+			rawActual := adjustRawSeries(rawChunk, "actual_values", "", toFloatSlice)
+			rawPredChange := adjustRawSeries(rawChunk, "predicted_change_percent", it.BestPredictionItem, toFloatSlice)
+			rawActualChange := adjustRawSeries(rawChunk, "actual_change_percent", "", toFloatSlice)
+			rawDates := adjustRawDates(rawChunk)
+			metricActual := chunk.Actual
+			metricPred := bestPred
+			metricActualChange := chunk.ActualChangePct
+			metricPredChange := bestPredChange
+			if chunk.StockType == 1 && len(rawActual) > 0 && len(rawPred) > 0 {
+				metricActual = rawActual
+				metricPred = rawPred
+				if len(rawActualChange) > 0 {
+					metricActualChange = rawActualChange
+				}
+				if len(rawPredChange) > 0 {
+					metricPredChange = rawPredChange
+				}
+			}
+			metricDates := chunk.Dates
+			if chunk.StockType == 1 && len(rawDates) > 0 {
+				metricDates = rawDates
+			}
 
 			// align-filter: remove points where actual==0 or predicted==0 or invalid, keeping indices consistent across actual/pred/dates
-			filteredActual := make([]float64, 0, len(chunk.Actual))
-			filteredPred := make([]float64, 0, len(bestPred))
+			filteredActual := make([]float64, 0, len(metricActual))
+			filteredPred := make([]float64, 0, len(metricPred))
 			filteredDates := make([]string, 0, len(chunk.Dates))
 			filteredActualChange := make([]float64, 0, len(chunk.ActualChangePct))
 			filteredPredChange := make([]float64, 0, len(bestPredChange))
+			keptIndexes := make([]int, 0, len(metricActual))
 
-			maxLen := len(chunk.Actual)
-			if len(bestPred) < maxLen {
-				maxLen = len(bestPred)
+			maxLen := len(metricActual)
+			if len(metricPred) < maxLen {
+				maxLen = len(metricPred)
 			}
-			if len(chunk.Dates) < maxLen {
-				maxLen = len(chunk.Dates)
+			if len(metricDates) < maxLen {
+				maxLen = len(metricDates)
 			}
 			for i := 0; i < maxLen; i++ {
-				a := chunk.Actual[i]
-				p := bestPred[i]
+				a := metricActual[i]
+				p := metricPred[i]
 				if a == 0 || p == 0 || math.IsNaN(a) || math.IsNaN(p) || math.IsInf(a, 0) || math.IsInf(p, 0) {
 					continue
 				}
+				keptIndexes = append(keptIndexes, i)
 				filteredActual = append(filteredActual, a)
 				filteredPred = append(filteredPred, p)
-				filteredDates = append(filteredDates, chunk.Dates[i])
-				if i < len(chunk.ActualChangePct) {
-					filteredActualChange = append(filteredActualChange, chunk.ActualChangePct[i])
+				filteredDates = append(filteredDates, metricDates[i])
+				if i < len(metricActualChange) {
+					filteredActualChange = append(filteredActualChange, metricActualChange[i])
 				}
-				if i < len(bestPredChange) {
-					filteredPredChange = append(filteredPredChange, bestPredChange[i])
+				if i < len(metricPredChange) {
+					filteredPredChange = append(filteredPredChange, metricPredChange[i])
 				}
 			}
 
@@ -532,6 +723,9 @@ func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTF
 				chunk.PredictedChangePct[it.BestPredictionItem] = filteredPredChange
 			}
 			chunk.Dates = filteredDates
+			if chunk.StockType == 1 && rawChunk != nil {
+				chunk.AdjustRawChunks = filterAdjustRawChunk(rawChunk, keptIndexes, rawDates, rawActual, rawPred, rawActualChange, rawPredChange, it.BestPredictionItem)
+			}
 
 			// update max deviation percent from filtered series
 			for i := 0; i < len(filteredActual) && i < len(filteredPred); i++ {
@@ -546,9 +740,13 @@ func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTF
 			}
 		}
 
+		slimChunks := make([]gin.H, 0, len(chunks))
+		for _, chunk := range chunks {
+			slimChunks = append(slimChunks, slimMTFValidationChunkResponse(chunk))
+		}
 		result = append(result, gin.H{
-			"best":                  it,
-			"chunks":                chunks,
+			"best":                  slimMTFBestPredictionResponse(it),
+			"chunks":                slimChunks,
 			"max_deviation_percent": maxDevPercent,
 		})
 	}
@@ -564,23 +762,42 @@ func (h *WatchlistHandler) ListPublicMTFBestWithValidation(c *gin.Context) {
 			horizonLen = val
 		}
 	}
+	limit := 0
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 {
+			limit = val
+		}
+	}
+	offset := 0
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if val, err := strconv.Atoi(offsetStr); err == nil && val > 0 {
+			offset = val
+		}
+	}
 	symbol := c.Query("symbol")
 	isAdmin, _ := c.Get("is_admin")
 	includePrivate, _ := isAdmin.(bool)
 
-	items, err := h.watchlistService.ListPublicMTFBest(horizonLen, symbol, includePrivate)
+	page, err := h.watchlistService.ListPublicMTFBestPage(horizonLen, symbol, includePrivate, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	result, err := h.buildMTFBestWithValidationResponse(items)
+	result, err := h.buildMTFBestWithValidationResponse(page.Items)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"items": result, "count": len(result)})
+	c.JSON(http.StatusOK, gin.H{
+		"items":    result,
+		"count":    len(result),
+		"total":    page.Total,
+		"limit":    page.Limit,
+		"offset":   page.Offset,
+		"has_more": page.Limit > 0 && page.Offset+len(result) < page.Total,
+	})
 }
 
 func (h *WatchlistHandler) ListAccessibleMTFBestWithValidation(c *gin.Context) {

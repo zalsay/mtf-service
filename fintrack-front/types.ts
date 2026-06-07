@@ -61,6 +61,7 @@ export interface MTFBest {
   watchlist_count?: number;
   context_len?: number;
   horizon_len?: number;
+  created_at?: string;
   updated_at?: string;
 }
 
@@ -70,6 +71,7 @@ export interface MTFChunk {
   start_date: string;
   end_date: string;
   symbol: string;
+  stock_type?: number;
   predictions: Record<string, number[]>;
   actual_values: number[];
   predicted_change_percent?: Record<string, number[]>;
@@ -78,6 +80,17 @@ export interface MTFChunk {
   change_base_date?: string | null;
   dates: string[];
   prediction_type?: string;
+  adjust_raw_chunks?: MTFAdjustRawChunk | MTFAdjustRawChunk[] | null;
+}
+
+export interface MTFAdjustRawChunk {
+  predictions?: Record<string, number[]>;
+  actual_values?: number[];
+  predicted_change_percent?: Record<string, number[]>;
+  actual_change_percent?: number[];
+  change_base_value?: number | null;
+  change_base_date?: string | null;
+  dates?: string[];
 }
 
 export interface PublicPredictionItem {
@@ -89,6 +102,10 @@ export interface PublicPredictionItem {
 export interface PublicPredictionResponse {
   items: PublicPredictionItem[];
   count: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
 }
 
 export interface StrategyParams {

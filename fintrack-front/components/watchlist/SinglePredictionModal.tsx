@@ -178,7 +178,8 @@ const pickLatestHistoricalChunk = (
         (a, b) => parseChunkDateTime(a.start_date) - parseChunkDateTime(b.start_date),
     );
 
-    const hasDrawableHistory = (chunk: PublicPredictionItem['chunks'][number]) => {
+    const hasDrawableHistory = (sourceChunk: PublicPredictionItem['chunks'][number]) => {
+        const chunk = currentPriceChunkView(sourceChunk);
         const chunkPredictions = getPredictionSeries(chunk.predictions, bestKey);
         return (
             (chunk.dates?.length || 0) > 0
@@ -209,7 +210,7 @@ const appendLatestActualAnchor = (
     predictedChangePercents: number[],
 ) => {
     const latestDate = String(result.latest_data_date || result.request_end_date || '').trim();
-    const latestClose = Number(result.latest_close);
+    const latestClose = getDirectLatestClose(result);
     if (!latestDate || !(latestClose > 0)) {
         return;
     }
@@ -257,6 +258,22 @@ const getDirectPredictionValues = (
     result: DirectPredictionResult,
     preferredKey: string,
 ): number[] => {
+    const rawValues = Array.isArray(result.adjust_raw_best_prediction_values)
+        ? result.adjust_raw_best_prediction_values
+        : [];
+    if (Number(result.stock_type || 0) === 1 && rawValues.length > 0) {
+        return rawValues.map(Number).filter(Number.isFinite);
+    }
+
+    const rawPreferredValues = Number(result.stock_type || 0) === 1
+        && preferredKey
+        && Array.isArray(result.adjust_raw_predictions?.[preferredKey])
+        ? result.adjust_raw_predictions[preferredKey]
+        : [];
+    if (rawPreferredValues.length > 0) {
+        return rawPreferredValues.map(Number).filter(Number.isFinite);
+    }
+
     const directValues = Array.isArray(result.best_prediction_values)
         ? result.best_prediction_values
         : [];
@@ -275,6 +292,14 @@ const getDirectPredictionValues = (
     return firstValues.map(Number).filter(Number.isFinite);
 };
 
+const getDirectLatestClose = (result: DirectPredictionResult): number => {
+    const rawLatestClose = Number(result.adjust_raw_latest_close);
+    if (Number(result.stock_type || 0) === 1 && rawLatestClose > 0) {
+        return rawLatestClose;
+    }
+    return Number(result.latest_close);
+};
+
 const getPredictionSeries = (
     predictions: Record<string, number[]> | undefined,
     preferredKey: string,
@@ -283,6 +308,51 @@ const getPredictionSeries = (
         return predictions[preferredKey];
     }
     return Object.values(predictions || {}).find(Array.isArray) || [];
+};
+
+const toFiniteNumberArray = (value: unknown): number[] => (
+    Array.isArray(value)
+        ? value.map(Number).filter(Number.isFinite)
+        : []
+);
+
+const toPredictionMap = (value: unknown): Record<string, number[]> | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const out: Record<string, number[]> = {};
+    Object.entries(value).forEach(([key, series]) => {
+        const values = toFiniteNumberArray(series);
+        if (values.length > 0) {
+            out[key] = values;
+        }
+    });
+    return Object.keys(out).length > 0 ? out : undefined;
+};
+
+const currentPriceChunkView = (chunk: PublicPredictionItem['chunks'][number]) => {
+    if (Number(chunk.stock_type || 0) !== 1 || !chunk.adjust_raw_chunks) {
+        return chunk;
+    }
+    const raw = Array.isArray(chunk.adjust_raw_chunks)
+        ? chunk.adjust_raw_chunks.find(isRecord)
+        : chunk.adjust_raw_chunks;
+    if (!isRecord(raw)) {
+        return chunk;
+    }
+    const rawActuals = toFiniteNumberArray(raw.actual_values);
+    const rawActualChange = toFiniteNumberArray(raw.actual_change_percent);
+    const rawDates = Array.isArray(raw.dates) ? raw.dates.map(String).filter(Boolean) : [];
+    return {
+        ...chunk,
+        predictions: toPredictionMap(raw.predictions) || chunk.predictions,
+        actual_values: rawActuals.length > 0 ? rawActuals : chunk.actual_values,
+        predicted_change_percent: toPredictionMap(raw.predicted_change_percent) || chunk.predicted_change_percent,
+        actual_change_percent: rawActualChange.length > 0 ? rawActualChange : chunk.actual_change_percent,
+        change_base_value: Number.isFinite(Number(raw.change_base_value)) ? Number(raw.change_base_value) : chunk.change_base_value,
+        change_base_date: typeof raw.change_base_date === 'string' ? raw.change_base_date : chunk.change_base_date,
+        dates: rawDates.length > 0 ? rawDates : chunk.dates,
+    };
 };
 
 const buildPredictionChartData = (
@@ -308,16 +378,17 @@ const buildPredictionChartData = (
     const predictedChangePercents: number[] = [];
 
     if (lastChunk) {
-        const chunkDates = Array.isArray(lastChunk.dates) ? lastChunk.dates : [];
-        const chunkPredictions = getPredictionSeries(lastChunk.predictions, bestKey);
+        const currentPriceChunk = currentPriceChunkView(lastChunk);
+        const chunkDates = Array.isArray(currentPriceChunk.dates) ? currentPriceChunk.dates : [];
+        const chunkPredictions = getPredictionSeries(currentPriceChunk.predictions, bestKey);
         const historyLen = Math.min(
             chunkDates.length,
-            Math.max(lastChunk.actual_values?.length || 0, chunkPredictions.length),
+            Math.max(currentPriceChunk.actual_values?.length || 0, chunkPredictions.length),
         );
 
         dates.push(...chunkDates.slice(0, historyLen).map(String));
         for (let index = 0; index < historyLen; index += 1) {
-            const actual = Number(lastChunk.actual_values?.[index]);
+            const actual = Number(currentPriceChunk.actual_values?.[index]);
             actuals.push(Number.isFinite(actual) ? actual : 0);
         }
         for (let index = 0; index < historyLen; index += 1) {
@@ -325,10 +396,10 @@ const buildPredictionChartData = (
             predictions.push(Number.isFinite(num) ? num : 0);
         }
 
-        if (Array.isArray(lastChunk.actual_change_percent)) {
-            actualChangePercents.push(...lastChunk.actual_change_percent.slice(0, historyLen).map(Number));
+        if (Array.isArray(currentPriceChunk.actual_change_percent)) {
+            actualChangePercents.push(...currentPriceChunk.actual_change_percent.slice(0, historyLen).map(Number));
         }
-        const chunkPredictedChangePercents = getPredictionSeries(lastChunk.predicted_change_percent, bestKey);
+        const chunkPredictedChangePercents = getPredictionSeries(currentPriceChunk.predicted_change_percent, bestKey);
         for (let index = 0; index < historyLen; index += 1) {
             const num = Number(chunkPredictedChangePercents[index]);
             predictedChangePercents.push(Number.isFinite(num) ? num : Number.NaN);
@@ -345,9 +416,9 @@ const buildPredictionChartData = (
 
     appendLatestActualAnchor(result, dates, actuals, predictions, actualChangePercents, predictedChangePercents);
 
-    const changeBase = Number(result.latest_close)
+    const changeBase = getDirectLatestClose(result)
         || actuals[actuals.length - 1]
-        || Number(lastChunk?.change_base_value)
+        || Number(lastChunk ? currentPriceChunkView(lastChunk).change_base_value : undefined)
         || Number(fallbackCurrentPrice)
         || 0;
     const futureLen = Math.min(futureDates.length, futurePredictions.length);

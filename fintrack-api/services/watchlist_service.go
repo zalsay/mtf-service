@@ -27,6 +27,13 @@ type WatchlistService struct {
 	config *config.Config
 }
 
+type MTFBestPage struct {
+	Items  []models.MTFBestPrediction
+	Total  int
+	Limit  int
+	Offset int
+}
+
 type postgresHandlerDirectPredictionResponse struct {
 	Code    int                    `json:"code"`
 	Message string                 `json:"message"`
@@ -925,25 +932,25 @@ func getMTFMembershipTrainPolicy(level int) mtfMembershipTrainPolicy {
 	case 3:
 		return mtfMembershipTrainPolicy{
 			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
-			AllowedContextLens:     newIntSet(256, 512, 1024, 2048),
+			AllowedContextLens:     newIntSet(512, 1024, 2048),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	case 2:
 		return mtfMembershipTrainPolicy{
 			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
-			AllowedContextLens:     newIntSet(256, 512, 1024),
+			AllowedContextLens:     newIntSet(512, 1024),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	case 1:
 		return mtfMembershipTrainPolicy{
 			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
-			AllowedContextLens:     newIntSet(256, 512),
+			AllowedContextLens:     newIntSet(512),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
 	default:
 		return mtfMembershipTrainPolicy{
 			AllowedPredictionTypes: newStringSet("mtf-lite"),
-			AllowedContextLens:     newIntSet(256),
+			AllowedContextLens:     newIntSet(512),
 			AllowedHorizonLens:     newIntSet(7),
 		}
 	}
@@ -1459,6 +1466,11 @@ func slimDirectPredictionCacheData(data map[string]interface{}) map[string]inter
 			slim[key] = value
 		}
 	}
+	for key, value := range data {
+		if strings.HasPrefix(key, "adjust_raw_") {
+			slim[key] = value
+		}
+	}
 	return slim
 }
 
@@ -1863,6 +1875,20 @@ func (s *WatchlistService) ListMTFBestByUserID(userID int) ([]models.MTFBestPred
 
 // 普通用户只查询公开数据；管理员可同时查询公开/非公开数据，并支持按 horizon_len / symbol 筛选
 func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, userID *int, includePrivate bool) ([]models.MTFBestPrediction, error) {
+	page, err := s.listScopedMTFBestPage(horizonLen, symbol, userID, includePrivate, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
+}
+
+func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, userID *int, includePrivate bool, limit int, offset int) (MTFBestPage, error) {
+	if limit < 0 {
+		limit = 0
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	baseCanonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
 	rowCanonicalSymbolExpr := mtfCanonicalSymbolExpr("t.symbol")
 	query := fmt.Sprintf(`
@@ -1905,6 +1931,14 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
 	}
 	query += fmt.Sprintf(`
         ),
+        watchlist_counts AS (
+            SELECT
+                %s AS canonical_symbol,
+                COUNT(*)::int AS watchlist_count,
+                MIN(COALESCE(stock_type, 1))::int AS stock_type
+            FROM user_watchlist
+            GROUP BY %s
+        ),
         ranked AS (
             SELECT
                 t.id,
@@ -1929,6 +1963,8 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
                 t.created_at,
                 t.updated_at,
                 COALESCE(t.short_name, '') AS short_name,
+                COALESCE(wc.stock_type, 1)::int AS stock_type,
+                COALESCE(wc.watchlist_count, 0)::int AS watchlist_count,
                 ROW_NUMBER() OVER (
                     PARTITION BY %s, t.horizon_len, t.context_len, t.mtf_version, COALESCE(NULLIF(TRIM(t.prediction_type), ''), 'mtf-lite')
                     ORDER BY CASE WHEN %s = lower(trim(t.symbol)) THEN 0 ELSE 1 END,
@@ -1941,6 +1977,8 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
                AND g.horizon_len = t.horizon_len
                AND g.context_len = t.context_len
                AND g.mtf_version = t.mtf_version
+            LEFT JOIN watchlist_counts wc
+                ON wc.canonical_symbol = %s
         )
         SELECT
             id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
@@ -1950,19 +1988,30 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
             test_start_date, test_end_date,
             val_start_date, val_end_date,
             context_len, horizon_len,
-            created_at, updated_at, short_name
+            created_at, updated_at, short_name,
+            stock_type, watchlist_count,
+            COUNT(*) OVER() AS total_count
         FROM ranked
         WHERE rn = 1
-        ORDER BY updated_at DESC
-    `, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
+        ORDER BY watchlist_count DESC, created_at DESC, id DESC
+    `, mtfCanonicalSymbolExpr("symbol"), mtfCanonicalSymbolExpr("symbol"), rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
+	if limit > 0 {
+		args = append(args, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+	}
+	if offset > 0 {
+		args = append(args, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
 
 	rows, err := s.db.Conn.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query public mtf_best_predictions: %v", err)
+		return MTFBestPage{}, fmt.Errorf("failed to query public mtf_best_predictions: %v", err)
 	}
 	defer rows.Close()
 
 	var results []models.MTFBestPrediction
+	total := 0
 	for rows.Next() {
 		var item models.MTFBestPrediction
 		if err := rows.Scan(
@@ -1975,8 +2024,9 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
 			&item.ValStartDate, &item.ValEndDate,
 			&item.ContextLen, &item.HorizonLen,
 			&item.CreatedAt, &item.UpdatedAt, &item.ShortName,
+			&item.StockType, &item.WatchlistCount, &total,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan public mtf_best_predictions: %v", err)
+			return MTFBestPage{}, fmt.Errorf("failed to scan public mtf_best_predictions: %v", err)
 		}
 		if strings.TrimSpace(item.ShortName) == "" {
 			item.ShortName = s.lookupDisplayName(item.Symbol)
@@ -1984,11 +2034,15 @@ func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, user
 		results = append(results, item)
 	}
 
-	return results, nil
+	return MTFBestPage{Items: results, Total: total, Limit: limit, Offset: offset}, nil
 }
 
 func (s *WatchlistService) ListPublicMTFBest(horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {
 	return s.listScopedMTFBest(horizonLen, symbol, nil, includePrivate)
+}
+
+func (s *WatchlistService) ListPublicMTFBestPage(horizonLen int, symbol string, includePrivate bool, limit int, offset int) (MTFBestPage, error) {
+	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset)
 }
 
 func (s *WatchlistService) ListAccessibleMTFBest(userID int, horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {
@@ -2033,7 +2087,9 @@ func (s *WatchlistService) ListValidationChunksByUniqueKeys(uniqueKeys []string)
             change_base_value,
             change_base_date::text,
             dates, COALESCE(prediction_type, 'mtf-lite'),
-            covariate_config, covariate_signature, covariate_analysis
+            covariate_config, covariate_signature, covariate_analysis,
+            COALESCE(stock_type, 0),
+            COALESCE(adjust_raw_chunks, 'null'::jsonb)
         FROM mtf_best_validation_chunks
         WHERE unique_key = ANY($1)
         ORDER BY unique_key ASC, chunk_index ASC
@@ -2078,12 +2134,12 @@ func scanMTFValidationChunk(rows *sql.Rows) (models.SaveMTFValChunkRequest, erro
 	var predsJSON, actualJSON, predChangeJSON, actualChangeJSON, datesJSON []byte
 	var changeBaseValue sql.NullFloat64
 	var changeBaseDate sql.NullString
-	var covConfigJSON, covAnalysisJSON []byte
+	var covConfigJSON, covAnalysisJSON, adjustRawJSON []byte
 	var covSignature sql.NullString
 	if err := rows.Scan(
 		&req.UniqueKey, &req.ChunkIndex, &req.StartDate, &req.EndDate, &req.Symbol,
 		&predsJSON, &actualJSON, &predChangeJSON, &actualChangeJSON, &changeBaseValue, &changeBaseDate, &datesJSON, &req.PredictionType,
-		&covConfigJSON, &covSignature, &covAnalysisJSON,
+		&covConfigJSON, &covSignature, &covAnalysisJSON, &req.StockType, &adjustRawJSON,
 	); err != nil {
 		return req, fmt.Errorf("failed to scan validation chunk: %v", err)
 	}
@@ -2122,6 +2178,13 @@ func scanMTFValidationChunk(rows *sql.Rows) (models.SaveMTFValChunkRequest, erro
 		if err := unmarshalValidationChunkJSON(covAnalysisJSON, &req.CovariateAnalysis, "covariate_analysis"); err != nil {
 			return req, err
 		}
+	}
+	if len(adjustRawJSON) > 0 && string(adjustRawJSON) != "null" {
+		var adjustRawChunks interface{}
+		if err := unmarshalValidationChunkJSON(adjustRawJSON, &adjustRawChunks, "adjust_raw_chunks"); err != nil {
+			return req, err
+		}
+		req.AdjustRawChunks = adjustRawChunks
 	}
 	return req, nil
 }
@@ -2352,6 +2415,10 @@ func (s *WatchlistService) SaveMTFValChunk(req *models.SaveMTFValChunkRequest) e
 	if strings.TrimSpace(req.CovariateSignature) != "" {
 		covSignatureArg = req.CovariateSignature
 	}
+	var stockTypeArg interface{}
+	if req.StockType > 0 {
+		stockTypeArg = req.StockType
+	}
 
 	// 处理可选的 user_id 指针
 	var uidArg interface{}
@@ -2368,16 +2435,26 @@ func (s *WatchlistService) SaveMTFValChunk(req *models.SaveMTFValChunkRequest) e
 	if req.ChangeBaseDate != nil && strings.TrimSpace(*req.ChangeBaseDate) != "" {
 		changeBaseDateArg = *req.ChangeBaseDate
 	}
+	var adjustRawChunksArg interface{}
+	if req.AdjustRawChunks != nil {
+		raw, err := json.Marshal(req.AdjustRawChunks)
+		if err != nil {
+			return fmt.Errorf("failed to marshal adjust_raw_chunks: %v", err)
+		}
+		if string(raw) != "null" {
+			adjustRawChunksArg = string(raw)
+		}
+	}
 
 	_, err = s.db.Conn.Exec(`
         INSERT INTO mtf_best_validation_chunks (
             unique_key, chunk_index, user_id, symbol, start_date, end_date,
             predictions, actual_values, predicted_change_percent, actual_change_percent, change_base_value, change_base_date, dates,
-            prediction_type, covariate_config, covariate_signature, covariate_analysis
+            prediction_type, covariate_config, covariate_signature, covariate_analysis, stock_type, adjust_raw_chunks
         ) VALUES (
             $1, $2, $3, $4, $5::date, $6::date,
             $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12::date, $13::jsonb,
-            $14, $15::jsonb, $16, $17::jsonb
+            $14, $15::jsonb, $16, $17::jsonb, $18, $19::jsonb
         )
         ON CONFLICT (unique_key, chunk_index) DO UPDATE SET
             start_date = EXCLUDED.start_date,
@@ -2393,11 +2470,13 @@ func (s *WatchlistService) SaveMTFValChunk(req *models.SaveMTFValChunkRequest) e
             covariate_config = EXCLUDED.covariate_config,
             covariate_signature = EXCLUDED.covariate_signature,
             covariate_analysis = EXCLUDED.covariate_analysis,
+            stock_type = EXCLUDED.stock_type,
+            adjust_raw_chunks = EXCLUDED.adjust_raw_chunks,
             updated_at = CURRENT_TIMESTAMP
     `,
 		req.UniqueKey, req.ChunkIndex, uidArg, req.Symbol, req.StartDate, req.EndDate,
 		string(predsJSON), string(actualJSON), predictedChangeJSON, actualChangeJSON, changeBaseValueArg, changeBaseDateArg, string(datesJSON),
-		predictionType, covConfigJSON, covSignatureArg, covAnalysisJSON,
+		predictionType, covConfigJSON, covSignatureArg, covAnalysisJSON, stockTypeArg, adjustRawChunksArg,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to upsert mtf_best_validation_chunks: %v", err)

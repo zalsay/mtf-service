@@ -53,6 +53,67 @@ const toFiniteNumberOrNaN = (value: unknown): number => {
     return Number.isFinite(num) ? num : Number.NaN;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const toFiniteNumberArray = (value: unknown): number[] => (
+    Array.isArray(value)
+        ? value.map(Number).filter(Number.isFinite)
+        : []
+);
+
+const toPredictionMap = (value: unknown): Record<string, number[]> | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const out: Record<string, number[]> = {};
+    Object.entries(value).forEach(([key, series]) => {
+        const values = toFiniteNumberArray(series);
+        if (values.length > 0) {
+            out[key] = values;
+        }
+    });
+    return Object.keys(out).length > 0 ? out : undefined;
+};
+
+const normalizeAdjustRawChunk = (chunk: MTFChunk): Partial<MTFChunk> | null => {
+    if (Number(chunk.stock_type || 0) !== 1 || !chunk.adjust_raw_chunks) {
+        return null;
+    }
+    const raw = Array.isArray(chunk.adjust_raw_chunks)
+        ? chunk.adjust_raw_chunks.find(isRecord)
+        : chunk.adjust_raw_chunks;
+    if (!isRecord(raw)) {
+        return null;
+    }
+    return {
+        predictions: toPredictionMap(raw.predictions),
+        actual_values: toFiniteNumberArray(raw.actual_values),
+        predicted_change_percent: toPredictionMap(raw.predicted_change_percent),
+        actual_change_percent: toFiniteNumberArray(raw.actual_change_percent),
+        change_base_value: Number.isFinite(Number(raw.change_base_value)) ? Number(raw.change_base_value) : chunk.change_base_value,
+        change_base_date: typeof raw.change_base_date === 'string' ? raw.change_base_date : chunk.change_base_date,
+        dates: Array.isArray(raw.dates) ? raw.dates.map(String).filter(Boolean) : undefined,
+    };
+};
+
+const currentPriceChunkView = (chunk: MTFChunk): MTFChunk => {
+    const raw = normalizeAdjustRawChunk(chunk);
+    if (!raw) {
+        return chunk;
+    }
+    return {
+        ...chunk,
+        ...raw,
+        predictions: raw.predictions || chunk.predictions,
+        actual_values: raw.actual_values?.length ? raw.actual_values : chunk.actual_values,
+        predicted_change_percent: raw.predicted_change_percent || chunk.predicted_change_percent,
+        actual_change_percent: raw.actual_change_percent?.length ? raw.actual_change_percent : chunk.actual_change_percent,
+        dates: raw.dates?.length ? raw.dates : chunk.dates,
+    };
+};
+
 const compareUpdatedAt = (left?: string, right?: string): number => {
     const leftTime = left ? new Date(left).getTime() : 0;
     const rightTime = right ? new Date(right).getTime() : 0;
@@ -138,7 +199,8 @@ const extractSeriesFromChunks = (
     const actualChangePercents: number[] = [];
     const predictedChangePercents: number[] = [];
 
-    for (const chunk of sortedChunks) {
+    for (const originalChunk of sortedChunks) {
+        const chunk = currentPriceChunkView(originalChunk);
         const chunkPredictions = Array.isArray(chunk.predictions?.[bestItemKey])
             ? chunk.predictions[bestItemKey]
             : [];

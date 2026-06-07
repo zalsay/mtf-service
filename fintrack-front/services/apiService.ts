@@ -1006,6 +1006,8 @@ export const financeNewsAPI = {
 export const getPublicPredictions = async (
   horizonLen?: number,
   symbol?: string,
+  limit?: number,
+  offset?: number,
 ): Promise<PublicPredictionResponse> => {
   const params = new URLSearchParams();
   if (horizonLen) {
@@ -1013,6 +1015,12 @@ export const getPublicPredictions = async (
   }
   if (symbol && symbol.trim()) {
     params.set('symbol', symbol.trim());
+  }
+  if (limit && limit > 0) {
+    params.set('limit', String(limit));
+  }
+  if (offset && offset > 0) {
+    params.set('offset', String(offset));
   }
   const query = params.toString();
   const url = query ? `/get-predictions/mtf-best/public?${query}` : '/get-predictions/mtf-best/public';
@@ -1124,6 +1132,9 @@ export interface DirectPredictionResult {
   best_prediction_item?: string | null;
   best_prediction_values?: number[] | null;
   predictions?: Record<string, number[]>;
+  adjust_raw_latest_close?: number;
+  adjust_raw_best_prediction_values?: number[] | null;
+  adjust_raw_predictions?: Record<string, number[]>;
 }
 
 export interface MTFPredictOnceRequest {

@@ -208,10 +208,12 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 				"prediction_type":"mtf-lite",
 				"context_len":256,
 				"horizon_len":7,
-				"latest_data_date":"2026-06-05",
-				"future_dates":["2026-06-05"],
+				"latest_data_date":"2026-06-06",
+				"future_dates":["2026-06-06"],
 				"best_prediction_item":"mtf-0.5",
 				"best_prediction_values":[1.23],
+				"adjust_raw_best_prediction_values":[1.11],
+				"adjust_raw_latest_close":1.01,
 				"predictions":{"mtf-0.5":[1.23]},
 				"cache_hit":true
 			}
@@ -256,6 +258,9 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), `"predictions"`) {
 		t.Fatalf("predictions must be omitted, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"adjust_raw_best_prediction_values":[1.11]`) {
+		t.Fatalf("expected adjust_raw_best_prediction_values passthrough, body=%s", rec.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

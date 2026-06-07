@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StockData } from '../../types';
 import StockPredictionCard from './StockPredictionCard';
 import AddStockModal from './AddStockModal';
@@ -17,6 +17,7 @@ interface DashboardProps {
 
 const PREDICTION_HORIZONS = [7, 14, 28] as const;
 const PREDICTION_CONTEXTS = [512, 1024, 2048] as const;
+const PUBLIC_PAGE_SIZE = 5;
 type PredictionHorizon = typeof PREDICTION_HORIZONS[number];
 type PredictionContext = typeof PREDICTION_CONTEXTS[number];
 
@@ -61,7 +62,16 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
     const [publicStocks, setPublicStocks] = useState<StockData[]>([]);
     const [watchlistSymbols, setWatchlistSymbols] = useState<Set<string>>(new Set());
     const [isFetching, setIsFetching] = useState(true);
+    const [isFetchingMore, setIsFetchingMore] = useState(false);
+    const [hasMorePublicStocks, setHasMorePublicStocks] = useState(false);
+    const [loadedPublicItemCount, setLoadedPublicItemCount] = useState(0);
     const [fetchError, setFetchError] = useState<string | null>(null);
+    const loadMoreRef = useRef<HTMLDivElement | null>(null);
+    const loadedPublicItemCountRef = useRef(0);
+    const isFetchingRef = useRef(false);
+    const isFetchingMoreRef = useRef(false);
+    const hasMorePublicStocksRef = useRef(false);
+    const loadMoreArmedRef = useRef(true);
 
     const applyWatchlistState = (stocks: StockData[], symbols: Set<string>) => (
         stocks.map(stock => ({
@@ -71,14 +81,30 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
     );
 
     const fetchPublic = useCallback(async (options?: { reset?: boolean }) => {
+        const reset = Boolean(options?.reset);
+        const offset = reset ? 0 : loadedPublicItemCountRef.current;
+        if (!reset && (isFetchingRef.current || isFetchingMoreRef.current || !hasMorePublicStocksRef.current)) {
+            return;
+        }
         if (options?.reset) {
             setPublicStocks([]);
+            setLoadedPublicItemCount(0);
+            setHasMorePublicStocks(false);
+            loadedPublicItemCountRef.current = 0;
+            hasMorePublicStocksRef.current = false;
+            loadMoreArmedRef.current = true;
         }
-        setIsFetching(true);
+        if (reset) {
+            isFetchingRef.current = true;
+            setIsFetching(true);
+        } else {
+            isFetchingMoreRef.current = true;
+            setIsFetchingMore(true);
+        }
         setFetchError(null);
         try {
             const [predictionResult, watchlistResult] = await Promise.allSettled([
-                getPublicPredictions(),
+                getPublicPredictions(undefined, undefined, PUBLIC_PAGE_SIZE, offset),
                 watchlistAPI.getWatchlist(),
             ]);
             let nextWatchlistSymbols = new Set<string>();
@@ -102,12 +128,37 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
 
             if (predictionResult.status === 'fulfilled' && predictionResult.value?.items) {
                 const mapped = mapPredictionResponseToStockData(predictionResult.value, language);
-                setPublicStocks(applyWatchlistState(
+                const nextStocks = applyWatchlistState(
                     mapped.filter(stock => Boolean(stock.prediction?.horizonLen)),
                     nextWatchlistSymbols,
-                ));
+                );
+                setPublicStocks(current => {
+                    if (reset) {
+                        return nextStocks;
+                    }
+                    const byKey = new Map<string, StockData>();
+                    [...current, ...nextStocks].forEach(stock => {
+                        const horizon = stock.prediction?.horizonLen || 0;
+                        const context = stock.prediction?.contextLen || 0;
+                        byKey.set(`${stock.symbol}|${horizon}|${context}`, stock);
+                    });
+                    return Array.from(byKey.values());
+                });
+                const itemCount = predictionResult.value.count || predictionResult.value.items.length;
+                const nextLoadedCount = offset + itemCount;
+                const nextHasMore = Boolean(predictionResult.value.has_more);
+                loadedPublicItemCountRef.current = nextLoadedCount;
+                hasMorePublicStocksRef.current = nextHasMore;
+                setLoadedPublicItemCount(nextLoadedCount);
+                setHasMorePublicStocks(nextHasMore);
             } else {
-                setPublicStocks([]);
+                if (reset) {
+                    setPublicStocks([]);
+                    setLoadedPublicItemCount(0);
+                    setHasMorePublicStocks(false);
+                    loadedPublicItemCountRef.current = 0;
+                    hasMorePublicStocksRef.current = false;
+                }
                 if (predictionResult.status === 'rejected') {
                     throw predictionResult.reason;
                 }
@@ -115,13 +166,39 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
         } catch (e: any) {
             setFetchError(e.message || "Failed to load public predictions");
         } finally {
-            setIsFetching(false);
+            if (reset) {
+                isFetchingRef.current = false;
+                setIsFetching(false);
+            } else {
+                isFetchingMoreRef.current = false;
+                setIsFetchingMore(false);
+            }
         }
     }, [language, onAuthError]);
 
     useEffect(() => {
         void fetchPublic({ reset: true });
     }, [fetchPublic]);
+
+    useEffect(() => {
+        const node = loadMoreRef.current;
+        if (!node || isFetching || isFetchingMore || !hasMorePublicStocks) {
+            return undefined;
+        }
+        const observer = new IntersectionObserver(entries => {
+            const isIntersecting = entries.some(entry => entry.isIntersecting);
+            if (!isIntersecting) {
+                loadMoreArmedRef.current = true;
+                return;
+            }
+            if (loadMoreArmedRef.current) {
+                loadMoreArmedRef.current = false;
+                void fetchPublic();
+            }
+        }, { rootMargin: '360px 0px' });
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [fetchPublic, hasMorePublicStocks, isFetching, isFetchingMore]);
 
     const handleAddStock = async (symbol: string, type: 1 | 2 = 1) => {
         const normalizedSymbol = normalizeDashboardSymbol(symbol);
@@ -240,12 +317,6 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
             default:
                 return true;
         }
-    }).sort((left, right) => {
-        const countDelta = (right.stock.watchlistCount || 0) - (left.stock.watchlistCount || 0);
-        if (countDelta !== 0) {
-            return countDelta;
-        }
-        return left.symbol.localeCompare(right.symbol);
     });
 
     return (
@@ -257,7 +328,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
                         <div className="flex items-center gap-2 lg:hidden">
                             <button
                                 type="button"
-                                onClick={() => void fetchPublic()}
+                                onClick={() => void fetchPublic({ reset: true })}
                                 disabled={isFetching}
                                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                                 title={t('uzi.refresh', language === 'zh' ? '刷新' : 'Refresh')}
@@ -295,7 +366,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
                     <div className="hidden lg:flex items-center gap-2">
                         <button
                             type="button"
-                            onClick={() => void fetchPublic()}
+                            onClick={() => void fetchPublic({ reset: true })}
                             disabled={isFetching}
                             className="flex items-center justify-center gap-2 px-4 h-10 rounded-lg border border-white/10 bg-white/5 text-white text-sm font-bold leading-normal tracking-[0.015em] transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -384,6 +455,16 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
                     ))
                 )}
             </div>
+            {!isLoading && hasMorePublicStocks && (
+                <div ref={loadMoreRef} className="flex min-h-16 items-center justify-center py-2">
+                    {isFetchingMore && (
+                        <div className="flex items-center gap-2 text-sm text-white/60">
+                            <span className="material-symbols-outlined animate-spin text-[18px]">refresh</span>
+                            <span>{language === 'zh' ? '加载更多预测...' : 'Loading more predictions...'}</span>
+                        </div>
+                    )}
+                </div>
+            )}
             {!isLoading && filteredStocks.length === 0 && (
                 <div className="text-center col-span-full py-12 bg-card-dark rounded-xl">
                     <p className="text-white/80">{t('dashboard.noStocks')}</p>

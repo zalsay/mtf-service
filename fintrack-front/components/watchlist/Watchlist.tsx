@@ -106,7 +106,7 @@ const getMTFTrainPolicy = (membershipLevel: number): MTFTrainPolicy => {
         case 3:
             return {
                 predictionTypes: ['mtf-lite', 'mtf-pro'],
-                contextLens: [256, 512, 1024, 2048],
+                contextLens: [512, 1024, 2048],
                 horizonLens: [7, 14, 28],
                 defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 2048,
@@ -115,7 +115,7 @@ const getMTFTrainPolicy = (membershipLevel: number): MTFTrainPolicy => {
         case 2:
             return {
                 predictionTypes: ['mtf-lite', 'mtf-pro'],
-                contextLens: [256, 512, 1024],
+                contextLens: [512, 1024],
                 horizonLens: [7, 14, 28],
                 defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 1024,
@@ -124,7 +124,7 @@ const getMTFTrainPolicy = (membershipLevel: number): MTFTrainPolicy => {
         case 1:
             return {
                 predictionTypes: ['mtf-lite', 'mtf-pro'],
-                contextLens: [256, 512],
+                contextLens: [512],
                 horizonLens: [7, 14, 28],
                 defaultPredictionType: 'mtf-pro',
                 defaultContextLen: 512,
@@ -133,10 +133,10 @@ const getMTFTrainPolicy = (membershipLevel: number): MTFTrainPolicy => {
         default:
             return {
                 predictionTypes: ['mtf-lite'],
-                contextLens: [256],
+                contextLens: [512],
                 horizonLens: [7],
                 defaultPredictionType: 'mtf-lite',
-                defaultContextLen: 256,
+                defaultContextLen: 512,
                 defaultHorizonLen: 7,
             };
     }
@@ -454,6 +454,22 @@ const getDirectPredictionValues = (
     result: DirectPredictionResult,
     preferredKey: string,
 ): number[] => {
+    const rawValues = Array.isArray(result.adjust_raw_best_prediction_values)
+        ? result.adjust_raw_best_prediction_values
+        : [];
+    if (Number(result.stock_type || 0) === 1 && rawValues.length > 0) {
+        return rawValues.map(Number).filter(Number.isFinite);
+    }
+
+    const rawPreferredValues = Number(result.stock_type || 0) === 1
+        && preferredKey
+        && Array.isArray(result.adjust_raw_predictions?.[preferredKey])
+        ? result.adjust_raw_predictions[preferredKey]
+        : [];
+    if (rawPreferredValues.length > 0) {
+        return rawPreferredValues.map(Number).filter(Number.isFinite);
+    }
+
     const directValues = Array.isArray(result.best_prediction_values)
         ? result.best_prediction_values
         : [];
@@ -472,6 +488,14 @@ const getDirectPredictionValues = (
     return firstValues.map(Number).filter(Number.isFinite);
 };
 
+const getDirectLatestClose = (result: DirectPredictionResult): number => {
+    const rawLatestClose = Number(result.adjust_raw_latest_close);
+    if (Number(result.stock_type || 0) === 1 && rawLatestClose > 0) {
+        return rawLatestClose;
+    }
+    return Number(result.latest_close);
+};
+
 const getChunkPredictionSeries = (
     predictions: Record<string, number[]> | undefined,
     preferredKey: string,
@@ -480,6 +504,56 @@ const getChunkPredictionSeries = (
         return predictions[preferredKey];
     }
     return Object.values(predictions || {}).find(Array.isArray) || [];
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const toFiniteNumberArray = (value: unknown): number[] => (
+    Array.isArray(value)
+        ? value.map(Number).filter(Number.isFinite)
+        : []
+);
+
+const toPredictionMap = (value: unknown): Record<string, number[]> | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const out: Record<string, number[]> = {};
+    Object.entries(value).forEach(([key, series]) => {
+        const values = toFiniteNumberArray(series);
+        if (values.length > 0) {
+            out[key] = values;
+        }
+    });
+    return Object.keys(out).length > 0 ? out : undefined;
+};
+
+const currentPriceChunkView = (chunk: PublicPredictionItem['chunks'][number]) => {
+    if (Number(chunk.stock_type || 0) !== 1 || !chunk.adjust_raw_chunks) {
+        return chunk;
+    }
+    const raw = Array.isArray(chunk.adjust_raw_chunks)
+        ? chunk.adjust_raw_chunks.find(isRecord)
+        : chunk.adjust_raw_chunks;
+    if (!isRecord(raw)) {
+        return chunk;
+    }
+    const rawActuals = toFiniteNumberArray(raw.actual_values);
+    const rawDates = Array.isArray(raw.dates) ? raw.dates.map(String).filter(Boolean) : [];
+    return {
+        ...chunk,
+        predictions: toPredictionMap(raw.predictions) || chunk.predictions,
+        actual_values: rawActuals.length > 0 ? rawActuals : chunk.actual_values,
+        predicted_change_percent: toPredictionMap(raw.predicted_change_percent) || chunk.predicted_change_percent,
+        actual_change_percent: toFiniteNumberArray(raw.actual_change_percent).length > 0
+            ? toFiniteNumberArray(raw.actual_change_percent)
+            : chunk.actual_change_percent,
+        change_base_value: Number.isFinite(Number(raw.change_base_value)) ? Number(raw.change_base_value) : chunk.change_base_value,
+        change_base_date: typeof raw.change_base_date === 'string' ? raw.change_base_date : chunk.change_base_date,
+        dates: rawDates.length > 0 ? rawDates : chunk.dates,
+    };
 };
 
 const parseChunkDateTime = (value: unknown): number => {
@@ -504,7 +578,8 @@ const pickLatestHistoricalChunk = (
         (a, b) => parseChunkDateTime(a.start_date) - parseChunkDateTime(b.start_date),
     );
 
-    const hasDrawableHistory = (chunk: PublicPredictionItem['chunks'][number]) => {
+    const hasDrawableHistory = (sourceChunk: PublicPredictionItem['chunks'][number]) => {
+        const chunk = currentPriceChunkView(sourceChunk);
         const chunkPredictions = getChunkPredictionSeries(chunk.predictions, bestKey);
         return (
             (chunk.dates?.length || 0) > 0
@@ -535,7 +610,7 @@ const appendLatestActualAnchor = (
     predictedChangePercents: number[],
 ) => {
     const latestDate = String(directResult.latest_data_date || directResult.request_end_date || '').trim();
-    const latestClose = Number(directResult.latest_close);
+    const latestClose = getDirectLatestClose(directResult);
     if (!latestDate || !(latestClose > 0)) {
         return;
     }
@@ -567,26 +642,27 @@ const buildNextChunkChartData = (
         return null;
     }
 
-    const chunkDates = Array.isArray(lastChunk.dates) ? lastChunk.dates : [];
-    const chunkPredictions = getChunkPredictionSeries(lastChunk.predictions, bestKey);
+    const currentPriceChunk = currentPriceChunkView(lastChunk);
+    const chunkDates = Array.isArray(currentPriceChunk.dates) ? currentPriceChunk.dates : [];
+    const chunkPredictions = getChunkPredictionSeries(currentPriceChunk.predictions, bestKey);
     const historyLen = Math.min(
         chunkDates.length,
-        Math.max(lastChunk.actual_values?.length || 0, chunkPredictions.length),
+        Math.max(currentPriceChunk.actual_values?.length || 0, chunkPredictions.length),
     );
 
     const dates = chunkDates.slice(0, historyLen).map(String);
     const actuals = Array.from({ length: historyLen }, (_, index) => {
-        const num = Number(lastChunk.actual_values?.[index]);
+        const num = Number(currentPriceChunk.actual_values?.[index]);
         return Number.isFinite(num) ? num : 0;
     });
     const predictions = Array.from({ length: historyLen }, (_, index) => {
         const num = Number(chunkPredictions[index]);
         return Number.isFinite(num) ? num : 0;
     });
-    const actualChangePercents = Array.isArray(lastChunk.actual_change_percent)
-        ? lastChunk.actual_change_percent.slice(0, historyLen).map(Number)
+    const actualChangePercents = Array.isArray(currentPriceChunk.actual_change_percent)
+        ? currentPriceChunk.actual_change_percent.slice(0, historyLen).map(Number)
         : [];
-    const chunkPredictedChangePercents = getChunkPredictionSeries(lastChunk.predicted_change_percent, bestKey);
+    const chunkPredictedChangePercents = getChunkPredictionSeries(currentPriceChunk.predicted_change_percent, bestKey);
     const predictedChangePercents = Array.from({ length: historyLen }, (_, index) => {
         const num = Number(chunkPredictedChangePercents[index]);
         return Number.isFinite(num) ? num : Number.NaN;
@@ -599,9 +675,9 @@ const buildNextChunkChartData = (
         return null;
     }
 
-    const changeBase = Number(directResult.latest_close)
+    const changeBase = getDirectLatestClose(directResult)
         || actuals[actuals.length - 1]
-        || Number(lastChunk.change_base_value)
+        || Number(currentPriceChunk.change_base_value)
         || 0;
 
     appendLatestActualAnchor(directResult, dates, actuals, predictions, actualChangePercents, predictedChangePercents);
@@ -805,7 +881,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
     const [latestQuotes, setLatestQuotes] = useState<Record<string, { latest_price?: number; change_percent?: number; trading_date?: string; turnover_rate?: number }>>({});
     const [membershipLevel, setMembershipLevel] = useState(0);
     const [trainPredictionType, setTrainPredictionType] = useState<TrainPredictionType>('mtf-lite');
-    const [trainContextLen, setTrainContextLen] = useState(256);
+    const [trainContextLen, setTrainContextLen] = useState(512);
     const [trainHorizonLen, setTrainHorizonLen] = useState(7);
     const [trainingJobId, setTrainingJobId] = useState<string | null>(null);
     const [trainingProgress, setTrainingProgress] = useState<TrainingProgressState | null>(null);

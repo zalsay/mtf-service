@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 	"time"
 
 	"fintrack-api/config"
+	"fintrack-api/database"
 	"fintrack-api/models"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
@@ -17,7 +21,7 @@ func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
 		StockType:      1,
 		PredictionType: "non_cov",
 		HorizonLen:     7,
-		ContextLen:     256,
+		ContextLen:     512,
 	}
 
 	normalized, err := NormalizeMTFBestTrainRequest(req, 0, 12, false)
@@ -59,7 +63,7 @@ func TestNormalizeMTFBestTrainRequestMtfProBuildsCovariates(t *testing.T) {
 		StockType:      2,
 		PredictionType: "mtf-pro",
 		HorizonLen:     7,
-		ContextLen:     256,
+		ContextLen:     512,
 	}
 
 	normalized, err := NormalizeMTFBestTrainRequest(req, 1, 88, false)
@@ -165,13 +169,60 @@ func TestTriggerStaleMTFBestRefreshSubmitsBackgroundGatewayJob(t *testing.T) {
 	}
 }
 
+func TestListPublicMTFBestPageAppliesLimitOffset(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		2, "key-2", "600186", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-lite", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"莲花控股", 1, 8, 12,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY watchlist_count DESC, created_at DESC, id DESC")).
+		WithArgs(5, 5).
+		WillReturnRows(rows)
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	page, err := service.ListPublicMTFBestPage(0, "", false, 5, 5)
+	if err != nil {
+		t.Fatalf("ListPublicMTFBestPage error = %v", err)
+	}
+	if page.Total != 12 {
+		t.Fatalf("Total = %d, want 12", page.Total)
+	}
+	if page.Limit != 5 || page.Offset != 5 {
+		t.Fatalf("Limit/Offset = %d/%d, want 5/5", page.Limit, page.Offset)
+	}
+	if len(page.Items) != 1 || page.Items[0].UniqueKey != "key-2" {
+		t.Fatalf("Items = %#v, want key-2", page.Items)
+	}
+	if page.Items[0].WatchlistCount != 8 || page.Items[0].StockType != 1 {
+		t.Fatalf("WatchlistCount/StockType = %d/%d, want 8/1", page.Items[0].WatchlistCount, page.Items[0].StockType)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestNormalizeMTFBestTrainRequestLevel0RejectsCov(t *testing.T) {
 	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "cov",
 		HorizonLen:     7,
-		ContextLen:     256,
+		ContextLen:     512,
 	}
 
 	if _, err := NormalizeMTFBestTrainRequest(req, 0, 12, false); err == nil {
@@ -185,7 +236,7 @@ func TestNormalizeMTFBestTrainRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
 		StockType:      1,
 		PredictionType: "non_cov",
 		HorizonLen:     3,
-		ContextLen:     256,
+		ContextLen:     512,
 	}
 
 	if _, err := NormalizeMTFBestTrainRequest(req, 1, 12, false); err != nil {
@@ -472,10 +523,12 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 				"mtf_version": "2.5",
 				"context_len": 2048,
 				"horizon_len": 7,
-				"latest_data_date": "2026-06-05",
-				"future_dates": ["2026-06-05"],
+				"latest_data_date": "2026-06-06",
+				"future_dates": ["2026-06-06"],
 				"best_prediction_item": "mtf-0.5",
 				"best_prediction_values": [1.23],
+				"adjust_raw_best_prediction_values": [1.11],
+				"adjust_raw_latest_close": 1.01,
 				"predictions": {"mtf-0.5": [1.23]},
 				"cache_hit": true,
 				"covariate_analysis": {"debug": true},
@@ -518,6 +571,12 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	}
 	if data["best_prediction_item"] != "mtf-0.5" {
 		t.Fatalf("best_prediction_item = %#v, want mtf-0.5", data["best_prediction_item"])
+	}
+	if rawValues, ok := data["adjust_raw_best_prediction_values"].([]interface{}); !ok || len(rawValues) != 1 || rawValues[0] != float64(1.11) {
+		t.Fatalf("adjust_raw_best_prediction_values = %#v, want [1.11]", data["adjust_raw_best_prediction_values"])
+	}
+	if data["adjust_raw_latest_close"] != float64(1.01) {
+		t.Fatalf("adjust_raw_latest_close = %#v, want 1.01", data["adjust_raw_latest_close"])
 	}
 	if _, exists := data["cache_hit"]; exists {
 		t.Fatalf("cache_hit must be omitted from public response: %#v", data["cache_hit"])

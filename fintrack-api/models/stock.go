@@ -174,6 +174,7 @@ type SaveMTFValChunkRequest struct {
 	StartDate          string                 `json:"start_date" binding:"required"`
 	EndDate            string                 `json:"end_date" binding:"required"`
 	Symbol             string                 `json:"symbol"`
+	StockType          int                    `json:"stock_type,omitempty"`
 	UserID             *int                   `json:"user_id"`
 	Predictions        map[string]interface{} `json:"predictions" binding:"required"` // best item vector or all columns
 	Actual             []float64              `json:"actual_values" binding:"required"`
@@ -187,6 +188,7 @@ type SaveMTFValChunkRequest struct {
 	CovariateConfig    map[string]interface{} `json:"covariate_config"`
 	CovariateSignature string                 `json:"covariate_signature"`
 	CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
+	AdjustRawChunks    interface{}            `json:"adjust_raw_chunks,omitempty"`
 }
 
 // 保存 MTF 回测结果的请求模型
