@@ -486,6 +486,7 @@ func TestTriggerMTFPredictOncePassesContinuationDates(t *testing.T) {
 }
 
 func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
+	futureDate := time.Now().UTC().Format("2006-01-02")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
 			t.Fatalf("path = %s, want /api/v1/save-predictions/mtf-direct/by-request", r.URL.Path)
@@ -523,13 +524,17 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 				"mtf_version": "2.5",
 				"context_len": 2048,
 				"horizon_len": 7,
-				"latest_data_date": "2026-06-06",
-				"future_dates": ["2026-06-06"],
+				"latest_data_date": "` + futureDate + `",
+				"latest_close": 1.11,
+				"change_base_value": 1.11,
+				"change_base_date": "2026-06-05",
+				"future_dates": ["` + futureDate + `"],
 				"best_prediction_item": "mtf-0.5",
 				"best_prediction_values": [1.23],
 				"adjust_raw_best_prediction_values": [1.11],
 				"adjust_raw_latest_close": 1.01,
 				"predictions": {"mtf-0.5": [1.23]},
+				"predicted_change_percent": {"mtf-0.5": [10.8108]},
 				"cache_hit": true,
 				"covariate_analysis": {"debug": true},
 				"covariate_signature": "sig123"
@@ -577,6 +582,9 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	}
 	if data["adjust_raw_latest_close"] != float64(1.01) {
 		t.Fatalf("adjust_raw_latest_close = %#v, want 1.01", data["adjust_raw_latest_close"])
+	}
+	if data["change_base_value"] == nil || data["change_base_date"] == nil || data["predicted_change_percent"] == nil {
+		t.Fatalf("expected change fields in cached response: %#v", data)
 	}
 	if _, exists := data["cache_hit"]; exists {
 		t.Fatalf("cache_hit must be omitted from public response: %#v", data["cache_hit"])

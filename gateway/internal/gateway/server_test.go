@@ -173,6 +173,84 @@ func TestNormalizeInferencePayloadMapsLegacyPredictionTypeToMtfLite(t *testing.T
 	}
 }
 
+func TestNormalizeInferencePayloadDoesNotInjectBestSyncDates(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510050",
+		"stock_type": 2,
+		"years": 15,
+		"horizon_len": 7,
+		"context_len": 2048,
+		"prediction_type": "mtf-pro"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_for_best_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	if normalizedRequest.StartDate != nil {
+		t.Fatalf("expected best sync start_date to remain empty, got %#v", normalizedRequest.StartDate)
+	}
+	if normalizedRequest.EndDate != nil {
+		t.Fatalf("expected best sync end_date to remain empty, got %#v", normalizedRequest.EndDate)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if _, exists := normalized["start_date"]; exists {
+		t.Fatalf("expected normalized best sync body to omit start_date, got %#v", normalized["start_date"])
+	}
+	if _, exists := normalized["end_date"]; exists {
+		t.Fatalf("expected normalized best sync body to omit end_date, got %#v", normalized["end_date"])
+	}
+}
+
+func TestNormalizeInferencePayloadPreservesExplicitBestSyncDates(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510050",
+		"stock_type": 2,
+		"years": 15,
+		"start_date": "2011-06-01",
+		"end_date": "2026-06-01",
+		"horizon_len": 7,
+		"context_len": 2048,
+		"prediction_type": "mtf-pro"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_for_best_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	if normalizedRequest.StartDate != "20110601" {
+		t.Fatalf("expected explicit start_date to be normalized, got %#v", normalizedRequest.StartDate)
+	}
+	if normalizedRequest.EndDate != "20260601" {
+		t.Fatalf("expected explicit end_date to be normalized, got %#v", normalizedRequest.EndDate)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if normalized["start_date"] != "20110601" {
+		t.Fatalf("expected normalized body start_date=20110601, got %#v", normalized["start_date"])
+	}
+	if normalized["end_date"] != "20260601" {
+		t.Fatalf("expected normalized body end_date=20260601, got %#v", normalized["end_date"])
+	}
+}
+
 func TestNormalizeInferencePayloadInjectsPredictOnceDefaults(t *testing.T) {
 	body := []byte(`{
 		"stock_code": "000001",

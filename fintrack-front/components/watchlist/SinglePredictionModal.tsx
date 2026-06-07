@@ -370,6 +370,7 @@ const buildPredictionChartData = (
     );
     const futureDates = (result.future_dates || []).map(String).filter(Boolean);
     const futurePredictions = getDirectPredictionValues(result, bestKey);
+    const directPredictedChangePercents = getPredictionSeries(result.predicted_change_percent, bestKey);
 
     const dates: string[] = [];
     const actuals: number[] = [];
@@ -426,7 +427,11 @@ const buildPredictionChartData = (
         const predicted = Number(futurePredictions[index]);
         dates.push(futureDates[index]);
         predictions.push(Number.isFinite(predicted) ? predicted : 0);
+        const backendPredictedChange = Number(directPredictedChangePercents[index]);
         predictedChangePercents.push(
+            Number.isFinite(backendPredictedChange)
+                ? backendPredictedChange
+                :
             changeBase > 0 && Number.isFinite(predicted)
                 ? ((predicted - changeBase) / changeBase) * 100
                 : Number.NaN,
@@ -522,7 +527,12 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
     const numericSelectedSeries = selectedSeries.map(Number).filter(Number.isFinite);
     const latestClose = predictionResult?.latest_close ?? currentPrice;
     const latestPrediction = selectedSeries.length > 0 ? selectedSeries[selectedSeries.length - 1] : undefined;
-    const predictedChangePercent = latestClose && latestPrediction
+    const backendPredictedChangeSeries = predictionResult && bestSeriesKey
+        ? getPredictionSeries(predictionResult.predicted_change_percent, bestSeriesKey).map(Number).filter(Number.isFinite)
+        : [];
+    const predictedChangePercent = backendPredictedChangeSeries.length > 0
+        ? backendPredictedChangeSeries[backendPredictedChangeSeries.length - 1]
+        : latestClose && latestPrediction
         ? ((latestPrediction - latestClose) / latestClose) * 100
         : 0;
     const directChartData: PredictionChartData | null = predictionResult

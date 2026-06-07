@@ -1454,9 +1454,12 @@ func slimDirectPredictionCacheData(data map[string]interface{}) map[string]inter
 		"request_end_date",
 		"latest_data_date",
 		"latest_close",
+		"change_base_value",
+		"change_base_date",
 		"future_dates",
 		"best_prediction_item",
 		"best_prediction_values",
+		"predicted_change_percent",
 		"short_name",
 		"gpu_id",
 	}

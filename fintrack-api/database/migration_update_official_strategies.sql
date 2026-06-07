@@ -1,5 +1,6 @@
 -- 优化官方推荐策略参数：保留 unique_key，避免影响已绑定策略。
-ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE mtf_strategy_params ALTER COLUMN is_public SET DEFAULT 1;
 
 INSERT INTO mtf_strategy_params (
     unique_key, name, is_public, user_id,

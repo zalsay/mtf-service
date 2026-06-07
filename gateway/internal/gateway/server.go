@@ -872,12 +872,6 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 		}
 	}
 
-	now := time.Now().In(shanghaiLocation)
-	defaultEnd := now
-	if targetPath == "/internal/predict_for_best_sync" {
-		defaultEnd = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, shanghaiLocation)
-	}
-
 	request.StockCode = strings.TrimSpace(request.StockCode)
 	normalized["stock_code"] = request.StockCode
 
@@ -932,21 +926,34 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 		}
 	}
 
-	endDate := modelsNormalizeDateOrDefault(request.EndDate, defaultEnd)
-	normalized["end_date"] = endDate
-	request.EndDate = endDate
+	endDateFallback := time.Now().In(shanghaiLocation)
+	if targetPath == "/internal/predict_for_best_sync" {
+		endDateFallback = time.Time{}
+	}
+	endDate := modelsNormalizeDateOrDefault(request.EndDate, endDateFallback)
+	if endDate != "" {
+		normalized["end_date"] = endDate
+		request.EndDate = endDate
+	} else {
+		delete(normalized, "end_date")
+		request.EndDate = nil
+	}
 
 	startDate := modelsNormalizeDateOrDefault(request.StartDate, time.Time{})
-	if startDate == "" {
-		years := normalizeYears(request.Years)
-		if years > 0 {
-			startDate = subtractYearsYYYYMMDD(endDate, years)
-			normalized["start_date"] = startDate
-			request.StartDate = startDate
-		}
-	} else {
+	if startDate != "" {
 		normalized["start_date"] = startDate
 		request.StartDate = startDate
+	} else {
+		delete(normalized, "start_date")
+		request.StartDate = nil
+		if targetPath != "/internal/predict_for_best_sync" {
+			years := normalizeYears(request.Years)
+			if years > 0 && endDate != "" {
+				startDate = subtractYearsYYYYMMDD(endDate, years)
+				normalized["start_date"] = startDate
+				request.StartDate = startDate
+			}
+		}
 	}
 
 	updatedBody, err := json.Marshal(normalized)

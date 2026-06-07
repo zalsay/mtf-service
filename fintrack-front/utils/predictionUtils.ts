@@ -325,23 +325,33 @@ export const resolvePublicPredictionItems = (items: PublicPredictionItem[] = [])
 export const mapResolvedPredictionToStockData = (
     resolved: ResolvedPublicPrediction,
     language: string,
+    preferredPredictionType?: MTFPredictionType | null,
 ): StockData | null => {
-    const primary = resolved.primary;
-    const bestItemKey = primary.best.best_prediction_item;
-    const contextLen = primary.best.context_len;
-    const horizonLen = primary.best.horizon_len;
-    const series = extractSeriesFromChunks(primary.chunks, bestItemKey);
-    const isProOnly = isMTFProPrediction(primary) && !resolved.pro;
+    const liteSource = isMTFProPrediction(resolved.primary) ? undefined : resolved.primary;
+    const proSource = resolved.pro || (isMTFProPrediction(resolved.primary) ? resolved.primary : undefined);
+    const displaySource = preferredPredictionType === 'mtf-pro' && proSource
+        ? proSource
+        : (liteSource || proSource || resolved.primary);
+    const bestItemKey = displaySource.best.best_prediction_item;
+    const contextLen = displaySource.best.context_len;
+    const horizonLen = displaySource.best.horizon_len;
+    const series = extractSeriesFromChunks(displaySource.chunks, bestItemKey);
+    const isProDisplay = isMTFProPrediction(displaySource);
 
     if (!series) {
         return null;
     }
 
-    const liteSeries = isProOnly ? null : series;
-    const proSource = resolved.pro || (isProOnly ? primary : undefined);
-    const proSeries = proSource
-        ? extractSeriesFromChunks(proSource.chunks, proSource.best.best_prediction_item)
+    const liteSeries = liteSource
+        ? (liteSource === displaySource ? series : extractSeriesFromChunks(liteSource.chunks, liteSource.best.best_prediction_item))
         : null;
+    const proSeries = proSource
+        ? (proSource === displaySource ? series : extractSeriesFromChunks(proSource.chunks, proSource.best.best_prediction_item))
+        : null;
+    const litePredictions = liteSeries ? alignSeriesByDate(series.dates, liteSeries, value => value.predictions) : undefined;
+    const litePredictedChangePercents = liteSeries
+        ? alignSeriesByDate(series.dates, liteSeries, value => value.predictedChangePercents, Number.NaN)
+        : undefined;
     const proPredictions = proSeries ? alignSeriesByDate(series.dates, proSeries, value => value.predictions) : undefined;
     const proPredictedChangePercents = proSeries
         ? alignSeriesByDate(series.dates, proSeries, value => value.predictedChangePercents, Number.NaN)
@@ -355,7 +365,7 @@ export const mapResolvedPredictionToStockData = (
     const proLastPred = proSeries && proSeries.predictions.length > 0
         ? proSeries.predictions[proSeries.predictions.length - 1]
         : undefined;
-    const displayPredictionPrice = isProOnly ? (proLastPred ?? lastPred) : lastPred;
+    const displayPredictionPrice = isProDisplay ? (proLastPred ?? lastPred) : lastPred;
     const price = lastActual || displayPredictionPrice;
 
     const startActual = series.actuals.length > 0 ? series.actuals[0] : 0;
@@ -363,26 +373,26 @@ export const mapResolvedPredictionToStockData = (
 
     const predictedChangePercent = liteSeries ? getSeriesChangePercent(liteSeries.predictions) : undefined;
 
-    const metrics = parseMetrics(primary.best.best_metrics);
+    const metrics = parseMetrics(displaySource.best.best_metrics);
     const compositeScore = Number(metrics.composite_score);
     const confidence = Number.isFinite(compositeScore) ? 100 - compositeScore : 85;
     const proCompositeScore = Number(proMetrics.composite_score);
     const proConfidence = Number.isFinite(proCompositeScore) ? 100 - proCompositeScore : undefined;
     const proPredictedChangePercent = proSeries ? getSeriesChangePercent(proSeries.predictions) : undefined;
     const effectivePredictedChangePercent = predictedChangePercent ?? proPredictedChangePercent ?? 0;
-    const displayModelName = isProOnly ? PRO_MODEL_LABEL : PRIMARY_MODEL_LABEL;
-    const displayConfidence = isProOnly
+    const displayModelName = isProDisplay ? PRO_MODEL_LABEL : PRIMARY_MODEL_LABEL;
+    const displayConfidence = isProDisplay
         ? (proConfidence !== undefined ? proConfidence : confidence)
         : confidence;
     const watchlistCount = Math.max(
-        Number(primary.best.watchlist_count ?? 0),
+        Number(resolved.primary.best.watchlist_count ?? 0),
         Number(resolved.pro?.best.watchlist_count ?? 0),
     );
 
     return {
-        symbol: primary.best.symbol,
-        companyName: primary.best.short_name || primary.best.symbol,
-        stockType: inferStockType(primary.best.symbol, primary.best.short_name),
+        symbol: displaySource.best.symbol,
+        companyName: displaySource.best.short_name || displaySource.best.symbol,
+        stockType: inferStockType(displaySource.best.symbol, displaySource.best.short_name),
         watchlistCount: Number.isFinite(watchlistCount) ? watchlistCount : 0,
         currentPrice: price,
         changePercent,
@@ -396,13 +406,13 @@ export const mapResolvedPredictionToStockData = (
                 displayModelName,
                 contextLen,
                 horizonLen,
-                !isProOnly && Boolean(proPredictions),
+                !isProDisplay && Boolean(proPredictions),
                 language,
             ),
-            modelName: isProOnly ? undefined : PRIMARY_MODEL_LABEL,
+            modelName: isProDisplay ? undefined : PRIMARY_MODEL_LABEL,
             contextLen,
             horizonLen,
-            maxDeviationPercent: primary.max_deviation_percent,
+            maxDeviationPercent: displaySource.max_deviation_percent,
             proModelName: proSource ? PRO_MODEL_LABEL : undefined,
             proContextLen: proSource?.best.context_len,
             proHorizonLen: proSource?.best.horizon_len,
@@ -411,8 +421,8 @@ export const mapResolvedPredictionToStockData = (
             proPredictedChangePercent,
             chartData: {
                 ...series,
-                predictions: liteSeries?.predictions || [],
-                predictedChangePercents: liteSeries?.predictedChangePercents || [],
+                predictions: litePredictions || [],
+                predictedChangePercents: litePredictedChangePercents || [],
                 proPredictions,
                 proPredictedChangePercents,
             },

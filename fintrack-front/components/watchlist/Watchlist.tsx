@@ -429,7 +429,8 @@ const buildChartPredictionOptions = (
                 primary,
                 pro: bucket.primary ? bucket.pro : undefined,
             };
-            if (!mapResolvedPredictionToStockData(resolved, language)?.prediction?.chartData) {
+            const previewType = isMTFProPredictionItemLocal(resolved.primary) && !resolved.pro ? 'mtf-pro' : undefined;
+            if (!mapResolvedPredictionToStockData(resolved, language, previewType)?.prediction?.chartData) {
                 return null;
             }
             return createChartPredictionOption(key, resolved, language);
@@ -670,6 +671,7 @@ const buildNextChunkChartData = (
 
     const futureDates = (directResult.future_dates || []).map(String).filter(Boolean);
     const futurePredictions = getDirectPredictionValues(directResult, bestKey);
+    const directPredictedChangePercents = getChunkPredictionSeries(directResult.predicted_change_percent, bestKey);
     const futureLen = Math.min(futureDates.length, futurePredictions.length);
     if (futureLen === 0) {
         return null;
@@ -686,7 +688,11 @@ const buildNextChunkChartData = (
         const predicted = Number(futurePredictions[index]);
         dates.push(futureDates[index]);
         predictions.push(Number.isFinite(predicted) ? predicted : 0);
+        const backendPredictedChange = Number(directPredictedChangePercents[index]);
         predictedChangePercents.push(
+            Number.isFinite(backendPredictedChange)
+                ? backendPredictedChange
+                :
             changeBase > 0 && Number.isFinite(predicted)
                 ? ((predicted - changeBase) / changeBase) * 100
                 : Number.NaN,
@@ -1107,7 +1113,7 @@ const Watchlist: React.FC<WatchlistProps> = ({ initialStocks, onAuthError }) => 
             setTrainHorizonLen(Number(loadedItem.best.horizon_len));
         }
 
-        const mapped = mapResolvedPredictionToStockData(option.resolved, language);
+        const mapped = mapResolvedPredictionToStockData(option.resolved, language, loadedPredictionType);
         if (!mapped?.prediction?.chartData) {
             return;
         }

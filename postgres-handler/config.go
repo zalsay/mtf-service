@@ -279,7 +279,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
         covariate_config JSONB,
         covariate_signature TEXT,
         covariate_analysis JSONB,
-        is_public SMALLINT NOT NULL DEFAULT 0,
+        is_public SMALLINT NOT NULL DEFAULT 1,
         train_start_date DATE NOT NULL,
         train_end_date DATE NOT NULL,
         test_start_date DATE NOT NULL,
@@ -300,6 +300,8 @@ func (h *DatabaseHandler) initializeDatabase() error {
 	}
 	// 为已存在的表补充缺失列（如果缺失）
 	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS stock_type INTEGER`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 1`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ALTER COLUMN is_public SET DEFAULT 1`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite'`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ALTER COLUMN prediction_type SET DEFAULT 'mtf-lite'`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error

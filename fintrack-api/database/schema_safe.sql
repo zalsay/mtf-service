@@ -126,7 +126,7 @@ CREATE TABLE IF NOT EXISTS mtf_strategy_params (
     unique_key VARCHAR(255) NOT NULL UNIQUE,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     name VARCHAR(255),
-    is_public SMALLINT NOT NULL DEFAULT 0,
+    is_public SMALLINT NOT NULL DEFAULT 1,
     buy_threshold_pct DOUBLE PRECISION,
     sell_threshold_pct DOUBLE PRECISION,
     initial_cash DOUBLE PRECISION,
@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
-    is_public SMALLINT NOT NULL DEFAULT 0,
+    is_public SMALLINT NOT NULL DEFAULT 1,
     train_start_date DATE NOT NULL,
     train_end_date DATE NOT NULL,
     test_start_date DATE NOT NULL,
@@ -352,7 +352,8 @@ ALTER TABLE mtf_agent_messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WIT
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS symbol VARCHAR(20);
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS stock_type SMALLINT NOT NULL DEFAULT 1;
 ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS strategy_unique_key VARCHAR(255);
-ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE mtf_best_predictions ALTER COLUMN is_public SET DEFAULT 1;
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS short_name VARCHAR(255);
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite';
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB;
@@ -369,7 +370,8 @@ ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_date
 ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_config JSONB;
 ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
 ALTER TABLE mtf_backtests ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
-ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 0;
+ALTER TABLE mtf_strategy_params ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE mtf_strategy_params ALTER COLUMN is_public SET DEFAULT 1;
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS depth VARCHAR(16);
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'succeeded';
 ALTER TABLE uzi_reports ADD COLUMN IF NOT EXISTS directory_name VARCHAR(255);
