@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import LanguageSwitcher from '../layout/LanguageSwitcher';
 import { useLanguage } from '../../contexts/LanguageContext';
-import { settingsAPI } from '../../services/apiService';
+import { authAPI, settingsAPI } from '../../services/apiService';
 import InviteRedeemCard from './InviteRedeemCard';
 
 const RECOMMENDED_AI_BASE_URL = 'https://api.deepseek.com';
@@ -35,6 +35,11 @@ const Settings: React.FC<SettingsProps> = ({ onLogout, isDemoMode = false }) => 
     const [savingAIConfig, setSavingAIConfig] = useState(false);
     const [aiConfigMessage, setAIConfigMessage] = useState('');
     const [aiConfigError, setAIConfigError] = useState('');
+    const [tempToken, setTempToken] = useState('');
+    const [tempTokenExpiresIn, setTempTokenExpiresIn] = useState(0);
+    const [tempTokenMessage, setTempTokenMessage] = useState('');
+    const [tempTokenError, setTempTokenError] = useState('');
+    const [isGeneratingTempToken, setIsGeneratingTempToken] = useState(false);
 
     const applyRecommendedConfig = () => {
         setBaseUrl(RECOMMENDED_AI_BASE_URL);
@@ -102,6 +107,26 @@ const Settings: React.FC<SettingsProps> = ({ onLogout, isDemoMode = false }) => 
             setAIConfigError(error?.message || t('settings.aiSaveFailed', '保存 AI 模型配置失败'));
         } finally {
             setSavingAIConfig(false);
+        }
+    };
+
+    const handleGenerateTempToken = async () => {
+        setIsGeneratingTempToken(true);
+        setTempToken('');
+        setTempTokenExpiresIn(0);
+        setTempTokenMessage('');
+        setTempTokenError('');
+        try {
+            const response = await authAPI.createAPIKeyTempToken();
+            setTempToken(response.token);
+            setTempTokenExpiresIn(response.expires_in);
+            setTempTokenMessage(language === 'zh'
+                ? '临时令牌已生成，仅显示一次。'
+                : 'Temporary token generated. It is shown once.');
+        } catch (error: any) {
+            setTempTokenError(error?.message || (language === 'zh' ? '生成临时令牌失败' : 'Failed to generate temporary token'));
+        } finally {
+            setIsGeneratingTempToken(false);
         }
     };
 
@@ -244,6 +269,61 @@ const Settings: React.FC<SettingsProps> = ({ onLogout, isDemoMode = false }) => 
             {activeTab === 'account' && (
             <section className="grid gap-4 md:grid-cols-2">
                 <InviteRedeemCard isDemoMode={isDemoMode} />
+
+                <div className="rounded-2xl border border-white/10 bg-card-dark p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-400/10 text-emerald-100">
+                            <span className="material-symbols-outlined">vpn_key</span>
+                        </div>
+                        <div>
+                            <h2 className="text-white text-lg font-bold leading-normal">
+                                {language === 'zh' ? 'Open API 临时令牌' : 'Open API Temporary Token'}
+                            </h2>
+                            <p className="text-white/50 text-sm leading-normal">
+                                {language === 'zh'
+                                    ? '生成 32 位一次性令牌，交给 OpenClaw、Claude Code、Codex 等智能体调用。'
+                                    : 'Generate a 32-character one-time token for OpenClaw, Claude Code, Codex, and other agents.'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {tempToken && (
+                        <div className="mb-4 rounded-xl border border-emerald-300/20 bg-emerald-300/10 p-3">
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                                <span className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-100/70">
+                                    {language === 'zh' ? '一次性令牌' : 'One-time token'}
+                                </span>
+                                <span className="text-xs font-semibold text-emerald-100/75">
+                                    {language === 'zh' ? `${Math.floor(tempTokenExpiresIn / 60)} 分钟内有效` : `Valid for ${Math.floor(tempTokenExpiresIn / 60)} minutes`}
+                                </span>
+                            </div>
+                            <code className="block break-all rounded-lg bg-black/30 px-3 py-2 font-mono text-sm text-emerald-50">
+                                {tempToken}
+                            </code>
+                        </div>
+                    )}
+
+                    <div className="mb-4 min-h-5 text-sm">
+                        {tempTokenError && <span className="text-red-200">{tempTokenError}</span>}
+                        {!tempTokenError && tempTokenMessage && <span className="text-emerald-200">{tempTokenMessage}</span>}
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={handleGenerateTempToken}
+                        disabled={isGeneratingTempToken}
+                        className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/10 text-sm font-bold text-emerald-100 transition-colors hover:bg-emerald-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        <span className={`material-symbols-outlined text-[18px] ${isGeneratingTempToken ? 'animate-spin' : ''}`}>
+                            {isGeneratingTempToken ? 'progress_activity' : 'key'}
+                        </span>
+                        <span>
+                            {isGeneratingTempToken
+                                ? (language === 'zh' ? '生成中...' : 'Generating...')
+                                : (language === 'zh' ? '生成临时令牌' : 'Generate temporary token')}
+                        </span>
+                    </button>
+                </div>
 
                 <div className="rounded-2xl border border-white/10 bg-card-dark p-5">
                     <div className="mb-4 flex items-center gap-3">

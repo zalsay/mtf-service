@@ -448,6 +448,11 @@ export interface RedeemInviteResponse {
   membership_expires_at: string;
 }
 
+export interface APIKeyTempTokenResponse {
+  token: string;
+  expires_in: number;
+}
+
 // 设置认证token
 export const setAuthToken = (token: string) => {
   authToken = token;
@@ -899,6 +904,9 @@ export const authAPI = {
       method: 'POST',
       body: JSON.stringify({ code }),
     });
+  },
+  createAPIKeyTempToken: async (): Promise<APIKeyTempTokenResponse> => {
+    return apiRequest('/auth/api-key-temp-token', { method: 'POST' });
   },
   // 用户注销
   logout: async (): Promise<void> => {
