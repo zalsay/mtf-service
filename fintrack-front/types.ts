@@ -99,8 +99,15 @@ export interface PublicPredictionItem {
   max_deviation_percent?: number;
 }
 
+export interface PublicPredictionSymbolGroup {
+  symbol: string;
+  short_name?: string;
+  stock_type?: number;
+  variants: PublicPredictionItem[];
+}
+
 export interface PublicPredictionResponse {
-  items: PublicPredictionItem[];
+  items: Array<PublicPredictionItem | PublicPredictionSymbolGroup>;
   count: number;
   total?: number;
   limit?: number;

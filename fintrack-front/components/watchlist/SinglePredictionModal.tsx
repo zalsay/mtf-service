@@ -11,7 +11,7 @@ import {
     mtfAPI,
 } from '../../services/apiService';
 import type { PredictionChartData, PublicPredictionItem } from '../../types';
-import { isMTFProPredictionItem, resolvePublicPredictionItems } from '../../utils/predictionUtils';
+import { flattenPublicPredictionItems, isMTFProPredictionItem, resolvePublicPredictionItems } from '../../utils/predictionUtils';
 
 interface SinglePredictionModalProps {
     isOpen: boolean;
@@ -650,7 +650,7 @@ const SinglePredictionModal: React.FC<SinglePredictionModalProps> = ({
                     return;
                 }
                 const matched = pickHistoricalBestItem(
-                    response.items || [],
+                    flattenPublicPredictionItems(response.items || []),
                     symbol,
                     effectivePredictionType,
                     contextLen,

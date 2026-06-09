@@ -1,4 +1,4 @@
-import { PredictionChartData, PublicPredictionItem, StockData, MTFChunk } from '../types';
+import { PredictionChartData, PublicPredictionItem, StockData, MTFChunk, PublicPredictionSymbolGroup } from '../types';
 
 const PRIMARY_MODEL_LABEL = 'mtf-1.5-lite';
 const PRO_MODEL_LABEL = 'mtf-1.5-pro';
@@ -7,6 +7,8 @@ export interface ResolvedPublicPrediction {
     primary: PublicPredictionItem;
     pro?: PublicPredictionItem;
 }
+
+type PublicPredictionResponseItem = PublicPredictionItem | PublicPredictionSymbolGroup;
 
 export type MTFPredictionType = 'mtf-lite' | 'mtf-pro';
 
@@ -132,6 +134,30 @@ const selectLatestItem = (
 
 const isMTFProPrediction = (item: PublicPredictionItem): boolean => {
     return isMTFProPredictionItem(item);
+};
+
+const isPublicPredictionItem = (item: PublicPredictionResponseItem | null | undefined): item is PublicPredictionItem => (
+    Boolean(item && 'best' in item && item.best)
+);
+
+export const flattenPublicPredictionItems = (
+    items: PublicPredictionResponseItem[] = [],
+): PublicPredictionItem[] => {
+    const flattened: PublicPredictionItem[] = [];
+    items.forEach(item => {
+        if (isPublicPredictionItem(item)) {
+            flattened.push(item);
+            return;
+        }
+        if (Array.isArray(item?.variants)) {
+            item.variants.forEach(variant => {
+                if (isPublicPredictionItem(variant)) {
+                    flattened.push(variant);
+                }
+            });
+        }
+    });
+    return flattened;
 };
 
 const buildPredictionGroupKey = (item: PublicPredictionItem): string => {
@@ -287,10 +313,10 @@ const buildPredictionAnalysis = (
     return `Best: ${displayModelName} Ctx: ${formattedContext} Hor: ${horizonLen || '?'}d${suffix}`;
 };
 
-export const resolvePublicPredictionItems = (items: PublicPredictionItem[] = []): ResolvedPublicPrediction[] => {
+export const resolvePublicPredictionItems = (items: PublicPredictionResponseItem[] = []): ResolvedPublicPrediction[] => {
     const grouped = new Map<string, { primary?: PublicPredictionItem; pro?: PublicPredictionItem }>();
 
-    for (const item of items) {
+    for (const item of flattenPublicPredictionItems(items)) {
         if (!item?.best?.symbol || !item.best.best_prediction_item) {
             continue;
         }

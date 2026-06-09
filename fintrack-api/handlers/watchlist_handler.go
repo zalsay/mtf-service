@@ -774,6 +774,82 @@ func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTF
 	return result, nil
 }
 
+func groupMTFBestVariantsBySymbol(items []gin.H) []gin.H {
+	type symbolGroup struct {
+		symbol   string
+		name     string
+		stockTyp int
+		variants []gin.H
+	}
+	groups := make([]symbolGroup, 0)
+	groupByKey := make(map[string]int)
+
+	for _, item := range items {
+		best, ok := item["best"].(gin.H)
+		if !ok {
+			groups = append(groups, symbolGroup{variants: []gin.H{item}})
+			continue
+		}
+		symbol := strings.TrimSpace(fmt.Sprint(best["symbol"]))
+		if symbol == "" {
+			groups = append(groups, symbolGroup{variants: []gin.H{item}})
+			continue
+		}
+		key := normalizeMTFResponseSymbol(symbol)
+		index, exists := groupByKey[key]
+		if !exists {
+			stockType := 0
+			switch value := best["stock_type"].(type) {
+			case int:
+				stockType = value
+			case int64:
+				stockType = int(value)
+			case float64:
+				stockType = int(value)
+			}
+			groups = append(groups, symbolGroup{
+				symbol:   symbol,
+				name:     strings.TrimSpace(fmt.Sprint(best["short_name"])),
+				stockTyp: stockType,
+				variants: []gin.H{},
+			})
+			index = len(groups) - 1
+			groupByKey[key] = index
+		}
+		groups[index].variants = append(groups[index].variants, item)
+	}
+
+	out := make([]gin.H, 0, len(groups))
+	for _, group := range groups {
+		item := gin.H{
+			"symbol":   group.symbol,
+			"variants": group.variants,
+		}
+		if group.name != "" {
+			item["short_name"] = group.name
+		}
+		if group.stockTyp > 0 {
+			item["stock_type"] = group.stockTyp
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func normalizeMTFResponseSymbol(symbol string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(symbol))
+	digits := strings.Map(func(r rune) rune {
+		if r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, trimmed)
+	if digits != "" {
+		return digits
+	}
+	return trimmed
+}
+
 // 公开查询：返回 is_public = 1 的 mtf-best，并联查对应的验证分块数据
 func (h *WatchlistHandler) ListPublicMTFBestWithValidation(c *gin.Context) {
 	horizonLen := 0
@@ -815,6 +891,7 @@ func (h *WatchlistHandler) ListPublicMTFBestWithValidation(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	result = groupMTFBestVariantsBySymbol(result)
 
 	c.JSON(http.StatusOK, gin.H{
 		"items":    result,

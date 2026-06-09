@@ -8,7 +8,7 @@ import { watchlistAPI, strategyAPI, backtestAPI, authAPI, getAccessiblePredictio
 import { type PredictionChartMarker, type PredictionChartTheme } from '../common/PredictionChart';
 import PredictionChartPanel from '../common/PredictionChartPanel';
 import type { PublicPredictionItem } from '../../types';
-import { isMTFProPredictionItem, isMTFProUniqueKey } from '../../utils/predictionUtils';
+import { flattenPublicPredictionItems, isMTFProPredictionItem, isMTFProUniqueKey } from '../../utils/predictionUtils';
 
 interface PortfolioProps {
     onAuthError?: () => void;
@@ -359,7 +359,7 @@ const BacktestConfigModal: React.FC<BacktestConfigModalProps> = ({
             try {
                 const response = await getAccessiblePredictions(undefined, symbol);
                 if (cancelled) return;
-                const nextConfigs = buildBacktestConfigs(response.items || [], symbol);
+                const nextConfigs = buildBacktestConfigs(flattenPublicPredictionItems(response.items || []), symbol);
                 setConfigs(nextConfigs);
                 const preferred = nextConfigs.find(config => config.uniqueKey === preferredKey) || nextConfigs[0];
                 if (preferred) {
@@ -1503,7 +1503,7 @@ const Portfolio: React.FC<PortfolioProps> = ({ onAuthError }) => {
 
     const loadBacktestConfigsForSymbol = async (stockSymbol: string) => {
         const response = await getAccessiblePredictions(undefined, stockSymbol);
-        return buildBacktestConfigs(response.items || [], stockSymbol);
+        return buildBacktestConfigs(flattenPublicPredictionItems(response.items || []), stockSymbol);
     };
 
     const loadBacktestChartResult = async (uniqueKey: string, stockSymbol?: string, title?: string) => {

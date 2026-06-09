@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"fintrack-api/config"
 	"fintrack-api/database"
@@ -111,5 +112,90 @@ func TestGetMTFBestValueByUniqueKeyHandlerRequiresUniqueKey(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "unique_key is required") {
 		t.Fatalf("body = %s, want unique_key error", rec.Body.String())
+	}
+}
+
+func TestListPublicMTFBestWithValidationGroupsVariantsBySymbol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	bestRows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		1, "510050-h7-c2048", "510050", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-pro", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"上证50ETF", 2, 5, 1,
+	).AddRow(
+		2, "510050-h14-c2048", "510050", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-pro", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 14, now, now,
+		"上证50ETF", 2, 5, 1,
+	)
+	mock.ExpectQuery("FROM ranked").
+		WithArgs(2, 1).
+		WillReturnRows(bestRows)
+
+	chunkRows := sqlmock.NewRows([]string{
+		"unique_key", "chunk_index", "start_date", "end_date", "symbol",
+		"predictions", "actual_values", "predicted_change_percent", "actual_change_percent",
+		"change_base_value", "change_base_date", "dates", "prediction_type",
+		"covariate_config", "covariate_signature", "covariate_analysis",
+		"stock_type", "adjust_raw_chunks",
+	}).AddRow(
+		"510050-h7-c2048", 0, "2026-01-01", "2026-01-07", "510050",
+		[]byte(`{"mtf-0.5":[2.1,2.2]}`), []byte(`[2.0,2.1]`), []byte(`{"mtf-0.5":[1,2]}`), []byte(`[0,1]`),
+		2.0, "2025-12-31", []byte(`["2026-01-01","2026-01-02"]`), "mtf-pro",
+		[]byte(`{}`), "", []byte(`{}`), 2, []byte(`null`),
+	).AddRow(
+		"510050-h14-c2048", 0, "2026-01-01", "2026-01-14", "510050",
+		[]byte(`{"mtf-0.5":[2.1,2.3]}`), []byte(`[2.0,2.1]`), []byte(`{"mtf-0.5":[1,3]}`), []byte(`[0,1]`),
+		2.0, "2025-12-31", []byte(`["2026-01-01","2026-01-02"]`), "mtf-pro",
+		[]byte(`{}`), "", []byte(`{}`), 2, []byte(`null`),
+	)
+	mock.ExpectQuery("FROM mtf_best_validation_chunks").
+		WillReturnRows(chunkRows)
+
+	handler := NewWatchlistHandler(services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}))
+	router := gin.New()
+	router.GET("/api/v1/get-predictions/mtf-best/public", handler.ListPublicMTFBestWithValidation)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/get-predictions/mtf-best/public?stock_type=2&limit=1", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Count int `json:"count"`
+		Total int `json:"total"`
+		Items []struct {
+			Symbol   string        `json:"symbol"`
+			Variants []interface{} `json:"variants"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Count != 1 || body.Total != 1 || len(body.Items) != 1 {
+		t.Fatalf("body = %#v, want one grouped item", body)
+	}
+	if body.Items[0].Symbol != "510050" || len(body.Items[0].Variants) != 2 {
+		t.Fatalf("grouped item = %#v, want 510050 with 2 variants", body.Items[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
 	}
 }

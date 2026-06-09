@@ -332,7 +332,7 @@ func TestListPublicMTFBestPageAppliesLimitOffset(t *testing.T) {
 		now, now, 2048, 7, now, now,
 		"莲花控股", 1, 8, 12,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta("ORDER BY watchlist_count DESC, created_at DESC, id DESC")).
+	mock.ExpectQuery("paged_symbols").
 		WithArgs(5, 5).
 		WillReturnRows(rows)
 
@@ -379,7 +379,7 @@ func TestListPublicMTFBestPageByStockTypeFiltersBeforeLimitOffset(t *testing.T) 
 		now, now, 2048, 7, now, now,
 		"沪深300ETF", 2, 5, 9,
 	)
-	mock.ExpectQuery(regexp.QuoteMeta("WHERE rn = 1 AND stock_type = $1")).
+	mock.ExpectQuery(regexp.QuoteMeta("AND stock_type = $1")).
 		WithArgs(2, 5, 10).
 		WillReturnRows(rows)
 
@@ -393,6 +393,59 @@ func TestListPublicMTFBestPageByStockTypeFiltersBeforeLimitOffset(t *testing.T) 
 	}
 	if len(page.Items) != 1 || page.Items[0].StockType != 2 {
 		t.Fatalf("Items = %#v, want stock_type=2", page.Items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListPublicMTFBestPagePaginatesBySymbolAndReturnsAllVariants(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		1, "510050-h7-c2048", "510050", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-pro", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"上证50ETF", 2, 5, 1,
+	).AddRow(
+		2, "510050-h14-c2048", "510050", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-pro", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 14, now, now,
+		"上证50ETF", 2, 5, 1,
+	)
+	mock.ExpectQuery("paged_symbols").
+		WithArgs(2, 1).
+		WillReturnRows(rows)
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	page, err := service.ListPublicMTFBestPageByStockType(0, "", false, 1, 0, 2)
+	if err != nil {
+		t.Fatalf("ListPublicMTFBestPageByStockType error = %v", err)
+	}
+	if page.Total != 1 || page.Limit != 1 || page.Offset != 0 {
+		t.Fatalf("page = %#v, want total=1 limit=1 offset=0", page)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("len(Items) = %d, want two variants for one symbol", len(page.Items))
+	}
+	if page.Items[0].Symbol != "510050" || page.Items[1].Symbol != "510050" {
+		t.Fatalf("Items = %#v, want same symbol variants", page.Items)
+	}
+	if page.Items[0].HorizonLen == page.Items[1].HorizonLen {
+		t.Fatalf("HorizonLen values = %d/%d, want different variants", page.Items[0].HorizonLen, page.Items[1].HorizonLen)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

@@ -21,6 +21,7 @@ import {
   WatchlistItem,
 } from "../../services/apiService";
 import {
+  flattenPublicPredictionItems,
   isMTFProPredictionItem,
   mapResolvedPredictionToStockData,
   ResolvedPublicPrediction,
@@ -1436,7 +1437,7 @@ const Watchlist: React.FC<WatchlistProps> = ({
       }
       if (res && res.items) {
         const options = buildChartPredictionOptions(
-          res.items,
+          flattenPublicPredictionItems(res.items || []),
           normalizedSymbol,
           language,
         );

@@ -401,7 +401,7 @@ func TestOpenAPIMTFBestFiltersByStockType(t *testing.T) {
 	mock.ExpectExec("UPDATE open_api_keys SET last_used_at").
 		WithArgs(3).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("WITH public_groups").
+	mock.ExpectQuery("WITH scoped_best").
 		WithArgs(7).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",

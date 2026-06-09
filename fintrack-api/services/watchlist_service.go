@@ -2051,16 +2051,12 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 	}
 	baseCanonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
 	rowCanonicalSymbolExpr := mtfCanonicalSymbolExpr("t.symbol")
-	query := fmt.Sprintf(`
-        WITH public_groups AS (
-            SELECT DISTINCT
-                %s AS canonical_symbol,
-                horizon_len,
-                context_len,
-                mtf_version
-            FROM mtf_best_predictions
+	query := `
+        WITH scoped_best AS (
+            SELECT p.*
+            FROM mtf_best_predictions p
             WHERE 1 = 1
-    `, baseCanonicalSymbolExpr)
+    `
 	var args []interface{}
 	var conditions []string
 	if includePrivate {
@@ -2068,36 +2064,44 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 	} else if userID != nil {
 		args = append(args, *userID)
 		conditions = append(conditions, fmt.Sprintf(`(
-			is_public = 1 OR EXISTS (
+			p.is_public = 1 OR EXISTS (
 				SELECT 1
 				FROM mtf_best_validation_chunks vc
-				WHERE vc.unique_key = mtf_best_predictions.unique_key
+				WHERE vc.unique_key = p.unique_key
 				  AND vc.user_id = $%d
 			)
 		)`, len(args)))
 	} else {
-		conditions = append(conditions, "is_public = 1")
+		conditions = append(conditions, "p.is_public = 1")
 	}
 	if horizonLen > 0 {
 		args = append(args, horizonLen)
-		conditions = append(conditions, fmt.Sprintf("horizon_len = $%d", len(args)))
+		conditions = append(conditions, fmt.Sprintf("p.horizon_len = $%d", len(args)))
 	}
 	if normalizedSymbol := normalizeMTFSymbolReadKey(symbol); normalizedSymbol != "" {
 		args = append(args, normalizedSymbol)
-		conditions = append(conditions, fmt.Sprintf("%s = $%d", baseCanonicalSymbolExpr, len(args)))
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", mtfCanonicalSymbolExpr("p.symbol"), len(args)))
 	}
 	if len(conditions) > 0 {
 		query += ` AND ` + strings.Join(conditions, " AND ")
 	}
 	query += fmt.Sprintf(`
         ),
-	        watchlist_counts AS (
-	            SELECT
-	                %s AS canonical_symbol,
-	                COUNT(*)::int AS watchlist_count
-	            FROM user_watchlist
-	            GROUP BY %s
-	        ),
+        public_groups AS (
+            SELECT DISTINCT
+                %s AS canonical_symbol,
+                horizon_len,
+                context_len,
+                mtf_version
+            FROM scoped_best
+        ),
+        watchlist_counts AS (
+            SELECT
+                %s AS canonical_symbol,
+                COUNT(*)::int AS watchlist_count
+            FROM user_watchlist
+            GROUP BY %s
+        ),
         validation_stock_types AS (
             SELECT
                 unique_key,
@@ -2137,7 +2141,7 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
                              t.updated_at DESC,
                              t.id DESC
                 ) AS rn
-            FROM mtf_best_predictions t
+            FROM scoped_best t
             INNER JOIN public_groups g
                 ON g.canonical_symbol = %s
                AND g.horizon_len = t.horizon_len
@@ -2147,26 +2151,29 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
                 ON wc.canonical_symbol = %s
             LEFT JOIN validation_stock_types vst
                 ON vst.unique_key = t.unique_key
-        )
-        SELECT
-            id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
-            prediction_type, covariate_config, covariate_signature, covariate_analysis,
-            is_public,
-            train_start_date, train_end_date,
-            test_start_date, test_end_date,
-            val_start_date, val_end_date,
-            context_len, horizon_len,
-            created_at, updated_at, short_name,
-            stock_type, watchlist_count,
-            COUNT(*) OVER() AS total_count
-        FROM ranked
-        WHERE rn = 1
-    `, mtfCanonicalSymbolExpr("symbol"), mtfCanonicalSymbolExpr("symbol"), rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
+        ),
+        filtered_ranked AS (
+            SELECT *
+            FROM ranked
+            WHERE rn = 1
+    `, baseCanonicalSymbolExpr, mtfCanonicalSymbolExpr("symbol"), mtfCanonicalSymbolExpr("symbol"), rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
 	if stockType > 0 {
 		args = append(args, stockType)
 		query += fmt.Sprintf(" AND stock_type = $%d", len(args))
 	}
-	query += " ORDER BY watchlist_count DESC, created_at DESC, id DESC"
+	query += `
+        ),
+        paged_symbols AS (
+            SELECT
+                symbol,
+                MAX(watchlist_count)::int AS watchlist_count,
+                MAX(created_at) AS latest_created_at,
+                MAX(id) AS latest_id,
+                COUNT(*) OVER() AS total_count
+            FROM filtered_ranked
+            GROUP BY symbol
+            ORDER BY MAX(watchlist_count) DESC, MAX(created_at) DESC, MAX(id) DESC
+    `
 	if limit > 0 {
 		args = append(args, limit)
 		query += fmt.Sprintf(" LIMIT $%d", len(args))
@@ -2175,6 +2182,24 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 		args = append(args, offset)
 		query += fmt.Sprintf(" OFFSET $%d", len(args))
 	}
+	query += `
+        )
+        SELECT
+            r.id, r.unique_key, r.symbol, r.mtf_version, r.best_prediction_item, r.best_metrics,
+            r.prediction_type, r.covariate_config, r.covariate_signature, r.covariate_analysis,
+            r.is_public,
+            r.train_start_date, r.train_end_date,
+            r.test_start_date, r.test_end_date,
+            r.val_start_date, r.val_end_date,
+            r.context_len, r.horizon_len,
+            r.created_at, r.updated_at, r.short_name,
+            r.stock_type, r.watchlist_count,
+            ps.total_count
+        FROM filtered_ranked r
+        INNER JOIN paged_symbols ps ON ps.symbol = r.symbol
+        ORDER BY ps.watchlist_count DESC, ps.latest_created_at DESC, ps.latest_id DESC,
+                 r.symbol ASC, r.horizon_len ASC, r.context_len ASC, r.mtf_version ASC, r.prediction_type ASC, r.updated_at DESC
+    `
 
 	rows, err := s.db.Conn.Query(query, args...)
 	if err != nil {
