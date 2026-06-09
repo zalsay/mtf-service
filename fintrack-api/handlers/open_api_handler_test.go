@@ -288,6 +288,7 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 
 	apiKey := "ftk_predict_key"
 	now := time.Now()
+	futureDate := now.UTC().Format("2006-01-02")
 	mock.ExpectQuery("SELECT k.id, k.owner_user_id, k.scopes, k.status, k.expires_at").
 		WithArgs(services.HashOpenAPIKey(apiKey)).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -298,25 +299,25 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 		WithArgs(3).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	gatewayCalled := false
+	predictOnceCalled := false
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gatewayCalled = true
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer gateway.Close()
-
-	futureDate := time.Now().UTC().Format("2006-01-02")
-	postgres := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
-			t.Fatalf("postgres path = %s", r.URL.Path)
+		if r.URL.Path != "/predict_once_cached" {
+			if r.URL.Path == "/predict_once" {
+				predictOnceCalled = true
+			}
+			t.Fatalf("gateway path = %s, want /predict_once_cached", r.URL.Path)
 		}
-		if r.URL.Query().Get("stock_type") != "2" {
-			t.Fatalf("stock_type = %q, want 2", r.URL.Query().Get("stock_type"))
+		var received map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		if received["stock_type"] != float64(2) {
+			t.Fatalf("stock_type = %#v, want 2", received["stock_type"])
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"code":0,
-			"message":"ok",
+			"success":true,
+			"message":"单次预测缓存命中",
 			"data":{
 				"stock_code":"510300",
 				"stock_type":2,
@@ -327,6 +328,10 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 				"future_dates":["` + futureDate + `"],
 				"best_prediction_item":"mtf-0.5",
 				"best_prediction_values":[1.23],
+				"change_base_value":1.11,
+				"change_base_date":"2026-06-05",
+				"prediction_change_base":{"value":1.11,"date":"2026-06-05","source":"latest_best_validation_chunk"},
+				"predicted_change_percent":{"mtf-0.5":[10.8108]},
 				"adjust_raw_best_prediction_values":[1.11],
 				"adjust_raw_latest_close":1.01,
 				"predictions":{"mtf-0.5":[1.23]},
@@ -334,14 +339,10 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 			}
 		}`))
 	}))
-	defer postgres.Close()
+	defer gateway.Close()
 
 	cfg := &config.Config{
 		InferenceGateway: config.InferenceGatewayConfig{BaseURL: gateway.URL, Timeout: 1},
-		PostgresHandler: config.PostgresHandlerConfig{
-			BaseURL: postgres.URL,
-			Timeout: 1,
-		},
 	}
 	handler := NewOpenAPIHandler(
 		services.NewOpenAPIService(&database.DB{Conn: db}),
@@ -362,7 +363,7 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if gatewayCalled {
+	if predictOnceCalled {
 		t.Fatal("expected cached response without calling gateway predict_once")
 	}
 	if !strings.Contains(rec.Body.String(), `"best_prediction_item":"mtf-0.5"`) {
@@ -376,6 +377,18 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"adjust_raw_best_prediction_values":[1.11]`) {
 		t.Fatalf("expected adjust_raw_best_prediction_values passthrough, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"predicted_change_percent"`) {
+		t.Fatalf("expected predicted_change_percent passthrough, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"predicted_change_percent":[10.8108]`) {
+		t.Fatalf("expected slim predicted_change_percent array, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"mtf-0.5":[10.8108]`) {
+		t.Fatalf("predicted_change_percent must not be keyed by best item, body=%s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"prediction_change_base"`) {
+		t.Fatalf("prediction_change_base must be omitted, body=%s", rec.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

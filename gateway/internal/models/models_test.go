@@ -47,18 +47,15 @@ func TestRequestKeyIncludesPredictionTypeAndCovariateSignature(t *testing.T) {
 
 func TestRequestKeyUsesExplicitMTFProPredictionTypeWithPreset(t *testing.T) {
 	request := InferenceRequest{
-		StockCode:             "300442",
-		StockType:             "stock",
-		Years:                 15,
-		StartDate:             "20260430",
-		EndDate:               "20260605",
-		HorizonLen:            7,
-		ContextLen:            2048,
-		PredictionTypeValue:   "mtf-pro",
-		CovariatePreset:       "market_cov_v1",
-		BestMaxAgeDays:        180,
-		PredictFromBestValEnd: true,
-		ChunkUntilLatest:      true,
+		StockCode:           "300442",
+		StockType:           "stock",
+		Years:               15,
+		StartDate:           "20260430",
+		EndDate:             "20260605",
+		HorizonLen:          7,
+		ContextLen:          2048,
+		PredictionTypeValue: "mtf-pro",
+		CovariatePreset:     "market_cov_v1",
 	}
 
 	key, err := request.RequestKey()
@@ -67,6 +64,30 @@ func TestRequestKeyUsesExplicitMTFProPredictionTypeWithPreset(t *testing.T) {
 	}
 	if want := `"prediction_type":"mtf-pro"`; !strings.Contains(key, want) {
 		t.Fatalf("expected explicit mtf-pro request key to include %s, got %s", want, key)
+	}
+}
+
+func TestCovariateSignaturePrefersExplicitRequestValue(t *testing.T) {
+	request := InferenceRequest{
+		StockCode:               "300442",
+		StockType:               "stock",
+		HorizonLen:              7,
+		ContextLen:              2048,
+		PredictionTypeValue:     "mtf-pro",
+		CovariatePreset:         "market_cov_v1",
+		CovariateConfig:         map[string]any{"enabled": true, "xreg_mode": "xreg + mtf"},
+		CovariateSignatureValue: "e90d90a3241b47ca",
+	}
+
+	if got := request.CovariateSignature(); got != "e90d90a3241b47ca" {
+		t.Fatalf("CovariateSignature() = %q, want explicit signature", got)
+	}
+	key, err := request.RequestKey()
+	if err != nil {
+		t.Fatalf("RequestKey() error: %v", err)
+	}
+	if want := `"covariate_signature":"e90d90a3241b47ca"`; !strings.Contains(key, want) {
+		t.Fatalf("expected request key to include explicit signature %s, got %s", want, key)
 	}
 }
 
@@ -243,44 +264,5 @@ func TestInferenceRequestBackgroundPriorityAndRefreshKey(t *testing.T) {
 	}
 	if !refreshRequest.BackgroundPriorityEnabled() {
 		t.Fatalf("expected background queue priority to be enabled")
-	}
-}
-
-func TestInferenceRequestPredictOnceBestContinuationKey(t *testing.T) {
-	baseRequest := InferenceRequest{
-		StockCode:  "600246",
-		StockType:  "stock",
-		HorizonLen: 28,
-		ContextLen: 2048,
-	}
-	continuationRequest := InferenceRequest{
-		StockCode:             "600246",
-		StockType:             "stock",
-		HorizonLen:            28,
-		ContextLen:            2048,
-		BestMaxAgeDays:        180,
-		PredictFromBestValEnd: true,
-		ChunkUntilLatest:      true,
-	}
-
-	baseKey, err := baseRequest.RequestKey()
-	if err != nil {
-		t.Fatalf("base request key error: %v", err)
-	}
-	continuationKey, err := continuationRequest.RequestKey()
-	if err != nil {
-		t.Fatalf("continuation request key error: %v", err)
-	}
-	if baseKey == continuationKey {
-		t.Fatalf("expected continuation request key to differ from base request key")
-	}
-	if !strings.Contains(continuationKey, `"best_max_age_days":180`) {
-		t.Fatalf("continuation key missing best_max_age_days: %s", continuationKey)
-	}
-	if !strings.Contains(continuationKey, `"predict_from_best_val_end":true`) {
-		t.Fatalf("continuation key missing predict_from_best_val_end: %s", continuationKey)
-	}
-	if !strings.Contains(continuationKey, `"chunk_until_latest":true`) {
-		t.Fatalf("continuation key missing chunk_until_latest: %s", continuationKey)
 	}
 }

@@ -1223,6 +1223,10 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 		BestPredictionItem   string                 `json:"best_prediction_item"`
 		BestPredictionValues []float64              `json:"best_prediction_values"`
 		Predictions          map[string]interface{} `json:"predictions"`
+		PredictedChangePct   map[string]interface{} `json:"predicted_change_percent"`
+		ChangeBaseValue      *float64               `json:"change_base_value"`
+		ChangeBaseDate       string                 `json:"change_base_date"`
+		PredictionChangeBase map[string]interface{} `json:"prediction_change_base"`
 		CovariateConfig      map[string]interface{} `json:"covariate_config"`
 		CovariateSignature   string                 `json:"covariate_signature"`
 		CovariateAnalysis    map[string]interface{} `json:"covariate_analysis"`
@@ -1269,6 +1273,16 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "predictions must be JSON object"})
 		return
 	}
+	predictedChangeJSON, err := marshalOptionalJSONObject(req.PredictedChangePct)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "predicted_change_percent must be JSON object"})
+		return
+	}
+	predictionChangeBaseJSON, err := marshalOptionalJSONObject(req.PredictionChangeBase)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prediction_change_base must be JSON object"})
+		return
+	}
 	covConfigJSON, err := marshalOptionalJSONObject(req.CovariateConfig)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "covariate_config must be JSON object"})
@@ -1293,6 +1307,18 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 	} else {
 		historyRowsArg = nil
 	}
+	var changeBaseValueArg interface{}
+	if req.ChangeBaseValue != nil {
+		changeBaseValueArg = *req.ChangeBaseValue
+	} else {
+		changeBaseValueArg = nil
+	}
+	var changeBaseDateArg interface{}
+	if strings.TrimSpace(req.ChangeBaseDate) != "" {
+		changeBaseDateArg = req.ChangeBaseDate
+	} else {
+		changeBaseDateArg = nil
+	}
 	var userIDArg interface{}
 	if req.UserID != nil {
 		userIDArg = *req.UserID
@@ -1301,17 +1327,19 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 	}
 
 	err = h.db.Exec(`
-        INSERT INTO mtf_direct_predictions (
-            unique_key, symbol, stock_type, mtf_version, context_len, horizon_len,
-            future_dates_key, future_dates, request_end_date, latest_data_date,
-            latest_close, history_rows, best_prediction_item, best_prediction_values,
-            predictions, covariate_config, covariate_signature, covariate_analysis, short_name, user_id
-        ) VALUES (
-            $1, $2, $3, $4, $5, $6,
-            $7, $8::jsonb, $9::date, $10::date,
-            $11, $12, $13, $14::jsonb,
-            $15::jsonb, $16::jsonb, $17, $18::jsonb, $19, $20
-        )
+	        INSERT INTO mtf_direct_predictions (
+	            unique_key, symbol, stock_type, mtf_version, context_len, horizon_len,
+	            future_dates_key, future_dates, request_end_date, latest_data_date,
+	            latest_close, history_rows, best_prediction_item, best_prediction_values,
+	            predictions, predicted_change_percent, change_base_value, change_base_date, prediction_change_base,
+	            covariate_config, covariate_signature, covariate_analysis, short_name, user_id
+	        ) VALUES (
+	            $1, $2, $3, $4, $5, $6,
+	            $7, $8::jsonb, $9::date, $10::date,
+	            $11, $12, $13, $14::jsonb,
+	            $15::jsonb, $16::jsonb, $17, $18::date, $19::jsonb,
+	            $20::jsonb, $21, $22::jsonb, $23, $24
+	        )
         ON CONFLICT (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature) DO UPDATE SET
             unique_key = EXCLUDED.unique_key,
             mtf_version = EXCLUDED.mtf_version,
@@ -1320,9 +1348,13 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
             latest_close = EXCLUDED.latest_close,
             history_rows = EXCLUDED.history_rows,
             best_prediction_item = EXCLUDED.best_prediction_item,
-            best_prediction_values = EXCLUDED.best_prediction_values,
-            predictions = EXCLUDED.predictions,
-            covariate_config = EXCLUDED.covariate_config,
+	            best_prediction_values = EXCLUDED.best_prediction_values,
+	            predictions = EXCLUDED.predictions,
+	            predicted_change_percent = EXCLUDED.predicted_change_percent,
+	            change_base_value = EXCLUDED.change_base_value,
+	            change_base_date = EXCLUDED.change_base_date,
+	            prediction_change_base = EXCLUDED.prediction_change_base,
+	            covariate_config = EXCLUDED.covariate_config,
             covariate_signature = EXCLUDED.covariate_signature,
             covariate_analysis = EXCLUDED.covariate_analysis,
             short_name = EXCLUDED.short_name,
@@ -1331,7 +1363,8 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 		req.UniqueKey, req.Symbol, req.StockType, req.MTFVersion, req.ContextLen, req.HorizonLen,
 		futureDatesKey, string(futureDatesJSON), req.RequestEndDate, req.LatestDataDate,
 		latestCloseArg, historyRowsArg, req.BestPredictionItem, string(bestPredictionValuesJSON),
-		string(predictionsJSON), covConfigJSON, covSignature, covAnalysisJSON, req.ShortName, userIDArg,
+		string(predictionsJSON), predictedChangeJSON, changeBaseValueArg, changeBaseDateArg, predictionChangeBaseJSON,
+		covConfigJSON, covSignature, covAnalysisJSON, req.ShortName, userIDArg,
 	).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to upsert mtf_direct_predictions: %v", err)})
@@ -1384,9 +1417,13 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 			latest_close,
 			history_rows,
 			COALESCE(best_prediction_item, '') AS best_prediction_item,
-			best_prediction_values,
-			predictions,
-			COALESCE(covariate_config, '{}'::jsonb) AS covariate_config,
+				best_prediction_values,
+				predictions,
+				COALESCE(predicted_change_percent, '{}'::jsonb) AS predicted_change_percent,
+				change_base_value,
+				change_base_date::text,
+				COALESCE(prediction_change_base, '{}'::jsonb) AS prediction_change_base,
+				COALESCE(covariate_config, '{}'::jsonb) AS covariate_config,
 			COALESCE(covariate_signature, '') AS covariate_signature,
 			COALESCE(covariate_analysis, '{}'::jsonb) AS covariate_analysis,
 			COALESCE(short_name, '') AS short_name,
@@ -1445,10 +1482,14 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 		futureDatesJSON          []byte
 		bestPredictionValuesJSON []byte
 		predictionsJSON          []byte
+		predictedChangeJSON      []byte
+		predictionChangeBaseJSON []byte
 		covConfigJSON            []byte
 		covSignature             string
 		covAnalysisJSON          []byte
 		latestClose              sql.NullFloat64
+		changeBaseValue          sql.NullFloat64
+		changeBaseDate           sql.NullString
 		historyRows              sql.NullInt64
 		userID                   sql.NullInt64
 	)
@@ -1468,6 +1509,10 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 		&item.BestPredictionItem,
 		&bestPredictionValuesJSON,
 		&predictionsJSON,
+		&predictedChangeJSON,
+		&changeBaseValue,
+		&changeBaseDate,
+		&predictionChangeBaseJSON,
 		&covConfigJSON,
 		&covSignature,
 		&covAnalysisJSON,
@@ -1499,10 +1544,20 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 		}
 	}
 	var predictions map[string]interface{}
+	var predictedChange map[string]interface{}
+	var predictionChangeBase map[string]interface{}
 	var covConfig map[string]interface{}
 	var covAnalysis map[string]interface{}
 	if err := json.Unmarshal(predictionsJSON, &predictions); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal predictions"})
+		return
+	}
+	if err := json.Unmarshal(predictedChangeJSON, &predictedChange); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal predicted_change_percent"})
+		return
+	}
+	if err := json.Unmarshal(predictionChangeBaseJSON, &predictionChangeBase); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unmarshal prediction_change_base"})
 		return
 	}
 	if err := json.Unmarshal(covConfigJSON, &covConfig); err != nil {
@@ -1515,29 +1570,37 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 	}
 
 	response := gin.H{
-		"unique_key":             item.UniqueKey,
-		"stock_code":             item.Symbol,
-		"stock_type":             item.StockType,
-		"mtf_version":            item.MTFVersion,
-		"context_len":            item.ContextLen,
-		"horizon_len":            item.HorizonLen,
-		"future_dates":           futureDates,
-		"request_end_date":       item.RequestEndDate,
-		"latest_data_date":       item.LatestDataDate,
-		"best_prediction_item":   item.BestPredictionItem,
-		"best_prediction_values": bestPredictionValues,
-		"predictions":            predictions,
-		"covariate_signature":    covSignature,
-		"covariate_analysis":     covAnalysis,
-		"short_name":             item.ShortName,
-		"created_at":             item.CreatedAt,
-		"updated_at":             item.UpdatedAt,
+		"unique_key":               item.UniqueKey,
+		"stock_code":               item.Symbol,
+		"stock_type":               item.StockType,
+		"mtf_version":              item.MTFVersion,
+		"context_len":              item.ContextLen,
+		"horizon_len":              item.HorizonLen,
+		"future_dates":             futureDates,
+		"request_end_date":         item.RequestEndDate,
+		"latest_data_date":         item.LatestDataDate,
+		"best_prediction_item":     item.BestPredictionItem,
+		"best_prediction_values":   bestPredictionValues,
+		"predictions":              predictions,
+		"predicted_change_percent": predictedChange,
+		"prediction_change_base":   predictionChangeBase,
+		"covariate_signature":      covSignature,
+		"covariate_analysis":       covAnalysis,
+		"short_name":               item.ShortName,
+		"created_at":               item.CreatedAt,
+		"updated_at":               item.UpdatedAt,
 	}
 	if latestClose.Valid {
 		response["latest_close"] = latestClose.Float64
 	}
 	if historyRows.Valid {
 		response["history_rows"] = historyRows.Int64
+	}
+	if changeBaseValue.Valid {
+		response["change_base_value"] = changeBaseValue.Float64
+	}
+	if changeBaseDate.Valid {
+		response["change_base_date"] = changeBaseDate.String
 	}
 	if userID.Valid {
 		response["user_id"] = userID.Int64

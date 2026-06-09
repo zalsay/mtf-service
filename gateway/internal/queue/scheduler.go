@@ -451,7 +451,7 @@ func (s *Scheduler) runOrchestratedCovJob(ctx context.Context, job *models.Job, 
 		return
 	}
 
-	stageName, stagePayload, err := parseDirectPredictionStageResponse(body)
+	stageName, stagePayload, err := parsePredictionStageResponse(body)
 	if err != nil {
 		releaseMain()
 		s.completeJob(job.ID, statusCode, body, err)
@@ -497,7 +497,7 @@ func (s *Scheduler) runOrchestratedCovJob(ctx context.Context, job *models.Job, 
 		return
 	}
 
-	stageName, _, err = parseDirectPredictionStageResponse(finalizeBody)
+	stageName, _, err = parsePredictionStageResponse(finalizeBody)
 	if err != nil {
 		s.completeJob(job.ID, finalizeStatusCode, finalizeBody, err)
 		return
@@ -671,7 +671,7 @@ func (s *Scheduler) completeJob(jobID string, statusCode int, body []byte, submi
 	_ = s.store.SaveJob(context.Background(), job)
 }
 
-func parseDirectPredictionStageResponse(body []byte) (string, []byte, error) {
+func parsePredictionStageResponse(body []byte) (string, []byte, error) {
 	var payload struct {
 		Success bool            `json:"success"`
 		Stage   string          `json:"stage"`

@@ -30,12 +30,14 @@ var shanghaiLocation = func() *time.Location {
 }()
 
 type Server struct {
-	scheduler         *queue.Scheduler
-	mux               *http.ServeMux
-	deepSeekTUIProxy  http.Handler
-	deepSeekTUIToken  string
-	deepSeekTUIPrefix string
-	timeEstimator     *inferenceTimeEstimator
+	scheduler            *queue.Scheduler
+	mux                  *http.ServeMux
+	deepSeekTUIProxy     http.Handler
+	deepSeekTUIToken     string
+	deepSeekTUIPrefix    string
+	timeEstimator        *inferenceTimeEstimator
+	postgresHandlerURL   string
+	postgresHandlerToken string
 }
 
 type ServerOptions struct {
@@ -44,6 +46,8 @@ type ServerOptions struct {
 	DeepSeekTUIProxyPath       string
 	DeepSeekTUIAuthConfigPath  string
 	InferenceTimeBenchmarkPath string
+	PostgresHandlerURL         string
+	PostgresHandlerToken       string
 }
 
 type inferenceTimeEstimator struct {
@@ -76,10 +80,12 @@ func NewServer(scheduler *queue.Scheduler) http.Handler {
 
 func NewServerWithOptions(scheduler *queue.Scheduler, options ServerOptions) http.Handler {
 	server := &Server{
-		scheduler:         scheduler,
-		mux:               http.NewServeMux(),
-		deepSeekTUIToken:  strings.TrimSpace(options.DeepSeekTUIProxyToken),
-		deepSeekTUIPrefix: normalizeProxyPrefix(options.DeepSeekTUIProxyPath, "/deepseek-tui"),
+		scheduler:            scheduler,
+		mux:                  http.NewServeMux(),
+		deepSeekTUIToken:     strings.TrimSpace(options.DeepSeekTUIProxyToken),
+		deepSeekTUIPrefix:    normalizeProxyPrefix(options.DeepSeekTUIProxyPath, "/deepseek-tui"),
+		postgresHandlerURL:   strings.TrimRight(strings.TrimSpace(options.PostgresHandlerURL), "/"),
+		postgresHandlerToken: strings.TrimSpace(options.PostgresHandlerToken),
 	}
 	if benchmarkPath := strings.TrimSpace(options.InferenceTimeBenchmarkPath); benchmarkPath != "" {
 		estimator, err := loadInferenceTimeEstimator(benchmarkPath)
@@ -207,7 +213,7 @@ func (s *Server) handlePredictOnceCached(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json body"})
 		return
 	}
-	body, request, err = normalizeInferencePayload(body, request, "/internal/predict_once_cached_sync")
+	_, request, err = normalizeInferencePayload(body, request, "/internal/predict_once_cached_sync")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -218,15 +224,13 @@ func (s *Server) handlePredictOnceCached(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	statusCode, responseBody, err := s.scheduler.CallBackendSync(r.Context(), "/internal/predict_once_cached_sync", body)
+	statusCode, responseBody, err := s.lookupPredictOnceCache(r.Context(), request)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(statusCode)
-	_, _ = w.Write(responseBody)
+	writeJSON(w, statusCode, responseBody)
 }
 
 func (s *Server) handleInferenceRequest(w http.ResponseWriter, r *http.Request, targetPath string, message string) {
@@ -883,6 +887,9 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	} else {
 		delete(normalized, "force_enqueue")
 	}
+	delete(normalized, "best_max_age_days")
+	delete(normalized, "predict_from_best_val_end")
+	delete(normalized, "chunk_until_latest")
 
 	covariateConfig, covariatePreset := models.CanonicalizeCovariateRouting(
 		func() any {
@@ -910,21 +917,6 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	}
 	request.PredictionTypeValue = request.PredictionType()
 	normalized["prediction_type"] = request.PredictionTypeValue
-
-	if targetPath == "/internal/predict_once_sync" || targetPath == "/internal/predict_once_cached_sync" {
-		if _, exists := normalized["best_max_age_days"]; !exists {
-			normalized["best_max_age_days"] = 180
-			request.BestMaxAgeDays = 180
-		}
-		if _, exists := normalized["predict_from_best_val_end"]; !exists {
-			normalized["predict_from_best_val_end"] = true
-			request.PredictFromBestValEnd = true
-		}
-		if _, exists := normalized["chunk_until_latest"]; !exists {
-			normalized["chunk_until_latest"] = true
-			request.ChunkUntilLatest = true
-		}
-	}
 
 	endDateFallback := time.Now().In(shanghaiLocation)
 	if targetPath == "/internal/predict_for_best_sync" {

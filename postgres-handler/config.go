@@ -433,12 +433,16 @@ func (h *DatabaseHandler) initializeDatabase() error {
         future_dates JSONB NOT NULL,
         request_end_date DATE NOT NULL,
         latest_data_date DATE NOT NULL,
-        latest_close DOUBLE PRECISION,
-        history_rows INTEGER,
-        best_prediction_item VARCHAR(50),
-        best_prediction_values JSONB,
-        predictions JSONB NOT NULL,
-        covariate_config JSONB,
+	        latest_close DOUBLE PRECISION,
+	        history_rows INTEGER,
+	        best_prediction_item VARCHAR(50),
+	        best_prediction_values JSONB,
+	        predictions JSONB NOT NULL,
+	        predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb,
+	        change_base_value DOUBLE PRECISION,
+	        change_base_date DATE,
+	        prediction_change_base JSONB,
+	        covariate_config JSONB,
         covariate_signature TEXT NOT NULL DEFAULT '',
         covariate_analysis JSONB,
         short_name TEXT,
@@ -454,6 +458,10 @@ func (h *DatabaseHandler) initializeDatabase() error {
 		return fmt.Errorf("failed to create mtf_direct_predictions table: %v", err)
 	}
 	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS change_base_date DATE`).Error
+	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS prediction_change_base JSONB`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB`).Error
 	_ = h.db.Exec(`UPDATE mtf_direct_predictions SET covariate_signature = '' WHERE covariate_signature IS NULL`).Error

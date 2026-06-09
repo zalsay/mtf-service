@@ -800,40 +800,45 @@ func TestTriggerMTFPredictOncePassesContinuationDates(t *testing.T) {
 	}
 }
 
-func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
+func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 	futureDate := time.Now().UTC().Format("2006-01-02")
+	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
-			t.Fatalf("path = %s, want /api/v1/save-predictions/mtf-direct/by-request", r.URL.Path)
+		if r.URL.Path != "/predict_once_cached" {
+			t.Fatalf("path = %s, want /predict_once_cached", r.URL.Path)
 		}
-		if r.Header.Get("X-Token") != "test-token" {
-			t.Fatalf("X-Token = %q, want test-token", r.Header.Get("X-Token"))
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		query := r.URL.Query()
-		if query.Get("symbol") != "510050" {
-			t.Fatalf("symbol query = %q, want 510050", query.Get("symbol"))
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
 		}
-		if query.Get("stock_type") != "2" {
-			t.Fatalf("stock_type query = %q, want 2", query.Get("stock_type"))
+		if received["stock_code"] != "sh510050" {
+			t.Fatalf("stock_code payload = %#v, want sh510050", received["stock_code"])
 		}
-		if query.Get("horizon_len") != "7" || query.Get("context_len") != "2048" {
-			t.Fatalf("unexpected horizon/context query: %s", r.URL.RawQuery)
+		if received["stock_type"] != "etf" {
+			t.Fatalf("stock_type payload = %#v, want etf", received["stock_type"])
 		}
-		if query.Get("prediction_type") != "mtf-pro" {
-			t.Fatalf("prediction_type query = %q, want mtf-pro", query.Get("prediction_type"))
+		if received["horizon_len"] != float64(7) || received["context_len"] != float64(2048) {
+			t.Fatalf("unexpected horizon/context payload: %#v", received)
 		}
-		if query.Has("mtf_version") {
-			t.Fatalf("query must not include mtf_version: %s", r.URL.RawQuery)
+		if received["prediction_type"] != "mtf-pro" {
+			t.Fatalf("prediction_type payload = %#v, want mtf-pro", received["prediction_type"])
 		}
-		if query.Has("covariate_signature") {
-			t.Fatalf("query must not include covariate_signature: %s", r.URL.RawQuery)
+		if received["covariate_signature"] != "sig123" {
+			t.Fatalf("covariate_signature payload = %#v, want sig123", received["covariate_signature"])
+		}
+		if received["predict_from_best_val_end"] != true || received["chunk_until_latest"] != true {
+			t.Fatalf("expected best continuation flags in payload: %#v", received)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"code": 200,
-			"message": "Success",
+			"success": true,
+			"stock_code": "sh510050",
+			"message": "单次预测缓存命中",
+			"gpu_id": "0",
 			"data": {
-				"stock_code": "510050",
+				"stock_code": "sh510050",
 				"stock_type": 2,
 				"prediction_type": "mtf-pro",
 				"mtf_version": "2.5",
@@ -843,6 +848,7 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 				"latest_close": 1.11,
 				"change_base_value": 1.11,
 				"change_base_date": "2026-06-05",
+				"prediction_change_base": {"value": 1.11, "date": "2026-06-05", "source": "latest_best_validation_chunk"},
 				"future_dates": ["` + futureDate + `"],
 				"best_prediction_item": "mtf-0.5",
 				"best_prediction_values": [1.23],
@@ -859,10 +865,9 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	defer server.Close()
 
 	service := NewWatchlistService(nil, &config.Config{
-		PostgresHandler: config.PostgresHandlerConfig{
-			BaseURL:  server.URL,
-			APIToken: "test-token",
-			Timeout:  2,
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 2,
 		},
 	})
 
@@ -900,6 +905,13 @@ func TestGetMTFPredictOnceCachedQueriesPostgresHandler(t *testing.T) {
 	}
 	if data["change_base_value"] == nil || data["change_base_date"] == nil || data["predicted_change_percent"] == nil {
 		t.Fatalf("expected change fields in cached response: %#v", data)
+	}
+	predictedChange, ok := data["predicted_change_percent"].([]interface{})
+	if !ok || len(predictedChange) != 1 || predictedChange[0] != float64(10.8108) {
+		t.Fatalf("predicted_change_percent must be best item values array: %#v", data["predicted_change_percent"])
+	}
+	if _, exists := data["prediction_change_base"]; exists {
+		t.Fatalf("prediction_change_base must be omitted from public response")
 	}
 	if _, exists := data["cache_hit"]; exists {
 		t.Fatalf("cache_hit must be omitted from public response: %#v", data["cache_hit"])
@@ -1027,19 +1039,19 @@ func TestGetMTFJobStatusReturnsSlimResult(t *testing.T) {
 	}
 }
 
-func TestDirectPredictionCacheFreshness(t *testing.T) {
+func TestPredictionCacheFreshness(t *testing.T) {
 	staleData := map[string]interface{}{
 		"future_dates": []interface{}{"2026-06-01", "2026-06-02", "2026-06-03"},
 	}
 	now := time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)
-	if isDirectPredictionCacheFresh(staleData, now) {
+	if isPredictionCacheFresh(staleData, now) {
 		t.Fatal("cache ending on 2026-06-03 must be stale on 2026-06-05")
 	}
 
 	freshData := map[string]interface{}{
 		"future_dates": []interface{}{"2026-06-05", "2026-06-08"},
 	}
-	if !isDirectPredictionCacheFresh(freshData, now) {
+	if !isPredictionCacheFresh(freshData, now) {
 		t.Fatal("cache covering 2026-06-05 must be fresh")
 	}
 }

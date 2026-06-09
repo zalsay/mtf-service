@@ -1168,6 +1168,9 @@ export interface DirectPredictionResult {
   best_prediction_item?: string | null;
   best_prediction_values?: number[] | null;
   predictions?: Record<string, number[]>;
+  predicted_change_percent?: number[] | Record<string, number[]>;
+  change_base_value?: number | null;
+  change_base_date?: string | null;
   adjust_raw_latest_close?: number;
   adjust_raw_best_prediction_values?: number[] | null;
   adjust_raw_predictions?: Record<string, number[]>;

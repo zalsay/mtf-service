@@ -10,7 +10,6 @@ import (
 	"log"
 	"math"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,14 +33,7 @@ type MTFBestPage struct {
 	Offset int
 }
 
-type postgresHandlerDirectPredictionResponse struct {
-	Code    int                    `json:"code"`
-	Message string                 `json:"message"`
-	Data    map[string]interface{} `json:"data"`
-	Error   string                 `json:"error"`
-}
-
-const directPredictionCacheDateLayout = "2006-01-02"
+const predictionCacheDateLayout = "2006-01-02"
 
 func NewWatchlistService(db *database.DB, cfg *config.Config) *WatchlistService {
 	return &WatchlistService{db: db, config: cfg}
@@ -1360,8 +1352,8 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 }
 
 func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest) (int, map[string]interface{}, error) {
-	if s == nil || s.config == nil || strings.TrimSpace(s.config.PostgresHandler.BaseURL) == "" {
-		return 0, nil, fmt.Errorf("postgres handler is not configured")
+	if s == nil || s.config == nil || strings.TrimSpace(s.config.InferenceGateway.BaseURL) == "" {
+		return 0, nil, fmt.Errorf("inference gateway is not configured")
 	}
 	if req == nil {
 		return http.StatusBadRequest, map[string]interface{}{
@@ -1371,50 +1363,95 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	}
 
 	stockCode := strings.TrimSpace(req.StockCode)
-	horizonLen := intValueOrDefault(req.HorizonLen, 7)
-	contextLen := intValueOrDefault(req.ContextLen, 2048)
-	baseURL := strings.TrimRight(strings.TrimSpace(s.config.PostgresHandler.BaseURL), "/")
-	query := url.Values{}
-	query.Set("symbol", normalizeMTFSymbolReadKey(stockCode))
-	query.Set("stock_type", strconv.Itoa(normalizeMTFPredictStockType(req.StockType)))
-	query.Set("horizon_len", strconv.Itoa(horizonLen))
-	query.Set("context_len", strconv.Itoa(contextLen))
-	query.Set("prediction_type", normalizeTrainPredictionType(req.PredictionType))
-	requestURL := fmt.Sprintf("%s/api/v1/save-predictions/mtf-direct/by-request?%s", baseURL, query.Encode())
+	payload := map[string]interface{}{
+		"stock_code": stockCode,
+	}
+	if req.StockType != nil {
+		payload["stock_type"] = req.StockType
+	}
+	if req.TimeStep != nil {
+		payload["time_step"] = *req.TimeStep
+	}
+	if req.Years != nil {
+		payload["years"] = *req.Years
+	}
+	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
+		payload["start_date"] = strings.TrimSpace(*req.StartDate)
+	}
+	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
+		payload["end_date"] = strings.TrimSpace(*req.EndDate)
+	}
+	if strings.TrimSpace(req.PredictionType) != "" {
+		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)
+	}
+	if req.HorizonLen != nil {
+		payload["horizon_len"] = *req.HorizonLen
+	}
+	if req.ContextLen != nil {
+		payload["context_len"] = *req.ContextLen
+	}
+	if req.UserID != nil {
+		payload["user_id"] = *req.UserID
+	}
+	if req.CovariatePreset != nil && strings.TrimSpace(*req.CovariatePreset) != "" {
+		payload["covariate_preset"] = strings.TrimSpace(*req.CovariatePreset)
+	}
+	if strings.TrimSpace(req.CovariateSignature) != "" {
+		payload["covariate_signature"] = strings.TrimSpace(req.CovariateSignature)
+	}
+	if req.CovariateConfig != nil {
+		payload["covariate_config"] = req.CovariateConfig
+	}
+	if req.Covariates != nil {
+		payload["covariates"] = req.Covariates
+	}
+	bestMaxAgeDays := mtfPredictOnceBestMaxAgeDays
+	if req.BestMaxAgeDays != nil && *req.BestMaxAgeDays > 0 {
+		bestMaxAgeDays = *req.BestMaxAgeDays
+	}
+	payload["best_max_age_days"] = bestMaxAgeDays
+	predictFromBestEnd := true
+	if req.PredictFromBestEnd != nil {
+		predictFromBestEnd = *req.PredictFromBestEnd
+	}
+	payload["predict_from_best_val_end"] = predictFromBestEnd
+	chunkUntilLatest := true
+	if req.ChunkUntilLatest != nil {
+		chunkUntilLatest = *req.ChunkUntilLatest
+	}
+	payload["chunk_until_latest"] = chunkUntilLatest
 
-	httpReq, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		return 0, nil, fmt.Errorf("build postgres direct prediction request: %v", err)
+		return 0, nil, fmt.Errorf("marshal predict once cached payload: %v", err)
 	}
-	if token := strings.TrimSpace(s.config.PostgresHandler.APIToken); token != "" {
-		httpReq.Header.Set("X-Token", token)
-	}
-
-	timeout := s.config.PostgresHandler.Timeout
-	if timeout <= 0 {
-		timeout = 10
-	}
-	client := newInferenceGatewayHTTPClient(timeout)
-	resp, err := client.Do(httpReq)
+	requestURL := fmt.Sprintf("%s/predict_once_cached", strings.TrimRight(strings.TrimSpace(s.config.InferenceGateway.BaseURL), "/"))
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	resp, err := client.Post(requestURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
-		return 0, nil, fmt.Errorf("query postgres direct prediction cache: %v", err)
+		return 0, nil, fmt.Errorf("call inference gateway predict once cached: %v", err)
 	}
 	defer resp.Body.Close()
 
-	var decoded postgresHandlerDirectPredictionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("decode postgres direct prediction cache response: %v", err)
+	body, err := readGatewayJSONResponse(resp, requestURL, "decode inference gateway predict once cached response")
+	if err != nil {
+		return resp.StatusCode, nil, err
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
+		return http.StatusNotFound, predictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		message := strings.TrimSpace(decoded.Error)
-		if message == "" {
-			message = strings.TrimSpace(decoded.Message)
+		message := ""
+		if rawError, exists := body["error"]; exists && rawError != nil {
+			message = strings.TrimSpace(fmt.Sprint(rawError))
 		}
 		if message == "" {
-			message = fmt.Sprintf("postgres direct prediction cache returned status %d", resp.StatusCode)
+			if rawMessage, exists := body["message"]; exists && rawMessage != nil {
+				message = strings.TrimSpace(fmt.Sprint(rawMessage))
+			}
+		}
+		if message == "" {
+			message = fmt.Sprintf("inference gateway predict once cache returned status %d", resp.StatusCode)
 		}
 		return resp.StatusCode, map[string]interface{}{
 			"success": false,
@@ -1422,26 +1459,28 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 			"error":   message,
 		}, nil
 	}
-	if decoded.Data == nil {
-		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
+
+	data, ok := body["data"].(map[string]interface{})
+	if !ok || data == nil {
+		return http.StatusNotFound, predictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
 	}
-	if !isDirectPredictionCacheFresh(decoded.Data, time.Now().UTC()) {
-		return http.StatusNotFound, directPredictionCacheNotFoundBody(stockCode, "单次预测缓存已过期", "prediction cache stale"), nil
+	if !isPredictionCacheFresh(data, time.Now().UTC()) {
+		return http.StatusNotFound, predictionCacheNotFoundBody(stockCode, "单次预测缓存已过期", "prediction cache stale"), nil
 	}
-	data := slimDirectPredictionCacheData(decoded.Data)
-	body := map[string]interface{}{
+	slimData := slimPredictionCacheData(data)
+	responseBody := map[string]interface{}{
 		"success":    true,
 		"stock_code": stockCode,
 		"message":    "单次预测缓存命中",
-		"data":       data,
+		"data":       slimData,
 	}
-	if gpuID := strings.TrimSpace(fmt.Sprint(data["gpu_id"])); gpuID != "" && gpuID != "<nil>" {
-		body["gpu_id"] = gpuID
+	if gpuID := strings.TrimSpace(fmt.Sprint(body["gpu_id"])); gpuID != "" && gpuID != "<nil>" {
+		responseBody["gpu_id"] = gpuID
 	}
-	return http.StatusOK, body, nil
+	return http.StatusOK, responseBody, nil
 }
 
-func directPredictionCacheNotFoundBody(stockCode, message, errorCode string) map[string]interface{} {
+func predictionCacheNotFoundBody(stockCode, message, errorCode string) map[string]interface{} {
 	return map[string]interface{}{
 		"success":    false,
 		"stock_code": stockCode,
@@ -1450,8 +1489,8 @@ func directPredictionCacheNotFoundBody(stockCode, message, errorCode string) map
 	}
 }
 
-func isDirectPredictionCacheFresh(data map[string]interface{}, now time.Time) bool {
-	lastDate, ok := latestDirectPredictionFutureDate(data["future_dates"])
+func isPredictionCacheFresh(data map[string]interface{}, now time.Time) bool {
+	lastDate, ok := latestPredictionFutureDate(data["future_dates"])
 	if !ok {
 		return false
 	}
@@ -1459,7 +1498,7 @@ func isDirectPredictionCacheFresh(data map[string]interface{}, now time.Time) bo
 	return !lastDate.Before(today)
 }
 
-func latestDirectPredictionFutureDate(value interface{}) (time.Time, bool) {
+func latestPredictionFutureDate(value interface{}) (time.Time, bool) {
 	var rawDates []interface{}
 	switch typed := value.(type) {
 	case []interface{}:
@@ -1479,7 +1518,7 @@ func latestDirectPredictionFutureDate(value interface{}) (time.Time, bool) {
 		if dateText == "" || dateText == "<nil>" {
 			continue
 		}
-		parsed, err := time.Parse(directPredictionCacheDateLayout, dateText)
+		parsed, err := time.Parse(predictionCacheDateLayout, dateText)
 		if err != nil {
 			continue
 		}
@@ -1493,7 +1532,7 @@ func latestDirectPredictionFutureDate(value interface{}) (time.Time, bool) {
 	return latest, true
 }
 
-func slimDirectPredictionCacheData(data map[string]interface{}) map[string]interface{} {
+func slimPredictionCacheData(data map[string]interface{}) map[string]interface{} {
 	allowedKeys := []string{
 		"stock_code",
 		"stock_type",
@@ -1508,7 +1547,6 @@ func slimDirectPredictionCacheData(data map[string]interface{}) map[string]inter
 		"future_dates",
 		"best_prediction_item",
 		"best_prediction_values",
-		"predicted_change_percent",
 		"short_name",
 		"gpu_id",
 	}
@@ -1518,8 +1556,25 @@ func slimDirectPredictionCacheData(data map[string]interface{}) map[string]inter
 			slim[key] = value
 		}
 	}
-	for key, value := range data {
-		if strings.HasPrefix(key, "adjust_raw_") {
+	bestItem := strings.TrimSpace(fmt.Sprint(data["best_prediction_item"]))
+	switch predictedChange := data["predicted_change_percent"].(type) {
+	case []interface{}:
+		slim["predicted_change_percent"] = predictedChange
+	case []float64:
+		slim["predicted_change_percent"] = predictedChange
+	case []int:
+		slim["predicted_change_percent"] = predictedChange
+	case []string:
+		slim["predicted_change_percent"] = predictedChange
+	case map[string]interface{}:
+		if bestItem != "" && bestItem != "<nil>" {
+			if values, exists := predictedChange[bestItem]; exists {
+				slim["predicted_change_percent"] = values
+			}
+		}
+	}
+	for _, key := range []string{"adjust_raw_latest_close", "adjust_raw_best_prediction_values"} {
+		if value, ok := data[key]; ok {
 			slim[key] = value
 		}
 	}
@@ -1601,7 +1656,7 @@ func slimMTFJobResult(value interface{}) (map[string]interface{}, bool) {
 		slim[key] = item
 	}
 	if data, ok := result["data"].(map[string]interface{}); ok {
-		slim["data"] = slimDirectPredictionCacheData(data)
+		slim["data"] = slimPredictionCacheData(data)
 	}
 	return slim, len(slim) > 0
 }

@@ -138,7 +138,7 @@ func TestShouldOrchestrateCovJob(t *testing.T) {
 		SupportsCov:       true,
 		SupportsDirectCov: true,
 	}) {
-		t.Fatalf("expected direct mtf-pro backend to bypass staged orchestration")
+		t.Fatalf("expected single-stage mtf-pro backend to bypass staged orchestration")
 	}
 	if schedulerWithXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
@@ -149,7 +149,7 @@ func TestShouldOrchestrateCovJob(t *testing.T) {
 		SupportsCov:       true,
 		SupportsDirectCov: true,
 	}) {
-		t.Fatalf("expected direct mtf-pro backend to bypass staged orchestration for predict_for_best")
+		t.Fatalf("expected single-stage mtf-pro backend to bypass staged orchestration for predict_for_best")
 	}
 	if schedulerWithoutXReg.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_once_sync",
@@ -217,7 +217,7 @@ func TestShouldOrchestrateCovJobWhenOnlyStagedCovBackendExists(t *testing.T) {
 		SupportsDirectCov: false,
 		SupportsNonCov:    true,
 	}) {
-		t.Fatalf("expected staged mtf-pro backend to use orchestration when no direct cov backend exists")
+		t.Fatalf("expected staged mtf-pro backend to use orchestration when no single-stage cov backend exists")
 	}
 }
 
@@ -259,7 +259,7 @@ func TestShouldOrchestrateCovJobWhenSelectedBackendIsStagedEvenIfDirectFallbackE
 		SupportsDirectCov: false,
 		SupportsNonCov:    true,
 	}) {
-		t.Fatalf("expected selected staged mtf-pro backend to orchestrate even when direct fallback exists")
+		t.Fatalf("expected selected staged mtf-pro backend to orchestrate even when single-stage fallback exists")
 	}
 	if scheduler.shouldOrchestrateCovJob(&models.Job{
 		TargetPath:     "/internal/predict_for_best_sync",
@@ -271,7 +271,7 @@ func TestShouldOrchestrateCovJobWhenSelectedBackendIsStagedEvenIfDirectFallbackE
 		SupportsDirectCov: true,
 		SupportsNonCov:    false,
 	}) {
-		t.Fatalf("expected selected direct mtf-pro backend to skip orchestration")
+		t.Fatalf("expected selected single-stage mtf-pro backend to skip orchestration")
 	}
 }
 
@@ -315,7 +315,7 @@ func TestSelectBackendForCovPrefersXpuSplitAndFallsBackToRocm(t *testing.T) {
 	}
 }
 
-func TestParseDirectPredictionStageResponse(t *testing.T) {
+func TestParsePredictionStageResponse(t *testing.T) {
 	tests := []struct {
 		name        string
 		body        map[string]any
@@ -358,7 +358,7 @@ func TestParseDirectPredictionStageResponse(t *testing.T) {
 				t.Fatalf("marshal test body: %v", err)
 			}
 
-			stage, payload, parseErr := parseDirectPredictionStageResponse(body)
+			stage, payload, parseErr := parsePredictionStageResponse(body)
 			if tc.wantErr != "" {
 				if parseErr == nil {
 					t.Fatalf("expected error %q, got nil", tc.wantErr)

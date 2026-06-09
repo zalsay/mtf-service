@@ -12,6 +12,127 @@ import (
 	"ai-functions/internal/models"
 )
 
+func TestPredictOnceCachedReadsOnlyPredictionCache(t *testing.T) {
+	var requestedPaths []string
+	handler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		if r.Header.Get("X-Token") != "test-token" {
+			t.Fatalf("X-Token = %q, want test-token", r.Header.Get("X-Token"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/save-predictions/mtf-direct/by-request":
+			if got := r.URL.Query().Get("covariate_signature"); got != "sig123" {
+				t.Fatalf("prediction cache covariate_signature = %q, want sig123", got)
+			}
+			_, _ = w.Write([]byte(`{
+				"code":200,
+				"message":"Success",
+				"data":{
+					"unique_key":"300442_direct_st_1_hlen_7_clen_2048_fd_test_cov_sig123",
+					"stock_code":"300442",
+					"stock_type":1,
+					"prediction_type":"mtf-pro",
+					"mtf_version":"2.5",
+					"context_len":2048,
+					"horizon_len":7,
+					"latest_data_date":"2026-06-08",
+					"latest_close":74.11,
+					"future_dates":["2999-01-01","2999-01-02"],
+					"best_prediction_item":"mtf-0.7",
+					"best_prediction_values":[80.1,80.2],
+					"predictions":{"mtf-0.7":[80.1,80.2]},
+					"covariate_signature":"sig123",
+					"covariate_analysis":{"future_covariate_source":{"strategy":"prediction_once"}}
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected postgres handler path %s", r.URL.Path)
+		}
+	}))
+	defer handler.Close()
+
+	server := NewServerWithOptions(nil, ServerOptions{
+		PostgresHandlerURL:   handler.URL,
+		PostgresHandlerToken: "test-token",
+	})
+	body := strings.NewReader(`{
+		"stock_code":"300442",
+		"stock_type":"stock",
+		"years":15,
+		"horizon_len":7,
+		"context_len":2048,
+		"prediction_type":"mtf-pro",
+		"covariate_preset":"market_cov_v1",
+		"covariate_signature":"sig123"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/predict_once_cached", body)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data := response["data"].(map[string]any)
+	if data["cache_hit"] != true {
+		t.Fatalf("cache_hit = %#v, want true", data["cache_hit"])
+	}
+	if data["covariate_signature"] != "sig123" {
+		t.Fatalf("covariate_signature = %#v", data["covariate_signature"])
+	}
+	if data["latest_close"] != float64(74.11) {
+		t.Fatalf("latest_close = %#v, want prediction cache latest close", data["latest_close"])
+	}
+	values := data["best_prediction_values"].([]any)
+	if len(values) != 2 || values[0] != float64(80.1) || values[1] != float64(80.2) {
+		t.Fatalf("best_prediction_values = %#v", values)
+	}
+	if len(requestedPaths) != 1 {
+		t.Fatalf("postgres handler paths = %#v, want only prediction cache request", requestedPaths)
+	}
+}
+
+func TestPredictOnceCachedDoesNotFallbackToValidationChunk(t *testing.T) {
+	var requestedPaths []string
+	handler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
+			t.Fatalf("unexpected fallback path %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer handler.Close()
+
+	server := NewServerWithOptions(nil, ServerOptions{
+		PostgresHandlerURL:   handler.URL,
+		PostgresHandlerToken: "test-token",
+	})
+	body := strings.NewReader(`{
+		"stock_code":"300442",
+		"stock_type":"stock",
+		"horizon_len":7,
+		"context_len":2048,
+		"prediction_type":"mtf-pro",
+		"covariate_signature":"sig123"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/predict_once_cached", body)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(requestedPaths) != 1 {
+		t.Fatalf("postgres handler paths = %#v, want only prediction cache request", requestedPaths)
+	}
+}
+
 func TestInferenceTimeEstimatorUsesPredictionType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "benchmarks.json")
 	if err := os.WriteFile(path, []byte(`{
@@ -251,21 +372,24 @@ func TestNormalizeInferencePayloadPreservesExplicitBestSyncDates(t *testing.T) {
 	}
 }
 
-func TestNormalizeInferencePayloadInjectsPredictOnceDefaults(t *testing.T) {
+func TestNormalizeInferencePayloadDropsPredictOnceContinuationFields(t *testing.T) {
 	body := []byte(`{
 		"stock_code": "000001",
 		"stock_type": 1,
 		"years": 15,
 		"horizon_len": 28,
 		"context_len": 2048,
-		"prediction_type": "mtf-lite"
+		"prediction_type": "mtf-lite",
+		"best_max_age_days": 180,
+		"predict_from_best_val_end": true,
+		"chunk_until_latest": true
 	}`)
 
 	var request models.InferenceRequest
 	if err := json.Unmarshal(body, &request); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
 	}
-	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
+	normalizedBody, _, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
 	if err != nil {
 		t.Fatalf("normalizeInferencePayload() error: %v", err)
 	}
@@ -274,23 +398,10 @@ func TestNormalizeInferencePayloadInjectsPredictOnceDefaults(t *testing.T) {
 	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
 		t.Fatalf("unmarshal normalized body: %v", err)
 	}
-	if normalized["best_max_age_days"] != float64(180) {
-		t.Fatalf("expected best_max_age_days=180, got %#v", normalized["best_max_age_days"])
-	}
-	if normalized["predict_from_best_val_end"] != true {
-		t.Fatalf("expected predict_from_best_val_end=true, got %#v", normalized["predict_from_best_val_end"])
-	}
-	if normalized["chunk_until_latest"] != true {
-		t.Fatalf("expected chunk_until_latest=true, got %#v", normalized["chunk_until_latest"])
-	}
-	if got := normalizedRequest.BestMaxAgeDays; got != 180 {
-		t.Fatalf("expected request BestMaxAgeDays=180, got %#v", got)
-	}
-	if got := normalizedRequest.PredictFromBestValEnd; got != true {
-		t.Fatalf("expected request PredictFromBestValEnd=true, got %#v", got)
-	}
-	if got := normalizedRequest.ChunkUntilLatest; got != true {
-		t.Fatalf("expected request ChunkUntilLatest=true, got %#v", got)
+	for _, key := range []string{"best_max_age_days", "predict_from_best_val_end", "chunk_until_latest"} {
+		if _, ok := normalized[key]; ok {
+			t.Fatalf("expected legacy continuation field %s to be dropped, got %#v", key, normalized[key])
+		}
 	}
 }
 

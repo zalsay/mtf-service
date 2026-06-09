@@ -282,11 +282,13 @@ const PredictionChart: React.FC<ChartProps> = ({
             const lastActualValue = [...actuals]
                 .reverse()
                 .find(value => isNonZeroFinitePoint(value));
-            const formatPredictionDeltaLabel = (value: number) => {
-                if (!lastActualValue || !isFinitePoint(value)) {
-                    return null;
-                }
-                const delta = ((value - lastActualValue) / lastActualValue) * 100;
+            const formatPredictionDeltaLabel = (value: number, changeSeries: number[], index: number) => {
+                const backendDelta = Number(changeSeries[index]);
+                const delta = Number.isFinite(backendDelta)
+                    ? backendDelta
+                    : lastActualValue && isFinitePoint(value)
+                        ? ((value - lastActualValue) / lastActualValue) * 100
+                        : Number.NaN;
                 if (!Number.isFinite(delta)) {
                     return null;
                 }
@@ -422,12 +424,12 @@ const PredictionChart: React.FC<ChartProps> = ({
             const proLabel = 'mtf-1.5-pro';
             const actualChangeLabel = language === 'zh' ? '实际涨跌' : 'Actual %';
             const predChangeLabel = language === 'zh' ? '预测涨跌' : 'Pred %';
-            const getPredictionDeltaLabelLayout = (series: number[], value: number, index: number, laneOffset = 0) => {
+            const getPredictionDeltaLabelLayout = (series: number[], changeSeries: number[], value: number, index: number, laneOffset = 0) => {
                 if (!isNonZeroFinitePoint(value) || isNonZeroFinitePoint(actuals[index])) {
                     return null;
                 }
 
-                const labelInfo = formatPredictionDeltaLabel(value);
+                const labelInfo = formatPredictionDeltaLabel(value, changeSeries, index);
                 if (!labelInfo) {
                     return null;
                 }
@@ -480,10 +482,11 @@ const PredictionChart: React.FC<ChartProps> = ({
 
             const renderPredictionDeltaLabels = (
                 series: number[],
+                changeSeries: number[],
                 keyPrefix: string,
                 laneOffset = 0,
             ) => series.map((value, index) => {
-                const layout = getPredictionDeltaLabelLayout(series, value, index, laneOffset);
+                const layout = getPredictionDeltaLabelLayout(series, changeSeries, value, index, laneOffset);
                 if (!layout) {
                     return null;
                 }
@@ -508,10 +511,11 @@ const PredictionChart: React.FC<ChartProps> = ({
             });
             const renderPredictionDeltaConnectorLines = (
                 series: number[],
+                changeSeries: number[],
                 keyPrefix: string,
                 laneOffset = 0,
             ) => series.map((value, index) => {
-                const layout = getPredictionDeltaLabelLayout(series, value, index, laneOffset);
+                const layout = getPredictionDeltaLabelLayout(series, changeSeries, value, index, laneOffset);
                 if (!layout || !layout.isNearRight || index !== series.length - 1) {
                     return null;
                 }
@@ -694,8 +698,8 @@ const PredictionChart: React.FC<ChartProps> = ({
                                         fill="none"
                                     ></path>
                                 )}
-                                {renderPredictionDeltaConnectorLines(predictions, 'lite-delta', 0)}
-                                {renderPredictionDeltaConnectorLines(proPredictions, 'pro-delta', 1)}
+                                {renderPredictionDeltaConnectorLines(predictions, predictedChangePercents, 'lite-delta', 0)}
+                                {renderPredictionDeltaConnectorLines(proPredictions, proPredictedChangePercents, 'pro-delta', 1)}
                                 {renderTradeMarkerAnchors()}
                             </>
                         )}
@@ -842,8 +846,8 @@ const PredictionChart: React.FC<ChartProps> = ({
 
                     {!isChangeMode && (
                         <>
-                            {renderPredictionDeltaLabels(predictions, 'lite-delta', 0)}
-                            {renderPredictionDeltaLabels(proPredictions, 'pro-delta', 1)}
+                            {renderPredictionDeltaLabels(predictions, predictedChangePercents, 'lite-delta', 0)}
+                            {renderPredictionDeltaLabels(proPredictions, proPredictedChangePercents, 'pro-delta', 1)}
                         </>
                     )}
 

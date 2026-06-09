@@ -150,6 +150,7 @@ func main() {
 	redisDB := store.ParseRedisDB(os.Getenv("REDIS_DB"), 0)
 	redisPrefix := getenv("REDIS_PREFIX", "ai-functions")
 	postgresHandlerURL := getenv("POSTGRES_HANDLER_URL", "http://ai-functions-postgres-handler:58004")
+	postgresHandlerToken := getenvWithAliases([]string{"POSTGRES_HANDLER_TOKEN", "HISTORY_SERVICE_TOKEN", "API_TOKEN"}, "fintrack-dev-token")
 	historyServiceURL := getenv("HISTORY_SERVICE_URL", getenv("AKSHARE_SERVICE_URL", postgresHandlerURL))
 	dailyStockSyncEnabled := getenvBool("DAILY_STOCK_SYNC_ENABLED", true)
 	dailyStockSyncMode := strings.TrimSpace(strings.ToLower(os.Getenv("DAILY_STOCK_SYNC_MODE")))
@@ -303,6 +304,8 @@ func main() {
 			DeepSeekTUIProxyPath:       deepSeekTUIProxyPath,
 			DeepSeekTUIAuthConfigPath:  deepSeekTUIAuthConfigPath,
 			InferenceTimeBenchmarkPath: inferenceTimeBenchmarkPath,
+			PostgresHandlerURL:         postgresHandlerURL,
+			PostgresHandlerToken:       postgresHandlerToken,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -590,9 +590,12 @@ const getDirectLatestClose = (result: DirectPredictionResult): number => {
 };
 
 const getChunkPredictionSeries = (
-  predictions: Record<string, number[]> | undefined,
+  predictions: number[] | Record<string, number[]> | undefined,
   preferredKey: string,
 ): number[] => {
+  if (Array.isArray(predictions)) {
+    return predictions;
+  }
   if (preferredKey && Array.isArray(predictions?.[preferredKey])) {
     return predictions[preferredKey];
   }
@@ -812,9 +815,10 @@ const buildNextChunkChartData = (
   }
 
   const changeBase =
-    getDirectLatestClose(directResult) ||
+    Number(directResult.change_base_value) ||
     actuals[actuals.length - 1] ||
     Number(currentPriceChunk.change_base_value) ||
+    getDirectLatestClose(directResult) ||
     0;
 
   appendLatestActualAnchor(

@@ -35,25 +35,23 @@ const (
 )
 
 type InferenceRequest struct {
-	StockCode             string `json:"stock_code"`
-	StockType             any    `json:"stock_type,omitempty"`
-	TimeStep              any    `json:"time_step,omitempty"`
-	Years                 any    `json:"years,omitempty"`
-	StartDate             any    `json:"start_date,omitempty"`
-	EndDate               any    `json:"end_date,omitempty"`
-	HorizonLen            any    `json:"horizon_len,omitempty"`
-	ContextLen            any    `json:"context_len,omitempty"`
-	UserID                any    `json:"user_id,omitempty"`
-	ForceEnqueue          any    `json:"force_enqueue,omitempty"`
-	QueuePriority         string `json:"queue_priority,omitempty"`
-	RefreshReason         string `json:"refresh_reason,omitempty"`
-	PredictionTypeValue   string `json:"prediction_type,omitempty"`
-	CovariatePreset       string `json:"covariate_preset,omitempty"`
-	CovariateConfig       any    `json:"covariate_config,omitempty"`
-	Covariates            any    `json:"covariates,omitempty"`
-	BestMaxAgeDays        any    `json:"best_max_age_days,omitempty"`
-	PredictFromBestValEnd any    `json:"predict_from_best_val_end,omitempty"`
-	ChunkUntilLatest      any    `json:"chunk_until_latest,omitempty"`
+	StockCode               string `json:"stock_code"`
+	StockType               any    `json:"stock_type,omitempty"`
+	TimeStep                any    `json:"time_step,omitempty"`
+	Years                   any    `json:"years,omitempty"`
+	StartDate               any    `json:"start_date,omitempty"`
+	EndDate                 any    `json:"end_date,omitempty"`
+	HorizonLen              any    `json:"horizon_len,omitempty"`
+	ContextLen              any    `json:"context_len,omitempty"`
+	UserID                  any    `json:"user_id,omitempty"`
+	ForceEnqueue            any    `json:"force_enqueue,omitempty"`
+	QueuePriority           string `json:"queue_priority,omitempty"`
+	RefreshReason           string `json:"refresh_reason,omitempty"`
+	PredictionTypeValue     string `json:"prediction_type,omitempty"`
+	CovariatePreset         string `json:"covariate_preset,omitempty"`
+	CovariateSignatureValue string `json:"covariate_signature,omitempty"`
+	CovariateConfig         any    `json:"covariate_config,omitempty"`
+	Covariates              any    `json:"covariates,omitempty"`
 }
 
 type UZIAnalyzeRequest struct {
@@ -108,13 +106,10 @@ type requestKeyPayload struct {
 	CovariatePreset       string `json:"covariate_preset,omitempty"`
 	CovariateSignature    string `json:"covariate_signature,omitempty"`
 	RefreshReason         string `json:"refresh_reason,omitempty"`
-	BestMaxAgeDays        int    `json:"best_max_age_days,omitempty"`
-	PredictFromBestValEnd bool   `json:"predict_from_best_val_end,omitempty"`
-	ChunkUntilLatest      bool   `json:"chunk_until_latest,omitempty"`
 }
 
 func (r InferenceRequest) RequestKey() (string, error) {
-	covariateConfig, covariatePreset := CanonicalizeCovariateRouting(r.effectiveCovariateConfig(), r.CovariatePreset)
+	_, covariatePreset := CanonicalizeCovariateRouting(r.effectiveCovariateConfig(), r.CovariatePreset)
 	payload := requestKeyPayload{
 		StockCode:             strings.TrimSpace(r.StockCode),
 		StockType:             normalizeStockType(r.StockType),
@@ -126,11 +121,8 @@ func (r InferenceRequest) RequestKey() (string, error) {
 		ContextLen:            normalizeIntValue(r.ContextLen, 2048),
 		PredictionType:        r.PredictionType(),
 		CovariatePreset:       covariatePreset,
-		CovariateSignature:    normalizedCovariateSignature(covariateConfig),
+		CovariateSignature:    r.CovariateSignature(),
 		RefreshReason:         strings.TrimSpace(r.RefreshReason),
-		BestMaxAgeDays:        normalizeIntValue(r.BestMaxAgeDays, 0),
-		PredictFromBestValEnd: normalizeBoolValue(r.PredictFromBestValEnd, false),
-		ChunkUntilLatest:      normalizeBoolValue(r.ChunkUntilLatest, false),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -148,6 +140,9 @@ func (r InferenceRequest) PredictionType() string {
 }
 
 func (r InferenceRequest) CovariateSignature() string {
+	if explicit := strings.TrimSpace(r.CovariateSignatureValue); explicit != "" {
+		return explicit
+	}
 	covariateConfig, _ := CanonicalizeCovariateRouting(r.effectiveCovariateConfig(), r.CovariatePreset)
 	return normalizedCovariateSignature(covariateConfig)
 }
