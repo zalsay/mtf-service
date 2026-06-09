@@ -83,3 +83,29 @@ func TestLoadConfigAcceptsLegacyMTFServiceTokenAliases(t *testing.T) {
 		t.Fatalf("MTFAgent.RuntimeToken = %q", cfg.MTFAgent.RuntimeToken)
 	}
 }
+
+func TestLoadConfigDisablesRedisByDefault(t *testing.T) {
+	t.Setenv("REDIS_ENABLED", "")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if cfg.Redis.Enabled {
+		t.Fatal("Redis.Enabled = true, want false")
+	}
+}
+
+func TestLoadConfigEnablesRedisWhenConfigured(t *testing.T) {
+	t.Setenv("REDIS_ENABLED", "true")
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+
+	if !cfg.Redis.Enabled {
+		t.Fatal("Redis.Enabled = false, want true")
+	}
+}

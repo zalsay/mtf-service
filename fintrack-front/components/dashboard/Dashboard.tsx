@@ -104,7 +104,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
         setFetchError(null);
         try {
             const [predictionResult, watchlistResult] = await Promise.allSettled([
-                getPublicPredictions(undefined, undefined, PUBLIC_PAGE_SIZE, offset),
+                getPublicPredictions(undefined, undefined, PUBLIC_PAGE_SIZE, offset, activeAssetType),
                 watchlistAPI.getWatchlist(),
             ]);
             let nextWatchlistSymbols = new Set<string>();
@@ -174,7 +174,7 @@ const Dashboard: React.FC<DashboardProps> = ({ stocks: propStocks, isLoading: pr
                 setIsFetchingMore(false);
             }
         }
-    }, [language, onAuthError]);
+    }, [activeAssetType, language, onAuthError]);
 
     useEffect(() => {
         void fetchPublic({ reset: true });

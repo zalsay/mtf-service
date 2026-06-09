@@ -326,6 +326,26 @@ func (h *WatchlistHandler) GetMTFBestByUniqueKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"prediction": item})
 }
 
+func (h *WatchlistHandler) GetMTFBestValueByUniqueKey(c *gin.Context) {
+	uniqueKey := c.Query("unique_key")
+	if uniqueKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unique_key is required"})
+		return
+	}
+
+	item, err := h.watchlistService.GetMTFBestValueByUniqueKey(uniqueKey)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"value": item})
+}
+
 func (h *WatchlistHandler) GetMTFBestUniqueKeysByConfig(c *gin.Context) {
 	symbol := c.Query("symbol")
 	if symbol == "" {
@@ -774,11 +794,17 @@ func (h *WatchlistHandler) ListPublicMTFBestWithValidation(c *gin.Context) {
 			offset = val
 		}
 	}
+	stockType := 0
+	if stockTypeStr := c.Query("stock_type"); stockTypeStr != "" {
+		if val, err := strconv.Atoi(stockTypeStr); err == nil && val > 0 {
+			stockType = val
+		}
+	}
 	symbol := c.Query("symbol")
 	isAdmin, _ := c.Get("is_admin")
 	includePrivate, _ := isAdmin.(bool)
 
-	page, err := h.watchlistService.ListPublicMTFBestPage(horizonLen, symbol, includePrivate, limit, offset)
+	page, err := h.watchlistService.ListPublicMTFBestPageByStockType(horizonLen, symbol, includePrivate, limit, offset, stockType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

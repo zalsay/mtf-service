@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     symbol VARCHAR(20) NOT NULL,
     mtf_version VARCHAR(20) NOT NULL,
     best_prediction_item VARCHAR(50) NOT NULL,
+    best_prediction_quantile DOUBLE PRECISION,
     best_metrics JSONB NOT NULL,
     prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
@@ -180,6 +181,9 @@ CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     val_end_date DATE NOT NULL,
     context_len INTEGER NOT NULL,
     horizon_len INTEGER NOT NULL,
+    best_prediction_values JSONB,
+    future_dates JSONB,
+    adjust_raw_best_prediction_values JSONB,
     short_name VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -204,6 +208,8 @@ CREATE TABLE IF NOT EXISTS mtf_best_validation_chunks (
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
+    stock_type SMALLINT NOT NULL DEFAULT 1,
+    adjust_raw_chunks JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(unique_key, chunk_index)

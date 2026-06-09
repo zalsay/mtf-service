@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,28 @@ import (
 	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
+
+type memoryAPIKeyTempTokenStore struct {
+	userID int
+	token  string
+	ttl    time.Duration
+}
+
+func (s *memoryAPIKeyTempTokenStore) Save(ctx context.Context, token string, userID int, ttl time.Duration) error {
+	s.token = token
+	s.userID = userID
+	s.ttl = ttl
+	return nil
+}
+
+func (s *memoryAPIKeyTempTokenStore) Consume(ctx context.Context, token string) (int, bool, error) {
+	if token == "" || token != s.token {
+		return 0, false, nil
+	}
+	userID := s.userID
+	s.token = ""
+	return userID, true, nil
+}
 
 func TestOpenAPICreateAPIKeyReturnsRawKeyOnce(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -63,6 +86,97 @@ func TestOpenAPICreateAPIKeyReturnsRawKeyOnce(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), services.HashOpenAPIKey(apiKey)) {
 		t.Fatal("response must not expose stored key hash")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPICreateTempTokenStoresOneTimeToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &memoryAPIKeyTempTokenStore{}
+	handler := NewOpenAPIHandler(services.NewOpenAPIService(nil), nil, nil, nil, nil)
+	handler.SetAPIKeyTempTokenStore(store)
+	router := gin.New()
+	router.POST("/api/v1/auth/api-key-temp-token", func(c *gin.Context) {
+		c.Set("user_id", 7)
+		handler.CreateAPIKeyTempToken(c)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/api-key-temp-token", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if len(body.Token) != 32 {
+		t.Fatalf("token length = %d, want 32", len(body.Token))
+	}
+	if body.ExpiresIn != 300 {
+		t.Fatalf("expires_in = %d, want 300", body.ExpiresIn)
+	}
+	if store.token != body.Token || store.userID != 7 {
+		t.Fatalf("stored token/user = %q/%d, want %q/7", store.token, store.userID, body.Token)
+	}
+	if store.ttl != 5*time.Minute {
+		t.Fatalf("ttl = %s, want 5m", store.ttl)
+	}
+}
+
+func TestOpenAPIRedeemTempTokenCreatesAndReturnsAPIKeyWhenActiveKeyExists(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	store := &memoryAPIKeyTempTokenStore{token: "12345678901234567890123456789012", userID: 7}
+	mock.ExpectExec("INSERT INTO open_api_keys").
+		WithArgs(sqlmock.AnyArg(), "codex-smoke-test", 7, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	handler := NewOpenAPIHandler(services.NewOpenAPIService(&database.DB{Conn: db}), nil, nil, nil, nil)
+	handler.SetAPIKeyTempTokenStore(store)
+	router := gin.New()
+	router.POST("/api/open/v1/auth/api-key/from-token", handler.CreateAPIKeyFromTempToken)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/open/v1/auth/api-key/from-token", strings.NewReader(`{"token":"12345678901234567890123456789012","name":"codex-smoke-test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	data, ok := body["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data = %#v", body["data"])
+	}
+	apiKey, _ := data["api_key"].(string)
+	if !strings.HasPrefix(apiKey, "ftk_") {
+		t.Fatalf("api_key = %q, want ftk_ prefix", apiKey)
+	}
+	if strings.Contains(rec.Body.String(), services.HashOpenAPIKey(apiKey)) {
+		t.Fatal("response must not expose stored key hash")
+	}
+	if data["has_existing_key"] != false {
+		t.Fatalf("has_existing_key = %#v, want false", data["has_existing_key"])
+	}
+	if data["name"] != "codex-smoke-test" {
+		t.Fatalf("name = %#v, want codex-smoke-test", data["name"])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -191,6 +305,7 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	}))
 	defer gateway.Close()
 
+	futureDate := time.Now().UTC().Format("2006-01-02")
 	postgres := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
 			t.Fatalf("postgres path = %s", r.URL.Path)
@@ -206,10 +321,10 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 				"stock_code":"510300",
 				"stock_type":2,
 				"prediction_type":"mtf-lite",
-				"context_len":256,
+				"context_len":512,
 				"horizon_len":7,
-				"latest_data_date":"2026-06-06",
-				"future_dates":["2026-06-06"],
+				"latest_data_date":"` + futureDate + `",
+				"future_dates":["` + futureDate + `"],
 				"best_prediction_item":"mtf-0.5",
 				"best_prediction_values":[1.23],
 				"adjust_raw_best_prediction_values":[1.11],
@@ -239,7 +354,7 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	router.POST("/api/open/v1/mtf/predict-once", handler.AuthMiddleware("mtf:predict"), handler.MTFPredictOnce)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/open/v1/mtf/predict-once", strings.NewReader(`{"stock_code":"510300","stock_type":2,"horizon_len":7,"context_len":256,"prediction_type":"mtf-lite","prefer_cache":true}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/open/v1/mtf/predict-once", strings.NewReader(`{"stock_code":"510300","stock_type":2,"horizon_len":7,"context_len":512,"prediction_type":"mtf-lite","prefer_cache":true}`))
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
@@ -261,6 +376,84 @@ func TestOpenAPIPredictOncePrefersCachedPrediction(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"adjust_raw_best_prediction_values":[1.11]`) {
 		t.Fatalf("expected adjust_raw_best_prediction_values passthrough, body=%s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPIMTFBestFiltersByStockType(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_best_key"
+	now := time.Now()
+	mock.ExpectQuery("SELECT k.id, k.owner_user_id, k.scopes, k.status, k.expires_at").
+		WithArgs(services.HashOpenAPIKey(apiKey)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "owner_user_id", "scopes", "status", "expires_at",
+			"user_id", "email", "username", "is_premium", "is_admin", "membership_level", "membership_expires_at", "created_at", "updated_at",
+		}).AddRow(3, 7, "{mtf:read}", "active", nil, 7, "alice@example.com", "alice", false, false, 3, nil, now, now))
+	mock.ExpectExec("UPDATE open_api_keys SET last_used_at").
+		WithArgs(3).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("WITH public_groups").
+		WithArgs(7).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+			"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+			"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+			"val_start_date", "val_end_date", "context_len", "horizon_len",
+			"created_at", "updated_at", "short_name", "stock_type", "watchlist_count", "total_count",
+		}).
+			AddRow(1, "stock-key", "000001", "timesfm", "mtf-0.5", `{"mae":1}`,
+				"mtf-lite", `{}`, "", `{}`, 1,
+				now, now, now, now, now, now, 512, 7,
+				now, now, "平安银行", 1, 3, 2).
+			AddRow(2, "etf-key", "510300", "timesfm", "mtf-0.5", `{"mae":1}`,
+				"mtf-lite", `{}`, "", `{}`, 1,
+				now, now, now, now, now, now, 512, 7,
+				now, now, "沪深300ETF", 2, 5, 2))
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/best", handler.AuthMiddleware("mtf:read"), handler.MTFBest)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/best?stock_type=2&include_validation=false", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Count int `json:"count"`
+			Items []struct {
+				Symbol    string `json:"symbol"`
+				StockType int    `json:"stock_type"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Data.Count != 1 || len(body.Data.Items) != 1 {
+		t.Fatalf("items/count = %d/%d, want 1/1; body=%s", len(body.Data.Items), body.Data.Count, rec.Body.String())
+	}
+	if body.Data.Items[0].Symbol != "510300" || body.Data.Items[0].StockType != 2 {
+		t.Fatalf("item = %#v, want ETF stock_type=2", body.Data.Items[0])
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

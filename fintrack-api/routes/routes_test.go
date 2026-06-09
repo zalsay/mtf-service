@@ -85,6 +85,8 @@ func TestSetupRouterRegistersOpenAPIRoutes(t *testing.T) {
 
 	wantRoutes := map[string]string{
 		"POST /api/open/v1/auth/api-key":               "",
+		"POST /api/open/v1/auth/api-key/from-token":    "",
+		"POST /api/v1/auth/api-key-temp-token":         "",
 		"GET /api/open/v1/etf/hot":                     "",
 		"POST /api/open/v1/etf/quotes":                 "",
 		"GET /api/open/v1/etf/lookup":                  "",

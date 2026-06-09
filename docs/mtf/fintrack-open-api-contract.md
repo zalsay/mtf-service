@@ -47,6 +47,58 @@ X-Request-Id: <optional caller request id>
 - 若 key 支持多用户代理，必须通过 `X-FinTrack-User` 或请求体 `external_user_id` 映射到已授权的 FinTrack 用户。
 - 默认禁止 admin 全局数据访问；只有显式 `admin:*` scope 的内部 key 才可启用。
 
+### 3.1 智能体获取 API key
+
+OpenClaw、Claude Code、Codex 等用户侧智能体默认不应处理 FinTrack 用户名和密码。推荐流程：
+
+1. 用户在 FinTrack 前端“设置 -> 账号设置 -> Open API 临时令牌”点击生成 32 位一次性令牌。
+2. 用户把临时令牌交给智能体或本地 skill 脚本。
+3. 智能体调用 `POST /api/open/v1/auth/api-key/from-token` 兑换 Open API key。
+
+临时令牌有效期 5 分钟，只能消费一次。兑换临时令牌时服务端会创建一条新的 Open API key，并只在本次响应中返回 raw `api_key`。如果用户已有 active key，也不会重放旧 key 明文，而是创建并返回新的 key。
+
+```http
+POST /api/open/v1/auth/api-key/from-token
+Content-Type: application/json
+
+{
+  "token": "<32-char-temp-token>",
+  "name": "mtf-etf-a-share-assistant"
+}
+```
+
+成功响应：
+
+```json
+{
+  "request_id": "req_20260607_abcdef",
+  "status": "ok",
+  "data": {
+    "api_key": "ftk_xxx",
+    "name": "mtf-etf-a-share-assistant",
+    "scopes": ["etf:read", "mtf:read", "mtf:predict"],
+    "has_existing_key": false
+  }
+}
+```
+
+如果用户已有 active key，响应仍会返回本次新建的 raw `api_key`：
+
+```json
+{
+  "request_id": "req_20260607_abcdef",
+  "status": "ok",
+  "data": {
+    "api_key": "ftk_new_xxx",
+    "name": "codex-smoke-test",
+    "scopes": ["etf:read", "mtf:read", "mtf:predict"],
+    "has_existing_key": false
+  }
+}
+```
+
+`POST /api/open/v1/auth/api-key` 的用户名/密码换 key 方式仅作为遗留或显式授权场景使用，不应作为用户侧智能体默认流程。
+
 建议表：
 
 ```sql

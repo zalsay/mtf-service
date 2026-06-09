@@ -57,6 +57,7 @@ type ExternalAPIConfig struct {
 }
 
 type RedisConfig struct {
+	Enabled  bool
 	Host     string
 	Port     string
 	Password string
@@ -164,6 +165,7 @@ func LoadConfig() (*Config, error) {
 			PolygonKey:      getEnv("POLYGON_API_KEY", ""),
 		},
 		Redis: RedisConfig{
+			Enabled:  getEnvAsBool("REDIS_ENABLED", false),
 			Host:     getEnv("REDIS_HOST", "localhost"),
 			Port:     getEnv("REDIS_PORT", "6379"),
 			Password: getEnv("REDIS_PASSWORD", ""),

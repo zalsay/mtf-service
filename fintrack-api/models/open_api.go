@@ -15,9 +15,29 @@ type OpenAPIKeyCreateResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
+type OpenAPIKeyTempTokenRequest struct {
+	Token string `json:"token" binding:"required"`
+	Name  string `json:"name"`
+}
+
+type OpenAPIKeyTempTokenResponse struct {
+	Token     string `json:"token"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
+type OpenAPIKeyFromTokenResponse struct {
+	APIKey         string     `json:"api_key,omitempty"`
+	KeyID          int        `json:"key_id,omitempty"`
+	Name           string     `json:"name"`
+	Scopes         []string   `json:"scopes"`
+	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
+	HasExistingKey bool       `json:"has_existing_key"`
+}
+
 type OpenAPIKeyRecord struct {
 	ID        int
 	UserID    int
+	Name      string
 	Scopes    []string
 	Status    string
 	ExpiresAt *time.Time

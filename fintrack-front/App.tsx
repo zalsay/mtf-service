@@ -16,7 +16,7 @@ import { View, StockData } from './types';
 import { getStockPredictions } from './services/geminiService';
 import { INITIAL_STOCKS } from './constants';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
-import { authAPI, clearAuthToken } from './services/apiService';
+import { authAPI, clearAuthToken, onAuthRequired } from './services/apiService';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const AppContent: React.FC = () => {
@@ -35,7 +35,17 @@ const AppContent: React.FC = () => {
 
     const [showLogin, setShowLogin] = useState<boolean>(false);
     const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
-    const [authRedirecting, setAuthRedirecting] = useState<boolean>(false);
+
+    const handleAuthError = useCallback(() => {
+        clearAuthToken();
+        setIsAuthenticated(false);
+        setIsAdmin(false);
+        setIsDemoMode(false);
+        setCurrentView('dashboard');
+        setLastContentView('dashboard');
+        setShowLogin(true);
+        setError(null);
+    }, []);
 
     // 检查用户是否已登录
     useEffect(() => {
@@ -48,27 +58,15 @@ const AppContent: React.FC = () => {
                     setIsAdmin(Boolean(profile.is_admin));
                     setIsAuthenticated(true);
                 } catch {
-                    clearAuthToken();
-                    setIsAdmin(false);
-                    setIsAuthenticated(false);
+                    handleAuthError();
                 }
             }
             setIsCheckingAuth(false);
         };
         checkAuth();
-    }, []);
+    }, [handleAuthError]);
 
-    const handleAuthError = useCallback(() => {
-        clearAuthToken();
-        setAuthRedirecting(true);
-        setTimeout(() => {
-            setIsAuthenticated(false);
-            setIsAdmin(false);
-            setIsDemoMode(false);
-            setShowLogin(true);
-            setAuthRedirecting(false);
-        }, 1500);
-    }, []);
+    useEffect(() => onAuthRequired(handleAuthError), [handleAuthError]);
 
     const fetchPredictions = useCallback(async () => {
         setIsLoading(true);
@@ -228,22 +226,6 @@ const AppContent: React.FC = () => {
 
     return (
         <div className="flex min-h-screen">
-            {/* Auth Redirect Overlay */}
-            {authRedirecting && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                    <div className="bg-card-dark border border-white/10 rounded-xl p-6 shadow-2xl max-w-sm w-full mx-4 text-center transform transition-all">
-                        <div className="w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center mx-auto mb-4">
-                            <span className="material-symbols-outlined text-primary text-2xl">lock</span>
-                        </div>
-                        <h3 className="text-xl font-bold text-white mb-2">{t('auth.sessionExpired')}</h3>
-                        <p className="text-white/60 mb-6">{t('auth.redirectingLogin')}</p>
-                        <div className="w-full bg-white/10 rounded-full h-1 overflow-hidden">
-                            <div className="bg-primary h-full rounded-full w-full animate-[pulse_1.5s_ease-in-out_infinite]"></div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             <Sidebar currentView={currentView} setCurrentView={handleViewChange} onLogout={handleLogout} isDemoMode={isDemoMode} isAdmin={isAdmin} />
 
             {isMobileViewport && currentView === 'settings' && (

@@ -18,6 +18,7 @@ type OpenAPIHandler struct {
 	mtfAgent       *services.MTFAgentService
 	aiModels       *services.AIModelConfigService
 	financeNews    *services.FinanceNewsService
+	tempTokens     services.APIKeyTempTokenStore
 }
 
 func NewOpenAPIHandler(openAPIService *services.OpenAPIService, watchlist *services.WatchlistService, mtfAgent *services.MTFAgentService, aiModels *services.AIModelConfigService, financeNews *services.FinanceNewsService) *OpenAPIHandler {
@@ -28,6 +29,10 @@ func NewOpenAPIHandler(openAPIService *services.OpenAPIService, watchlist *servi
 		aiModels:       aiModels,
 		financeNews:    financeNews,
 	}
+}
+
+func (h *OpenAPIHandler) SetAPIKeyTempTokenStore(store services.APIKeyTempTokenStore) {
+	h.tempTokens = store
 }
 
 func (h *OpenAPIHandler) CreateAPIKey(c *gin.Context) {
@@ -42,6 +47,63 @@ func (h *OpenAPIHandler) CreateAPIKey(c *gin.Context) {
 			writeOpenAPIError(c, http.StatusUnauthorized, "invalid_credentials", "invalid username or password", false)
 			return
 		}
+		writeOpenAPIError(c, http.StatusInternalServerError, "create_api_key_failed", err.Error(), false)
+		return
+	}
+	writeOpenAPIData(c, http.StatusOK, response)
+}
+
+func (h *OpenAPIHandler) CreateAPIKeyTempToken(c *gin.Context) {
+	userIDValue, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	userID, ok := userIDValue.(int)
+	if !ok || userID <= 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
+		return
+	}
+	if h.tempTokens == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "temporary token store is not configured"})
+		return
+	}
+	token, err := services.GenerateAPIKeyTempToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate temporary token"})
+		return
+	}
+	if err := h.tempTokens.Save(c.Request.Context(), token, userID, services.APIKeyTempTokenTTL); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save temporary token"})
+		return
+	}
+	c.JSON(http.StatusOK, models.OpenAPIKeyTempTokenResponse{
+		Token:     token,
+		ExpiresIn: int(services.APIKeyTempTokenTTL.Seconds()),
+	})
+}
+
+func (h *OpenAPIHandler) CreateAPIKeyFromTempToken(c *gin.Context) {
+	var req models.OpenAPIKeyTempTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
+	}
+	if h.tempTokens == nil {
+		writeOpenAPIError(c, http.StatusServiceUnavailable, "token_store_unavailable", "temporary token store is not configured", true)
+		return
+	}
+	userID, ok, err := h.tempTokens.Consume(c.Request.Context(), req.Token)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusInternalServerError, "token_read_failed", err.Error(), true)
+		return
+	}
+	if !ok {
+		writeOpenAPIError(c, http.StatusUnauthorized, "invalid_or_expired_token", "temporary token is invalid or expired", false)
+		return
+	}
+	response, err := h.openAPIService.CreateKeyForUser(c.Request.Context(), userID, req.Name)
+	if err != nil {
 		writeOpenAPIError(c, http.StatusInternalServerError, "create_api_key_failed", err.Error(), false)
 		return
 	}
@@ -127,6 +189,7 @@ func (h *OpenAPIHandler) MTFBest(c *gin.Context) {
 		writeOpenAPIError(c, http.StatusInternalServerError, "mtf_read_failed", err.Error(), false)
 		return
 	}
+	items = filterMTFBestByStockType(items, queryInt(c, "stock_type"))
 	if strings.EqualFold(c.DefaultQuery("include_validation", "true"), "false") {
 		writeOpenAPIData(c, http.StatusOK, gin.H{"items": items, "count": len(items)})
 		return
@@ -137,6 +200,19 @@ func (h *OpenAPIHandler) MTFBest(c *gin.Context) {
 		return
 	}
 	writeOpenAPIData(c, http.StatusOK, gin.H{"items": result, "count": len(result)})
+}
+
+func filterMTFBestByStockType(items []models.MTFBestPrediction, stockType int) []models.MTFBestPrediction {
+	if stockType <= 0 {
+		return items
+	}
+	filtered := make([]models.MTFBestPrediction, 0, len(items))
+	for _, item := range items {
+		if item.StockType == stockType {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {

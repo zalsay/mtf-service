@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     symbol VARCHAR(20) NOT NULL,
     mtf_version VARCHAR(20) NOT NULL,
     best_prediction_item VARCHAR(50) NOT NULL,
+    best_prediction_quantile DOUBLE PRECISION,
     best_metrics JSONB NOT NULL,
     prediction_type TEXT NOT NULL DEFAULT 'mtf-lite',
     covariate_config JSONB,
@@ -162,6 +163,9 @@ CREATE TABLE IF NOT EXISTS mtf_best_predictions (
     val_end_date DATE NOT NULL,
     context_len INTEGER NOT NULL,
     horizon_len INTEGER NOT NULL,
+    best_prediction_values JSONB,
+    future_dates JSONB,
+    adjust_raw_best_prediction_values JSONB,
     short_name VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -186,6 +190,8 @@ CREATE TABLE IF NOT EXISTS mtf_best_validation_chunks (
     covariate_config JSONB,
     covariate_signature TEXT,
     covariate_analysis JSONB,
+    stock_type SMALLINT NOT NULL DEFAULT 1,
+    adjust_raw_chunks JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(unique_key, chunk_index)
@@ -355,14 +361,20 @@ ALTER TABLE user_watchlist ADD COLUMN IF NOT EXISTS strategy_unique_key VARCHAR(
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS is_public SMALLINT NOT NULL DEFAULT 1;
 ALTER TABLE mtf_best_predictions ALTER COLUMN is_public SET DEFAULT 1;
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS short_name VARCHAR(255);
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS best_prediction_quantile DOUBLE PRECISION;
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite';
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_config JSONB;
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
 ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS best_prediction_values JSONB;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS future_dates JSONB;
+ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS adjust_raw_best_prediction_values JSONB;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT 'mtf-lite';
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_config JSONB;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_signature TEXT;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS covariate_analysis JSONB;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS stock_type SMALLINT NOT NULL DEFAULT 1;
+ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS adjust_raw_chunks JSONB;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS predicted_change_percent JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS actual_change_percent JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE mtf_best_validation_chunks ADD COLUMN IF NOT EXISTS change_base_value DOUBLE PRECISION;

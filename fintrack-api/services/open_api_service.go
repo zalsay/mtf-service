@@ -141,6 +141,69 @@ func (s *OpenAPIService) CreateKey(ctx context.Context, req models.OpenAPIKeyCre
 	}, nil
 }
 
+func (s *OpenAPIService) CreateKeyForUser(ctx context.Context, userID int, name string) (*models.OpenAPIKeyFromTokenResponse, error) {
+	if s == nil || s.db == nil || s.db.Conn == nil {
+		return nil, errors.New("database is not configured")
+	}
+	if userID <= 0 {
+		return nil, errors.New("user_id is required")
+	}
+
+	raw, hash, err := GenerateOpenAPIKeyMaterial()
+	if err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = DefaultOpenAPIKeyName
+	}
+	scopes := ParseOpenAPIScopes(DefaultOpenAPIScopes)
+
+	_, err = s.db.Conn.ExecContext(ctx, `
+		INSERT INTO open_api_keys (key_hash, name, owner_user_id, scopes, status)
+		VALUES ($1, $2, $3, $4, 'active')
+	`, hash, name, userID, pq.Array(scopes))
+	if err != nil {
+		return nil, fmt.Errorf("create open api key: %w", err)
+	}
+
+	return &models.OpenAPIKeyFromTokenResponse{
+		APIKey:         raw,
+		Name:           name,
+		Scopes:         scopes,
+		HasExistingKey: false,
+	}, nil
+}
+
+func (s *OpenAPIService) GetActiveKeyForUser(ctx context.Context, userID int) (*models.OpenAPIKeyRecord, error) {
+	if s == nil || s.db == nil || s.db.Conn == nil {
+		return nil, errors.New("database is not configured")
+	}
+	var record models.OpenAPIKeyRecord
+	var scopes []string
+	var expiresAt sql.NullTime
+	err := s.db.Conn.QueryRowContext(ctx, `
+		SELECT id, name, scopes, expires_at
+		FROM open_api_keys
+		WHERE owner_user_id = $1
+		  AND status = 'active'
+		  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+	`, userID).Scan(&record.ID, &record.Name, pq.Array(&scopes), &expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	record.UserID = userID
+	record.Status = "active"
+	record.Scopes = ParseOpenAPIScopes(scopes)
+	if expiresAt.Valid {
+		t := expiresAt.Time
+		record.ExpiresAt = &t
+	}
+	return &record, nil
+}
+
 func (s *OpenAPIService) ValidateKey(ctx context.Context, raw string) (*models.OpenAPIKeyRecord, *models.User, error) {
 	if s == nil || s.db == nil || s.db.Conn == nil {
 		return nil, nil, errors.New("database is not configured")

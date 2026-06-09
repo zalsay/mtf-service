@@ -65,6 +65,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	mtfAgentService := services.NewMTFAgentService(db, cfg)
 	financeNewsService := services.NewFinanceNewsService(nil)
 	openAPIService := services.NewOpenAPIService(db)
+	apiKeyTempTokenStore := services.NewAPIKeyTempTokenStore(cfg.Redis)
 
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler(authService)
@@ -76,6 +77,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	mtfAgentHandler := handlers.NewMTFAgentHandler(mtfAgentService, aiModelConfigService)
 	financeNewsHandler := handlers.NewFinanceNewsHandler(financeNewsService)
 	openAPIHandler := handlers.NewOpenAPIHandler(openAPIService, watchlistService, mtfAgentService, aiModelConfigService, financeNewsService)
+	openAPIHandler.SetAPIKeyTempTokenStore(apiKeyTempTokenStore)
 
 	// 健康检查
 	router.GET("/health", func(c *gin.Context) {
@@ -98,6 +100,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 			auth.POST("/logout", authHandler.AuthMiddleware(), authHandler.Logout)
 			auth.PUT("/membership", authHandler.AuthMiddleware(), authHandler.UpdateMembership)
 			auth.POST("/redeem-invite", authHandler.AuthMiddleware(), authHandler.RedeemInvite)
+			auth.POST("/api-key-temp-token", authHandler.AuthMiddleware(), openAPIHandler.CreateAPIKeyTempToken)
 		}
 
 		admin := v1.Group("/admin")
@@ -144,6 +147,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 		{
 			savePredictions.POST("/mtf-best", watchlistHandler.SaveMTFBest)
 			savePredictions.GET("/mtf-best/by-unique", watchlistHandler.GetMTFBestByUniqueKey)
+			savePredictions.GET("/mtf-best/value", watchlistHandler.GetMTFBestValueByUniqueKey)
 			savePredictions.GET("/mtf-best/by-config", watchlistHandler.GetMTFBestUniqueKeysByConfig)
 			savePredictions.POST("/mtf-best/val-chunk", watchlistHandler.SaveMTFValChunk)
 			savePredictions.GET("/mtf-best/val-chunk/latest", watchlistHandler.GetLatestValidationChunk)
@@ -243,6 +247,7 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	open := router.Group("/api/open/v1")
 	{
 		open.POST("/auth/api-key", openAPIHandler.CreateAPIKey)
+		open.POST("/auth/api-key/from-token", openAPIHandler.CreateAPIKeyFromTempToken)
 
 		etf := open.Group("/etf")
 		etf.Use(openAPIHandler.AuthMiddleware("etf:read"))

@@ -22,6 +22,7 @@ const buildWebSocketURL = (endpoint: string) => {
 
 // 存储认证token
 let authToken: string | null = null;
+const AUTH_REQUIRED_EVENT = 'fintrack:auth-required';
 
 // API响应类型定义
 export interface User {
@@ -474,6 +475,22 @@ export const clearAuthToken = () => {
   localStorage.removeItem('authToken');
 };
 
+export const onAuthRequired = (handler: () => void): (() => void) => {
+  if (typeof window === 'undefined') {
+    return () => {};
+  }
+  const listener = () => handler();
+  window.addEventListener(AUTH_REQUIRED_EVENT, listener);
+  return () => window.removeEventListener(AUTH_REQUIRED_EVENT, listener);
+};
+
+const notifyAuthRequired = () => {
+  clearAuthToken();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+  }
+};
+
 // 通用API请求函数
 const apiRequest = async (endpoint: string, options: RequestInit = {}): Promise<any> => {
   const url = buildAPIURL(endpoint);
@@ -494,6 +511,9 @@ const apiRequest = async (endpoint: string, options: RequestInit = {}): Promise<
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      notifyAuthRequired();
+    }
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.message || errorData.error || `HTTP error! status: ${response.status}`);
   }
@@ -535,10 +555,14 @@ const apiFetch = async (endpoint: string, options: RequestInit = {}): Promise<Re
     headers.Authorization = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers,
   });
+  if (response.status === 401) {
+    notifyAuthRequired();
+  }
+  return response;
 };
 
 const resolveOpenURL = (openURL: string, locationHref: string = window.location.href): string => {
@@ -1016,10 +1040,14 @@ export const getPublicPredictions = async (
   symbol?: string,
   limit?: number,
   offset?: number,
+  stockType?: number,
 ): Promise<PublicPredictionResponse> => {
   const params = new URLSearchParams();
   if (horizonLen) {
     params.set('horizon_len', String(horizonLen));
+  }
+  if (stockType && stockType > 0) {
+    params.set('stock_type', String(stockType));
   }
   if (symbol && symbol.trim()) {
     params.set('symbol', symbol.trim());

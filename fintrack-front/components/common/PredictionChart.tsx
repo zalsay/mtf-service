@@ -50,8 +50,8 @@ const PredictionChart: React.FC<ChartProps> = ({
     const containerRef = useRef<HTMLDivElement>(null);
     const tooltipRef = useRef<HTMLDivElement>(null);
     const gradientSeed = useId().replace(/:/g, '');
-    const actualGradientId = `paint-dynamic-${gradientSeed}`;
     const actualChangeGradientId = `paint-change-${gradientSeed}`;
+    const predictionFillGradientId = `paint-prediction-fill-${gradientSeed}`;
     const proGradientId = `paint-pro-${gradientSeed}`;
     const proAccentColor = '#FBBF24';
     const litePredictionColor = '#F8FAFC';
@@ -272,12 +272,13 @@ const PredictionChart: React.FC<ChartProps> = ({
             const actualsPath = generatePath(actuals, getPriceY);
             const predictionsPath = generatePath(predictions, getPriceY);
             const proPredictionsPath = generatePath(proPredictions, getPriceY);
+            const predictionFillPath = proPredictionsPath || predictionsPath;
+            const predictionFillIsPro = Boolean(proPredictionsPath);
             const actualChangePath = generatePath(actualChangePercents, getChangeY, true);
             const predictedChangePath = generatePath(predictedChangePercents, getChangeY, true);
             const proPredictedChangePath = generatePath(proPredictedChangePercents, getChangeY, true);
             const actualStroke = actualValueColor;
-            const actualFillColor = actualValueColor;
-            const actualDotStyle = { backgroundColor: actualFillColor };
+            const actualDotStyle = { backgroundColor: actualStroke };
             const lastActualValue = [...actuals]
                 .reverse()
                 .find(value => isNonZeroFinitePoint(value));
@@ -673,9 +674,9 @@ const PredictionChart: React.FC<ChartProps> = ({
             return (
                 <div ref={containerRef} className="relative w-full h-full" onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
                     <svg fill="none" height="100%" preserveAspectRatio="none" viewBox={`-5 0 ${width + 12} ${height}`} width="100%" xmlns="http://www.w3.org/2000/svg">
-                        {/* Area fill for actuals */}
-                        {!isChangeMode && actualsPath && (
-                            <path d={`${actualsPath} V${chartHeight} H0 Z`} fill={`url(#${actualGradientId})`} stroke="none"></path>
+                        {/* Area fill follows prediction curves; actuals remain line-only. */}
+                        {!isChangeMode && predictionFillPath && (
+                            <path d={`${predictionFillPath} V${chartHeight} H0 Z`} fill={`url(#${predictionFillGradientId})`} stroke="none"></path>
                         )}
                         {!isChangeMode && (
                             <>
@@ -791,9 +792,9 @@ const PredictionChart: React.FC<ChartProps> = ({
 	                        )}
 
                         <defs>
-	                            <linearGradient gradientUnits="userSpaceOnUse" id={actualGradientId} x1="0" y1="0" x2="0" y2={chartHeight}>
-	                                <stop stopColor={actualFillColor} stopOpacity={theme === 'pro' ? '0.42' : '0.5'}></stop>
-	                                <stop offset="1" stopColor={actualFillColor} stopOpacity="0"></stop>
+	                            <linearGradient gradientUnits="userSpaceOnUse" id={predictionFillGradientId} x1="0" y1="0" x2="0" y2={chartHeight}>
+	                                <stop stopColor={predictionFillIsPro ? '#F59E0B' : litePredictionColor} stopOpacity={predictionFillIsPro ? '0.34' : '0.22'}></stop>
+	                                <stop offset="1" stopColor={predictionFillIsPro ? '#F59E0B' : litePredictionColor} stopOpacity="0"></stop>
 	                            </linearGradient>
 	                            <linearGradient gradientUnits="userSpaceOnUse" id={actualChangeGradientId} x1="0" y1="0" x2="0" y2={chartHeight}>
 	                                <stop stopColor="#E5E7EB" stopOpacity="0.34"></stop>
@@ -809,10 +810,8 @@ const PredictionChart: React.FC<ChartProps> = ({
                                 spreadMethod="repeat"
                             >
                                 <stop offset="0%" stopColor="#FFF1B8" stopOpacity="0.95"></stop>
-                                <stop offset="24%" stopColor="#FCD34D" stopOpacity="0.92"></stop>
-                                <stop offset="52%" stopColor="#F59E0B" stopOpacity="0.88"></stop>
-                                <stop offset="78%" stopColor="#FB923C" stopOpacity="0.86"></stop>
-                                <stop offset="100%" stopColor="#F97316" stopOpacity="0.9"></stop>
+                                <stop offset="50%" stopColor="#F59E0B" stopOpacity="0.9"></stop>
+                                <stop offset="100%" stopColor="#FFF1B8" stopOpacity="0.95"></stop>
                             </linearGradient>
                         </defs>
                     </svg>
@@ -877,7 +876,7 @@ const PredictionChart: React.FC<ChartProps> = ({
                                 <div className="flex items-center gap-2">
                                     <div
                                         className="w-2 h-2 rounded-full"
-                                        style={{ background: 'linear-gradient(135deg, #FFF1B8 0%, #FCD34D 34%, #F59E0B 66%, #F97316 100%)' }}
+                                        style={{ background: 'linear-gradient(135deg, #FFF1B8 0%, #F59E0B 50%, #FFF1B8 100%)' }}
 	                                    ></div>
 	                                    <span className="font-medium" style={{ color: proAccentColor }}>
 	                                        {proLabel}: {proPredictions[hoverIndex].toFixed(2)}
@@ -900,7 +899,7 @@ const PredictionChart: React.FC<ChartProps> = ({
 	                                <div className="flex items-center gap-2">
 	                                    <div
 	                                        className="h-0.5 w-3 rounded-full"
-	                                        style={{ background: 'linear-gradient(90deg, #FFF1B8 0%, #FCD34D 34%, #F59E0B 66%, #F97316 100%)' }}
+	                                        style={{ background: 'linear-gradient(90deg, #FFF1B8 0%, #F59E0B 50%, #FFF1B8 100%)' }}
 	                                    ></div>
 	                                    <span className="font-medium" style={{ color: proAccentColor }}>{proLabel} {predChangeLabel}: {proPredictedChangePercents[hoverIndex].toFixed(2)}%</span>
 	                                </div>

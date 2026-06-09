@@ -1,8 +1,14 @@
 package services
 
 import (
+	"context"
 	"strings"
 	"testing"
+
+	"fintrack-api/database"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
 
 func TestGenerateOpenAPIKeyValueAndHash(t *testing.T) {
@@ -43,3 +49,38 @@ func TestParseOpenAPIScopes(t *testing.T) {
 		t.Fatal("did not expect mtf:predict")
 	}
 }
+
+func TestCreateKeyForUserCreatesAndReturnsRawKey(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO open_api_keys").
+		WithArgs(sqlmock.AnyArg(), "agent-key", 7, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	service := NewOpenAPIService(&database.DB{Conn: db})
+	response, err := service.CreateKeyForUser(context.Background(), 7, "agent-key")
+	if err != nil {
+		t.Fatalf("CreateKeyForUser error = %v", err)
+	}
+	if !strings.HasPrefix(response.APIKey, "ftk_") {
+		t.Fatalf("APIKey = %q, want ftk_ prefix", response.APIKey)
+	}
+	if response.HasExistingKey {
+		t.Fatal("HasExistingKey = true, want false")
+	}
+	if response.Name != "agent-key" {
+		t.Fatalf("Name = %q, want agent-key", response.Name)
+	}
+	if len(response.Scopes) == 0 {
+		t.Fatal("expected default scopes")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+var _ = pq.Array

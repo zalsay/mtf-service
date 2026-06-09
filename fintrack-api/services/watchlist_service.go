@@ -158,6 +158,55 @@ func marshalOptionalJSONObject(value interface{}) (string, error) {
 	return string(raw), nil
 }
 
+func marshalOptionalFloat64Array(values []float64, field string) (interface{}, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal %s: %v", field, err)
+	}
+	return string(raw), nil
+}
+
+func marshalOptionalStringArray(values []string, field string) (interface{}, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal %s: %v", field, err)
+	}
+	return string(raw), nil
+}
+
+func bestPredictionQuantileArg(req *models.SaveMTFBestRequest) interface{} {
+	if req.BestPredictionQuantile != nil {
+		return *req.BestPredictionQuantile
+	}
+	quantile, ok := parseBestPredictionQuantile(req.BestPredictionItem)
+	if !ok {
+		return nil
+	}
+	return quantile
+}
+
+func parseBestPredictionQuantile(item string) (float64, bool) {
+	trimmed := strings.TrimSpace(item)
+	if trimmed == "" {
+		return 0, false
+	}
+	idx := strings.LastIndex(trimmed, "-")
+	if idx < 0 || idx == len(trimmed)-1 {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(trimmed[idx+1:], 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
 func normalizedPredictionType(value string) string {
 	return normalizeTrainPredictionType(value)
 }
@@ -1572,6 +1621,19 @@ func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal covariate_analysis: %v", err)
 	}
+	bestValuesJSON, err := marshalOptionalFloat64Array(req.BestPredictionValues, "best_prediction_values")
+	if err != nil {
+		return err
+	}
+	futureDatesJSON, err := marshalOptionalStringArray(req.FutureDates, "future_dates")
+	if err != nil {
+		return err
+	}
+	adjustRawBestValuesJSON, err := marshalOptionalFloat64Array(req.AdjustRawBestPredictionValues, "adjust_raw_best_prediction_values")
+	if err != nil {
+		return err
+	}
+	bestQuantileArg := bestPredictionQuantileArg(req)
 	predictionType := normalizedPredictionType(req.PredictionType)
 	var covSignatureArg interface{}
 	if strings.TrimSpace(req.CovariateSignature) != "" {
@@ -1589,7 +1651,9 @@ func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
             train_start_date, train_end_date,
             test_start_date, test_end_date,
             val_start_date, val_end_date,
-            context_len, horizon_len
+            context_len, horizon_len,
+            best_prediction_values, future_dates, adjust_raw_best_prediction_values,
+            best_prediction_quantile
         ) VALUES (
             $1, $2, $3, $4, $5::jsonb,
             $6, $7::jsonb, $8, $9::jsonb,
@@ -1597,10 +1661,13 @@ func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
             $11::date, $12::date,
             $13::date, $14::date,
             $15::date, $16::date,
-            $17, $18
+            $17, $18,
+            $19::jsonb, $20::jsonb, $21::jsonb,
+            $22
         )
         ON CONFLICT (unique_key) DO UPDATE SET
             best_prediction_item = EXCLUDED.best_prediction_item,
+            best_prediction_quantile = COALESCE(EXCLUDED.best_prediction_quantile, mtf_best_predictions.best_prediction_quantile),
             best_metrics = EXCLUDED.best_metrics,
             prediction_type = EXCLUDED.prediction_type,
             covariate_config = EXCLUDED.covariate_config,
@@ -1615,6 +1682,9 @@ func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
             val_end_date = EXCLUDED.val_end_date,
             context_len = EXCLUDED.context_len,
             horizon_len = EXCLUDED.horizon_len,
+            best_prediction_values = COALESCE(EXCLUDED.best_prediction_values, mtf_best_predictions.best_prediction_values),
+            future_dates = COALESCE(EXCLUDED.future_dates, mtf_best_predictions.future_dates),
+            adjust_raw_best_prediction_values = COALESCE(EXCLUDED.adjust_raw_best_prediction_values, mtf_best_predictions.adjust_raw_best_prediction_values),
             updated_at = CURRENT_TIMESTAMP
     `,
 		req.UniqueKey, req.Symbol, req.MTFVersion, req.BestPredictionItem, string(metricsJSON),
@@ -1624,6 +1694,8 @@ func (s *WatchlistService) SaveMTFBest(req *models.SaveMTFBestRequest) error {
 		req.TestStartDate, req.TestEndDate,
 		req.ValStartDate, req.ValEndDate,
 		req.ContextLen, req.HorizonLen,
+		bestValuesJSON, futureDatesJSON, adjustRawBestValuesJSON,
+		bestQuantileArg,
 	)
 
 	if err != nil {
@@ -1671,6 +1743,91 @@ func (s *WatchlistService) GetMTFBestByUniqueKey(uniqueKey string) (*models.MTFB
 	}
 
 	return &item, nil
+}
+
+func (s *WatchlistService) GetMTFBestValueByUniqueKey(uniqueKey string) (*models.MTFBestValue, error) {
+	row := s.db.Conn.QueryRow(`
+        SELECT
+            unique_key,
+            best_prediction_item,
+            best_prediction_quantile,
+            COALESCE(best_prediction_values, 'null'::jsonb),
+            COALESCE(future_dates, 'null'::jsonb),
+            COALESCE(adjust_raw_best_prediction_values, 'null'::jsonb)
+        FROM mtf_best_predictions
+        WHERE unique_key = $1
+        LIMIT 1
+    `, uniqueKey)
+
+	var result models.MTFBestValue
+	var bestQuantile sql.NullFloat64
+	var valuesJSON, datesJSON, adjustRawJSON []byte
+	if err := row.Scan(&result.UniqueKey, &result.BestPredictionItem, &bestQuantile, &valuesJSON, &datesJSON, &adjustRawJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, sql.ErrNoRows
+		}
+		return nil, fmt.Errorf("failed to get mtf best value by unique_key: %v", err)
+	}
+	if bestQuantile.Valid {
+		value := bestQuantile.Float64
+		result.BestPredictionQuantile = &value
+	} else if value, ok := parseBestPredictionQuantile(result.BestPredictionItem); ok {
+		result.BestPredictionQuantile = &value
+	}
+
+	values, valuesOK, err := decodeOptionalFloat64Array(valuesJSON, "best_prediction_values")
+	if err != nil {
+		return nil, err
+	}
+	dates, datesOK, err := decodeOptionalStringArray(datesJSON, "future_dates")
+	if err != nil {
+		return nil, err
+	}
+	adjustRawValues, _, err := decodeOptionalFloat64Array(adjustRawJSON, "adjust_raw_best_prediction_values")
+	if err != nil {
+		return nil, err
+	}
+	if valuesOK && datesOK {
+		result.BestPredictionValues = values
+		result.FutureDates = dates
+		result.AdjustRawBestPredictionValues = adjustRawValues
+		result.Source = "saved"
+		return &result, nil
+	}
+
+	dates, values, predictedLatest, actualLatest, changePct, err := s.ListFuturePredictionsByUniqueKey(uniqueKey)
+	if err != nil {
+		return nil, err
+	}
+	result.BestPredictionValues = values
+	result.FutureDates = dates
+	result.PredictedLatest = predictedLatest
+	result.ActualLatest = actualLatest
+	result.PredictedChangePercent = changePct
+	result.Source = "future_chunks"
+	return &result, nil
+}
+
+func decodeOptionalFloat64Array(data []byte, field string) ([]float64, bool, error) {
+	if len(bytes.TrimSpace(data)) == 0 || string(bytes.TrimSpace(data)) == "null" {
+		return nil, false, nil
+	}
+	var values []float64
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, false, fmt.Errorf("failed to unmarshal %s: %v", field, err)
+	}
+	return values, len(values) > 0, nil
+}
+
+func decodeOptionalStringArray(data []byte, field string) ([]string, bool, error) {
+	if len(bytes.TrimSpace(data)) == 0 || string(bytes.TrimSpace(data)) == "null" {
+		return nil, false, nil
+	}
+	var values []string
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, false, fmt.Errorf("failed to unmarshal %s: %v", field, err)
+	}
+	return values, len(values) > 0, nil
 }
 
 func (s *WatchlistService) GetMTFBestUniqueKeysByConfig(symbol string, horizonLen int, contextLen int, mtfVersion string) (*models.MTFBestUniqueKeysByConfig, error) {
@@ -1878,14 +2035,14 @@ func (s *WatchlistService) ListMTFBestByUserID(userID int) ([]models.MTFBestPred
 
 // 普通用户只查询公开数据；管理员可同时查询公开/非公开数据，并支持按 horizon_len / symbol 筛选
 func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, userID *int, includePrivate bool) ([]models.MTFBestPrediction, error) {
-	page, err := s.listScopedMTFBestPage(horizonLen, symbol, userID, includePrivate, 0, 0)
+	page, err := s.listScopedMTFBestPage(horizonLen, symbol, userID, includePrivate, 0, 0, 0)
 	if err != nil {
 		return nil, err
 	}
 	return page.Items, nil
 }
 
-func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, userID *int, includePrivate bool, limit int, offset int) (MTFBestPage, error) {
+func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, userID *int, includePrivate bool, limit int, offset int, stockType int) (MTFBestPage, error) {
 	if limit < 0 {
 		limit = 0
 	}
@@ -1934,13 +2091,19 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 	}
 	query += fmt.Sprintf(`
         ),
-        watchlist_counts AS (
+	        watchlist_counts AS (
+	            SELECT
+	                %s AS canonical_symbol,
+	                COUNT(*)::int AS watchlist_count
+	            FROM user_watchlist
+	            GROUP BY %s
+	        ),
+        validation_stock_types AS (
             SELECT
-                %s AS canonical_symbol,
-                COUNT(*)::int AS watchlist_count,
-                MIN(COALESCE(stock_type, 1))::int AS stock_type
-            FROM user_watchlist
-            GROUP BY %s
+                unique_key,
+                MIN(NULLIF(stock_type, 0))::int AS stock_type
+            FROM mtf_best_validation_chunks
+            GROUP BY unique_key
         ),
         ranked AS (
             SELECT
@@ -1966,7 +2129,7 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
                 t.created_at,
                 t.updated_at,
                 COALESCE(t.short_name, '') AS short_name,
-                COALESCE(wc.stock_type, 1)::int AS stock_type,
+	                COALESCE(vst.stock_type, 1)::int AS stock_type,
                 COALESCE(wc.watchlist_count, 0)::int AS watchlist_count,
                 ROW_NUMBER() OVER (
                     PARTITION BY %s, t.horizon_len, t.context_len, t.mtf_version, COALESCE(NULLIF(TRIM(t.prediction_type), ''), 'mtf-lite')
@@ -1982,6 +2145,8 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
                AND g.mtf_version = t.mtf_version
             LEFT JOIN watchlist_counts wc
                 ON wc.canonical_symbol = %s
+            LEFT JOIN validation_stock_types vst
+                ON vst.unique_key = t.unique_key
         )
         SELECT
             id, unique_key, symbol, mtf_version, best_prediction_item, best_metrics,
@@ -1996,8 +2161,12 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
             COUNT(*) OVER() AS total_count
         FROM ranked
         WHERE rn = 1
-        ORDER BY watchlist_count DESC, created_at DESC, id DESC
     `, mtfCanonicalSymbolExpr("symbol"), mtfCanonicalSymbolExpr("symbol"), rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr, rowCanonicalSymbolExpr)
+	if stockType > 0 {
+		args = append(args, stockType)
+		query += fmt.Sprintf(" AND stock_type = $%d", len(args))
+	}
+	query += " ORDER BY watchlist_count DESC, created_at DESC, id DESC"
 	if limit > 0 {
 		args = append(args, limit)
 		query += fmt.Sprintf(" LIMIT $%d", len(args))
@@ -2045,7 +2214,11 @@ func (s *WatchlistService) ListPublicMTFBest(horizonLen int, symbol string, incl
 }
 
 func (s *WatchlistService) ListPublicMTFBestPage(horizonLen int, symbol string, includePrivate bool, limit int, offset int) (MTFBestPage, error) {
-	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset)
+	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, 0)
+}
+
+func (s *WatchlistService) ListPublicMTFBestPageByStockType(horizonLen int, symbol string, includePrivate bool, limit int, offset int, stockType int) (MTFBestPage, error) {
+	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, stockType)
 }
 
 func (s *WatchlistService) ListAccessibleMTFBest(userID int, horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {

@@ -147,25 +147,42 @@ type MTFBestUniqueKeysByConfig struct {
 	MTFProUniqueKey  string `json:"mtf_pro_unique_key"`
 }
 
+type MTFBestValue struct {
+	UniqueKey                     string    `json:"unique_key"`
+	BestPredictionItem            string    `json:"best_prediction_item"`
+	BestPredictionQuantile        *float64  `json:"best_prediction_quantile,omitempty"`
+	BestPredictionValues          []float64 `json:"best_prediction_values"`
+	FutureDates                   []string  `json:"future_dates"`
+	AdjustRawBestPredictionValues []float64 `json:"adjust_raw_best_prediction_values,omitempty"`
+	PredictedLatest               float64   `json:"predicted_latest,omitempty"`
+	ActualLatest                  float64   `json:"actual_latest,omitempty"`
+	PredictedChangePercent        float64   `json:"predicted_change_percent,omitempty"`
+	Source                        string    `json:"source"`
+}
+
 type SaveMTFBestRequest struct {
-	UniqueKey          string                 `json:"unique_key" binding:"required"`
-	Symbol             string                 `json:"symbol" binding:"required"`
-	MTFVersion         string                 `json:"mtf_version" binding:"required"`
-	BestPredictionItem string                 `json:"best_prediction_item" binding:"required"`
-	BestMetrics        map[string]interface{} `json:"best_metrics" binding:"required"`
-	PredictionType     string                 `json:"prediction_type"`
-	IsPublic           *int                   `json:"is_public"`
-	TrainStartDate     string                 `json:"train_start_date" binding:"required"`
-	TrainEndDate       string                 `json:"train_end_date" binding:"required"`
-	TestStartDate      string                 `json:"test_start_date" binding:"required"`
-	TestEndDate        string                 `json:"test_end_date" binding:"required"`
-	ValStartDate       string                 `json:"val_start_date" binding:"required"`
-	ValEndDate         string                 `json:"val_end_date" binding:"required"`
-	ContextLen         int                    `json:"context_len" binding:"required"`
-	HorizonLen         int                    `json:"horizon_len" binding:"required"`
-	CovariateConfig    map[string]interface{} `json:"covariate_config"`
-	CovariateSignature string                 `json:"covariate_signature"`
-	CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
+	UniqueKey                     string                 `json:"unique_key" binding:"required"`
+	Symbol                        string                 `json:"symbol" binding:"required"`
+	MTFVersion                    string                 `json:"mtf_version" binding:"required"`
+	BestPredictionItem            string                 `json:"best_prediction_item" binding:"required"`
+	BestPredictionQuantile        *float64               `json:"best_prediction_quantile"`
+	BestMetrics                   map[string]interface{} `json:"best_metrics" binding:"required"`
+	BestPredictionValues          []float64              `json:"best_prediction_values"`
+	FutureDates                   []string               `json:"future_dates"`
+	AdjustRawBestPredictionValues []float64              `json:"adjust_raw_best_prediction_values"`
+	PredictionType                string                 `json:"prediction_type"`
+	IsPublic                      *int                   `json:"is_public"`
+	TrainStartDate                string                 `json:"train_start_date" binding:"required"`
+	TrainEndDate                  string                 `json:"train_end_date" binding:"required"`
+	TestStartDate                 string                 `json:"test_start_date" binding:"required"`
+	TestEndDate                   string                 `json:"test_end_date" binding:"required"`
+	ValStartDate                  string                 `json:"val_start_date" binding:"required"`
+	ValEndDate                    string                 `json:"val_end_date" binding:"required"`
+	ContextLen                    int                    `json:"context_len" binding:"required"`
+	HorizonLen                    int                    `json:"horizon_len" binding:"required"`
+	CovariateConfig               map[string]interface{} `json:"covariate_config"`
+	CovariateSignature            string                 `json:"covariate_signature"`
+	CovariateAnalysis             map[string]interface{} `json:"covariate_analysis"`
 }
 
 type SaveMTFValChunkRequest struct {

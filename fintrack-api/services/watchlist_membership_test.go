@@ -15,6 +15,148 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func TestSaveMTFBestPersistsPredictionValues(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO mtf_best_predictions").
+		WithArgs(
+			"best-key", "510300", "2.5", "mtf-0.5", `{"mae":1.2}`,
+			"mtf-pro", "{}", nil, "{}",
+			1,
+			"2025-01-01", "2025-12-31", "2026-01-01", "2026-02-01", "2026-02-02", "2026-03-01",
+			2048, 7,
+			`[1.23,1.45]`, `["2026-03-02","2026-03-03"]`, `[1.11,1.22]`,
+			0.5,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	err = service.SaveMTFBest(&models.SaveMTFBestRequest{
+		UniqueKey:          "best-key",
+		Symbol:             "510300",
+		MTFVersion:         "2.5",
+		BestPredictionItem: "mtf-0.5",
+		BestMetrics:        map[string]interface{}{"mae": 1.2},
+		PredictionType:     "mtf-pro",
+		TrainStartDate:     "2025-01-01",
+		TrainEndDate:       "2025-12-31",
+		TestStartDate:      "2026-01-01",
+		TestEndDate:        "2026-02-01",
+		ValStartDate:       "2026-02-02",
+		ValEndDate:         "2026-03-01",
+		ContextLen:         2048,
+		HorizonLen:         7,
+		BestPredictionValues: []float64{
+			1.23,
+			1.45,
+		},
+		FutureDates: []string{
+			"2026-03-02",
+			"2026-03-03",
+		},
+		AdjustRawBestPredictionValues: []float64{
+			1.11,
+			1.22,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveMTFBest error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestGetMTFBestValueByUniqueKeyReturnsSavedValues(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT unique_key, best_prediction_item").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"unique_key", "best_prediction_item", "best_prediction_quantile", "best_prediction_values", "future_dates", "adjust_raw_best_prediction_values",
+		}).AddRow(
+			"best-key", "mtf-0.5", 0.5, []byte(`[1.23,1.45]`), []byte(`["2026-03-02","2026-03-03"]`), []byte(`[1.11,1.22]`),
+		))
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	value, err := service.GetMTFBestValueByUniqueKey("best-key")
+	if err != nil {
+		t.Fatalf("GetMTFBestValueByUniqueKey error = %v", err)
+	}
+	if value.UniqueKey != "best-key" || value.BestPredictionItem != "mtf-0.5" {
+		t.Fatalf("value identity = %#v", value)
+	}
+	if value.BestPredictionQuantile == nil || *value.BestPredictionQuantile != 0.5 {
+		t.Fatalf("BestPredictionQuantile = %#v, want 0.5", value.BestPredictionQuantile)
+	}
+	if len(value.BestPredictionValues) != 2 || value.BestPredictionValues[0] != 1.23 || value.BestPredictionValues[1] != 1.45 {
+		t.Fatalf("BestPredictionValues = %#v, want [1.23 1.45]", value.BestPredictionValues)
+	}
+	if len(value.FutureDates) != 2 || value.FutureDates[1] != "2026-03-03" {
+		t.Fatalf("FutureDates = %#v, want two dates", value.FutureDates)
+	}
+	if len(value.AdjustRawBestPredictionValues) != 2 || value.AdjustRawBestPredictionValues[0] != 1.11 {
+		t.Fatalf("AdjustRawBestPredictionValues = %#v, want [1.11 1.22]", value.AdjustRawBestPredictionValues)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestGetMTFBestValueByUniqueKeyFallsBackToFutureChunks(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT unique_key, best_prediction_item").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"unique_key", "best_prediction_item", "best_prediction_quantile", "best_prediction_values", "future_dates", "adjust_raw_best_prediction_values",
+		}).AddRow(
+			"best-key", "mtf-0.5", 0.5, []byte(`null`), []byte(`null`), []byte(`null`),
+		))
+	mock.ExpectQuery("SELECT best_prediction_item FROM mtf_best_predictions").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"best_prediction_item"}).AddRow("mtf-0.5"))
+	mock.ExpectQuery("SELECT dates, predictions").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"dates", "predictions"}).AddRow(
+			[]byte(`["2026-03-02","2026-03-03"]`),
+			[]byte(`{"mtf-0.5":[1.23,1.45]}`),
+		))
+	mock.ExpectQuery("SELECT actual_values").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"actual_values"}).AddRow([]byte(`[1.00]`)))
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	value, err := service.GetMTFBestValueByUniqueKey("best-key")
+	if err != nil {
+		t.Fatalf("GetMTFBestValueByUniqueKey error = %v", err)
+	}
+	if value.Source != "future_chunks" {
+		t.Fatalf("Source = %q, want future_chunks", value.Source)
+	}
+	if len(value.BestPredictionValues) != 2 || value.BestPredictionValues[1] != 1.45 {
+		t.Fatalf("BestPredictionValues = %#v, want fallback values", value.BestPredictionValues)
+	}
+	if value.PredictedLatest != 1.45 || value.ActualLatest != 1.00 {
+		t.Fatalf("latest values = %v/%v, want 1.45/1.00", value.PredictedLatest, value.ActualLatest)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
 	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
@@ -210,6 +352,126 @@ func TestListPublicMTFBestPageAppliesLimitOffset(t *testing.T) {
 	}
 	if page.Items[0].WatchlistCount != 8 || page.Items[0].StockType != 1 {
 		t.Fatalf("WatchlistCount/StockType = %d/%d, want 8/1", page.Items[0].WatchlistCount, page.Items[0].StockType)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListPublicMTFBestPageByStockTypeFiltersBeforeLimitOffset(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		3, "etf-key", "510300", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-lite", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"沪深300ETF", 2, 5, 9,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("WHERE rn = 1 AND stock_type = $1")).
+		WithArgs(2, 5, 10).
+		WillReturnRows(rows)
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	page, err := service.ListPublicMTFBestPageByStockType(0, "", false, 5, 10, 2)
+	if err != nil {
+		t.Fatalf("ListPublicMTFBestPageByStockType error = %v", err)
+	}
+	if page.Total != 9 || page.Limit != 5 || page.Offset != 10 {
+		t.Fatalf("page = %#v, want total=9 limit=5 offset=10", page)
+	}
+	if len(page.Items) != 1 || page.Items[0].StockType != 2 {
+		t.Fatalf("Items = %#v, want stock_type=2", page.Items)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListPublicMTFBestPageByStockTypeUsesValidationChunkType(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		4, "etf-no-watch-key", "159919", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-lite", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"沪深300ETF", 2, 0, 1,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("MIN(NULLIF(stock_type, 0))::int AS stock_type")).
+		WithArgs(2).
+		WillReturnRows(rows)
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	page, err := service.ListPublicMTFBestPageByStockType(0, "", false, 0, 0, 2)
+	if err != nil {
+		t.Fatalf("ListPublicMTFBestPageByStockType error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Symbol != "159919" || page.Items[0].StockType != 2 {
+		t.Fatalf("Items = %#v, want validation chunk ETF item", page.Items)
+	}
+	if page.Items[0].WatchlistCount != 0 {
+		t.Fatalf("WatchlistCount = %d, want 0", page.Items[0].WatchlistCount)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListPublicMTFBestPageByStockTypeDoesNotUseWatchlistType(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	rows := sqlmock.NewRows([]string{
+		"id", "unique_key", "symbol", "mtf_version", "best_prediction_item", "best_metrics",
+		"prediction_type", "covariate_config", "covariate_signature", "covariate_analysis",
+		"is_public", "train_start_date", "train_end_date", "test_start_date", "test_end_date",
+		"val_start_date", "val_end_date", "context_len", "horizon_len", "created_at", "updated_at",
+		"short_name", "stock_type", "watchlist_count", "total_count",
+	}).AddRow(
+		5, "etf-validation-key", "510500", "2.5", "mtf-0.5", `{"score":1}`,
+		"mtf-lite", `{}`, "", `{}`,
+		1, now, now, now, now,
+		now, now, 2048, 7, now, now,
+		"中证500ETF", 2, 3, 1,
+	)
+	mock.ExpectQuery(regexp.QuoteMeta("COALESCE(vst.stock_type, 1)::int AS stock_type")).
+		WithArgs(2).
+		WillReturnRows(rows)
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	page, err := service.ListPublicMTFBestPageByStockType(0, "", false, 0, 0, 2)
+	if err != nil {
+		t.Fatalf("ListPublicMTFBestPageByStockType error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].Symbol != "510500" || page.Items[0].StockType != 2 {
+		t.Fatalf("Items = %#v, want validation chunk ETF item", page.Items)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
