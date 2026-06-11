@@ -6,7 +6,7 @@
 
 ## 1. 设计目标
 
-- 给外部 skill 安全调用 FinTrack 的 MTF、ETF、策略、行情和 Agent 能力。
+- 给外部 skill 安全调用 FinTrack 的 MTF、ETF、策略和行情能力。
 - 使用 API key 鉴权，并把每个 key 明确绑定到一个 FinTrack `user_id` 或受控的用户映射策略。
 - 复用现有 service 层权限和会员规则，避免外部调用绕过用户数据隔离。
 - 统一响应 envelope、错误码、审计字段和限流语义。
@@ -26,7 +26,6 @@
 - `/api/open/v1/mtf/*`：预测、缓存、best、future、backtest。
 - `/api/open/v1/strategy/*`：策略列表、保存、绑定。
 - `/api/open/v1/watchlist/*`：自选股读写。
-- `/api/open/v1/agent/*`：MTF Agent 会话、消息、skill。
 - `/api/open/v1/uzi/*`：UZI 报告索引和查询。
 
 ## 3. 鉴权
@@ -151,7 +150,6 @@ CREATE TABLE IF NOT EXISTS open_api_audit_logs (
 | `strategy:write` | 保存策略参数、绑定策略。 |
 | `watchlist:read` | 读取自选股。 |
 | `watchlist:write` | 添加、更新、删除自选股。 |
-| `agent:chat` | 调用 MTF Agent 会话、消息、skill。 |
 | `uzi:read` | 查询 UZI 报告索引和摘要。 |
 | `admin:*` | 内部管理用途，默认不授予外部 skill。 |
 
@@ -395,35 +393,7 @@ Scope: `watchlist:write`
 
 语义：添加 ETF 到当前用户自选，复用会员数量限制。
 
-## 10. Agent Open API
-
-### POST `/api/open/v1/agent/messages`
-
-Scope: `agent:chat`
-
-请求：
-
-```json
-{
-  "message": "从热门ETF中筛选3只适合7日MTF预测的标的，并给出策略规则"
-}
-```
-
-语义：复用 MTF Agent 非流式消息能力，用户上下文为 API key 对应用户。
-
-### GET `/api/open/v1/agent/skills/history-trends`
-
-Scope: `agent:chat` + `mtf:read`
-
-Query 支持 `symbol`、`unique_key`、`prediction_type`、`horizon_len`、`limit`、`chunk_limit`、`point_limit`。
-
-### GET `/api/open/v1/agent/skills/uzi-reports`
-
-Scope: `agent:chat` + `uzi:read`
-
-Query 支持 `ticker`、`limit`。
-
-## 11. A 股 ETF 助手推荐编排
+## 10. A 股 ETF 助手推荐编排
 
 外部 skill 的 ETF 选择 + 预测 + 策略推荐建议按以下顺序调用：
 
@@ -437,12 +407,12 @@ Query 支持 `ticker`、`limit`。
 
 任何一步数据不足都应返回明确缺口，不应编造 ETF 实时数值、预测结果或回测收益。
 
-## 12. 实现注意事项
+## 11. 实现注意事项
 
 - Open API middleware 应在进入 handler 前设置 `user_id`、`user`、`is_admin=false`、`open_api_key_id`、`request_id`。
 - 不要复用 JWT token 校验作为 API key 校验。
 - 不要允许外部请求体直接指定 `user_id` 生效。
-- 对预测触发、回测、Agent chat 做更低限流。
+- 对预测触发和回测做更低限流。
 - 对所有 Open API 响应记录审计日志。
 - API key 创建/撤销应只允许用户本人或管理员操作；明文 key 只在创建时显示一次。
 - 推荐先实现 read-only scopes，再开放预测和写入 scopes。

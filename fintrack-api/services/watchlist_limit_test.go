@@ -13,10 +13,10 @@ func TestWatchlistLimitForMembershipLevel(t *testing.T) {
 		want  int
 	}{
 		{level: 0, want: 3},
-		{level: 1, want: 3},
-		{level: 2, want: 10},
-		{level: 3, want: 50},
-		{level: 99, want: 50},
+		{level: 1, want: 30},
+		{level: 2, want: 30},
+		{level: 3, want: 30},
+		{level: 99, want: 30},
 	}
 
 	for _, tc := range tests {

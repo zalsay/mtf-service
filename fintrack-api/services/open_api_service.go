@@ -31,7 +31,6 @@ var DefaultOpenAPIScopes = []string{
 	"strategy:write",
 	"watchlist:read",
 	"watchlist:write",
-	"agent:chat",
 	"uzi:read",
 }
 

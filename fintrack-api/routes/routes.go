@@ -281,12 +281,6 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 			openWatchlist.POST("/bind-strategy", openAPIHandler.AuthMiddleware("watchlist:write", "strategy:read"), openAPIHandler.BindWatchlistStrategy)
 		}
 
-		agent := open.Group("/agent")
-		{
-			agent.POST("/messages", openAPIHandler.AuthMiddleware("agent:chat"), openAPIHandler.AgentMessage)
-			agent.GET("/skills/history-trends", openAPIHandler.AuthMiddleware("agent:chat", "mtf:read"), openAPIHandler.AgentHistoryTrends)
-			agent.GET("/skills/uzi-reports", openAPIHandler.AuthMiddleware("agent:chat", "uzi:read"), openAPIHandler.AgentUZIReports)
-		}
 	}
 
 	return router

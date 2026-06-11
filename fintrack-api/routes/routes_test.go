@@ -102,9 +102,6 @@ func TestSetupRouterRegistersOpenAPIRoutes(t *testing.T) {
 		"GET /api/open/v1/watchlist":                   "",
 		"POST /api/open/v1/watchlist":                  "",
 		"POST /api/open/v1/watchlist/bind-strategy":    "",
-		"POST /api/open/v1/agent/messages":             "",
-		"GET /api/open/v1/agent/skills/history-trends": "",
-		"GET /api/open/v1/agent/skills/uzi-reports":    "",
 	}
 
 	for _, route := range router.Routes() {

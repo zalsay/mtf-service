@@ -15,135 +15,111 @@ interface Plan {
 
 interface ComparisonItem {
     label: string;
-    values: [string, string, string];
+    values: [string, string];
 }
 
 const Pricing: React.FC = () => {
     const { language } = useLanguage();
     const isZh = language === 'zh';
-    const [selectedPlanName, setSelectedPlanName] = useState('SVIP');
+    const [selectedPlanName, setSelectedPlanName] = useState('VIP');
+    const formatPlanPrice = (plan: Plan) => {
+        if (plan.price === '0') {
+            return isZh ? '免费' : 'Free';
+        }
+        return `${plan.price}${isZh ? '/月' : '/month'}`;
+    };
 
     const pageCopy = isZh ? {
         planTitle: '会员层级',
         contextTitle: '为什么预测深度很重要',
         compareTitle: '权益对比',
-        compareHeaders: ['能力项', 'VIP', 'SVIP', 'UVIP'],
+        compareHeaders: ['能力项', '免费等级', 'VIP 会员'],
         plans: [
             {
-                name: 'VIP',
-                badge: '入门研究',
+                name: '免费等级',
+                badge: '基础跟踪',
                 icon: 'bolt',
                 watchlistLimit: '3',
-                contextLen: '512',
-                price: '99',
-                originalPrice: '199',
-                summary: '适合用较少标的做日常跟踪，快速筛选近期更值得看的机会。',
-                highlights: ['覆盖核心自选池', '预测深度偏轻，响应更直接', '适合短线或轻量观察'],
-            },
-            {
-                name: 'SVIP',
-                badge: '进阶策略',
-                icon: 'timeline',
-                watchlistLimit: '10',
                 contextLen: '1024',
-                price: '199',
-                originalPrice: '399',
-                summary: '在覆盖更多标的的同时，也能看到更均衡的走势信息，适合波段与多标的比较。',
-                highlights: ['可维护中等规模股票池', '预测深度更均衡', '适合主力自选组合管理'],
+                price: '0',
+                originalPrice: '',
+                summary: '适合轻量跟踪少量核心标的，保留基础预测深度，满足日常观察。',
+                highlights: ['最多 3 个关注', '最大上下文 1024', '适合基础跟踪'],
             },
             {
-                name: 'UVIP',
-                badge: '专业深研',
-                icon: 'neurology',
-                watchlistLimit: '50',
+                name: 'VIP',
+                badge: '进阶会员',
+                icon: 'timeline',
+                watchlistLimit: '30',
                 contextLen: '2048',
-                price: '299',
-                originalPrice: '599',
-                summary: '面向高频研究和多策略用户，提供最大关注容量与最完整的预测信息参考。',
-                highlights: ['覆盖更完整市场观察池', '预测深度最高', '适合专业用户持续研究'],
+                price: '49',
+                originalPrice: '99',
+                summary: '适合管理更完整的自选池，并使用更长上下文做多标的比较和持续跟踪。',
+                highlights: ['最多 30 个关注', '最大上下文 2048', '适合组合观察与深度研究'],
             },
         ] satisfies Plan[],
         contextCards: [
             {
-                title: '512: 轻量预测深度',
-                description: '适合快速判断近期走势变化，重点看最近阶段的市场表现。',
+                title: '1024: 免费最大上下文',
+                description: '适合快速判断近期走势变化，覆盖基础研究和轻量跟踪场景。',
             },
             {
-                title: '1024: 均衡预测深度',
-                description: '在近期变化和更长走势之间取得平衡，更适合做多标的比较。',
-            },
-            {
-                title: '2048: 深度预测',
-                description: '适合观察更长周期的走势延续与阶段变化，帮助做更完整的判断。',
+                title: '2048: VIP 最大上下文',
+                description: '适合观察更长周期的走势延续与阶段变化，帮助做更完整的多标的判断。',
             },
         ],
         comparison: [
-            { label: '可关注数量', values: ['3', '10', '50'] },
-            { label: '预测深度', values: ['512', '1024', '2048'] },
-            { label: '适合的研究方式', values: ['轻量跟踪', '组合观察', '深度研究'] },
-            { label: '看盘范围', values: ['近期为主', '近期 + 中期', '更长走势'] },
-            { label: '适合用户', values: ['日常关注用户', '进阶投资者', '专业研究者'] },
+            { label: '可关注数量', values: ['3', '30'] },
+            { label: '最大上下文', values: ['1024', '2048'] },
+            { label: '价格', values: ['免费', '49/月'] },
+            { label: '适合的研究方式', values: ['轻量跟踪', '组合观察'] },
+            { label: '适合用户', values: ['日常关注用户', '进阶投资者'] },
         ] satisfies ComparisonItem[],
     } : {
         planTitle: 'Membership Layers',
         contextTitle: 'Why Prediction Depth Matters',
         compareTitle: 'Plan Comparison',
-        compareHeaders: ['Capability', 'VIP', 'SVIP', 'UVIP'],
+        compareHeaders: ['Capability', 'Free', 'VIP'],
         plans: [
             {
-                name: 'VIP',
-                badge: 'Starter Research',
+                name: 'Free',
+                badge: 'Basic Tracking',
                 icon: 'bolt',
                 watchlistLimit: '3',
-                contextLen: '512',
-                price: '99',
-                originalPrice: '199',
-                summary: 'Good for a compact watchlist and fast review of near-term opportunities.',
-                highlights: ['Covers a focused core list', 'Lighter prediction depth for quick decisions', 'Best for lightweight monitoring'],
-            },
-            {
-                name: 'SVIP',
-                badge: 'Advanced Strategy',
-                icon: 'timeline',
-                watchlistLimit: '10',
                 contextLen: '1024',
-                price: '199',
-                originalPrice: '399',
-                summary: 'A balanced tier for broader coverage and clearer medium-range reading across multiple ideas.',
-                highlights: ['Supports a wider working universe', 'Balanced prediction depth', 'Fits serious portfolio tracking'],
+                price: '0',
+                originalPrice: '',
+                summary: 'Good for tracking a small core list with enough prediction depth for daily review.',
+                highlights: ['Up to 3 watchlist items', 'Max context 1024', 'Best for basic tracking'],
             },
             {
-                name: 'UVIP',
-                badge: 'Professional Research',
-                icon: 'neurology',
-                watchlistLimit: '50',
+                name: 'VIP',
+                badge: 'Advanced Membership',
+                icon: 'timeline',
+                watchlistLimit: '30',
                 contextLen: '2048',
-                price: '299',
-                originalPrice: '599',
-                summary: 'Built for power users who want the strongest forecast depth and the broadest market coverage.',
-                highlights: ['Covers a much larger research set', 'Deepest prediction depth', 'Best for continuous professional analysis'],
+                price: '49',
+                originalPrice: '99',
+                summary: 'Built for broader watchlists, deeper context, and repeated comparison across multiple ideas.',
+                highlights: ['Up to 30 watchlist items', 'Max context 2048', 'Best for portfolio tracking'],
             },
         ] satisfies Plan[],
         contextCards: [
             {
-                title: '512: Light prediction depth',
-                description: 'Best when you want a quick read on recent market movement and near-term opportunities.',
+                title: '1024: Free max context',
+                description: 'Best when you want a quick read on recent market movement and lightweight tracking.',
             },
             {
-                title: '1024: Balanced prediction depth',
-                description: 'A middle ground that sees both recent moves and a wider trend backdrop.',
-            },
-            {
-                title: '2048: Deep prediction depth',
-                description: 'Useful when broader trend continuity and longer-cycle movement matter more.',
+                title: '2048: VIP max context',
+                description: 'Useful when broader trend continuity and multi-symbol comparison matter more.',
             },
         ],
         comparison: [
-            { label: 'Watchlist capacity', values: ['3', '10', '50'] },
-            { label: 'Prediction depth', values: ['512', '1024', '2048'] },
-            { label: 'Research style', values: ['Light monitoring', 'Portfolio tracking', 'Deep research'] },
-            { label: 'Market reading range', values: ['Recent only', 'Recent + mid-term', 'Longer trend view'] },
-            { label: 'Best suited for', values: ['Casual investors', 'Advanced users', 'Professional researchers'] },
+            { label: 'Watchlist capacity', values: ['3', '30'] },
+            { label: 'Max context', values: ['1024', '2048'] },
+            { label: 'Price', values: ['Free', '49/month'] },
+            { label: 'Research style', values: ['Light monitoring', 'Portfolio tracking'] },
+            { label: 'Best suited for', values: ['Casual investors', 'Advanced users'] },
         ] satisfies ComparisonItem[],
     };
     const selectedPlan = pageCopy.plans.find((plan) => plan.name === selectedPlanName) ?? pageCopy.plans[0];
@@ -154,7 +130,7 @@ const Pricing: React.FC = () => {
                 <div className="mb-5 sm:mb-8">
                     <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{pageCopy.planTitle}</h2>
                 </div>
-                <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+                <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
                     {pageCopy.plans.map((plan) => {
                         const isSelected = plan.name === selectedPlanName;
                         const mobileDetailClass = isSelected ? 'block' : 'hidden sm:block';
@@ -176,8 +152,8 @@ const Pricing: React.FC = () => {
                                     <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-white/42">{plan.badge}</p>
                                     <h3 className="mt-2 text-xl font-bold text-white sm:text-2xl">{plan.name}</h3>
                                     <div className="mt-2 flex items-baseline gap-2 sm:hidden">
-                                        <p className="text-lg font-black text-white/86">{plan.price}{isZh ? '/月' : '/month'}</p>
-                                        <p className="text-xs text-white/36 line-through">{plan.originalPrice}{isZh ? '/月' : '/month'}</p>
+                                        <p className="text-lg font-black text-white/86">{formatPlanPrice(plan)}</p>
+                                        {plan.originalPrice && <p className="text-xs text-white/36 line-through">{plan.originalPrice}{isZh ? '/月' : '/month'}</p>}
                                     </div>
                                 </div>
                                 <div className={`flex h-10 w-10 items-center justify-center rounded-2xl sm:h-11 sm:w-11 ${isSelected ? 'bg-amber-300 text-black' : 'bg-white/8 text-primary'}`}>
@@ -196,9 +172,9 @@ const Pricing: React.FC = () => {
                                 </div>
                             </div>
 
-                            <p className={`${mobileDetailClass} mt-4 text-sm leading-6 text-white/68 sm:mt-5 sm:min-h-[56px] sm:leading-7 xl:min-h-[84px] 2xl:min-h-[56px]`}>{plan.summary}</p>
+                            <p className={`${mobileDetailClass} mt-4 text-sm leading-6 text-white/68 sm:mt-5 sm:min-h-[56px] sm:leading-7`}>{plan.summary}</p>
 
-                            <ul className={`${mobileDetailClass} mt-3 mb-6 space-y-2.5 sm:mb-7 sm:min-h-[104px] sm:space-y-3 xl:min-h-[116px] 2xl:min-h-[104px]`}>
+                            <ul className={`${mobileDetailClass} mt-3 mb-6 space-y-2.5 sm:mb-7 sm:min-h-[104px] sm:space-y-3`}>
                                 {plan.highlights.map((item) => (
                                     <li key={item} className="flex items-center gap-3 text-sm text-white/78">
                                         <span className={`material-symbols-outlined inline-flex h-5 w-5 shrink-0 items-center justify-center text-base leading-none ${isSelected ? 'text-amber-200' : 'text-primary'}`}>check_circle</span>
@@ -211,11 +187,13 @@ const Pricing: React.FC = () => {
                                 <span className="flex h-full items-center font-semibold">{plan.name}</span>
                                 <span className="ml-3 flex h-full shrink-0 items-center justify-end gap-2 whitespace-nowrap text-right">
                                     <span className={`text-lg font-black leading-none ${isSelected ? 'text-amber-100' : 'text-white/82'}`}>
-                                        {plan.price}{isZh ? '/月' : '/month'}
+                                        {formatPlanPrice(plan)}
                                     </span>
-                                    <span className="text-xs leading-none text-white/38 line-through">
-                                        {plan.originalPrice}{isZh ? '/月' : '/month'}
-                                    </span>
+                                    {plan.originalPrice && (
+                                        <span className="text-xs leading-none text-white/38 line-through">
+                                            {plan.originalPrice}{isZh ? '/月' : '/month'}
+                                        </span>
+                                    )}
                                 </span>
                             </div>
                         </button>
@@ -230,8 +208,8 @@ const Pricing: React.FC = () => {
                         <div className="rounded-xl bg-black/15 px-3 py-2 text-right">
                             <p className="text-[11px] uppercase tracking-[0.16em] text-white/42">{isZh ? '当前方案' : 'Current Plan'}</p>
                             <div className="mt-1 flex items-baseline justify-end gap-2">
-                                <p className="text-lg font-black text-amber-100">{selectedPlan.price}{isZh ? '/月' : '/month'}</p>
-                                <p className="text-xs text-white/36 line-through">{selectedPlan.originalPrice}{isZh ? '/月' : '/month'}</p>
+                                <p className="text-lg font-black text-amber-100">{formatPlanPrice(selectedPlan)}</p>
+                                {selectedPlan.originalPrice && <p className="text-xs text-white/36 line-through">{selectedPlan.originalPrice}{isZh ? '/月' : '/month'}</p>}
                             </div>
                         </div>
                     </div>
@@ -242,7 +220,7 @@ const Pricing: React.FC = () => {
                 <div className="max-w-3xl">
                     <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{pageCopy.contextTitle}</h2>
                 </div>
-                <div className="mt-5 grid grid-cols-1 gap-3 sm:mt-8 sm:gap-4 lg:grid-cols-3">
+                <div className="mt-5 grid grid-cols-1 gap-3 sm:mt-8 sm:gap-4 lg:grid-cols-2">
                     {pageCopy.contextCards.map((item) => (
                         <div key={item.title} className="rounded-2xl border border-white/8 bg-black/10 p-4 sm:p-5">
                             <p className="text-sm font-semibold text-white sm:text-base">{item.title}</p>
@@ -260,7 +238,7 @@ const Pricing: React.FC = () => {
                     {pageCopy.comparison.map((item) => (
                         <div key={item.label} className="rounded-[22px] border border-white/10 bg-white/[0.03] p-3.5">
                             <p className="text-sm font-semibold text-white">{item.label}</p>
-                            <div className="mt-3 grid grid-cols-3 gap-2">
+                            <div className="mt-3 grid grid-cols-2 gap-2">
                                 {pageCopy.plans.map((plan, index) => (
                                     <div key={`${item.label}-${plan.name}`} className="rounded-2xl border border-white/8 bg-black/10 p-2.5 text-center">
                                         <p className="text-[11px] uppercase tracking-[0.16em] text-white/35">{plan.name}</p>
@@ -272,11 +250,11 @@ const Pricing: React.FC = () => {
                     ))}
                 </div>
                 <div className="hidden overflow-x-auto overscroll-x-contain rounded-[24px] border border-white/10 bg-white/[0.03] touch-pan-x md:block">
-                    <table className="w-full min-w-[720px]">
+                    <table className="w-full min-w-[560px]">
                         <thead>
                             <tr className="bg-white/[0.05] text-left">
                                 {pageCopy.compareHeaders.map((header, index) => (
-                                    <th key={header} className={`px-6 py-4 text-sm font-semibold text-white ${index === 0 ? 'w-[34%]' : 'w-[22%]'}`}>
+                                    <th key={header} className={`px-6 py-4 text-sm font-semibold text-white ${index === 0 ? 'w-[40%]' : 'w-[30%]'}`}>
                                         {header}
                                     </th>
                                 ))}

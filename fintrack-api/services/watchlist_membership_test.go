@@ -595,11 +595,11 @@ func TestNormalizeMTFBestTrainRequestRejectsContextOutsideMembershipLimit(t *tes
 		StockType:      1,
 		PredictionType: "cov",
 		HorizonLen:     7,
-		ContextLen:     2048,
+		ContextLen:     4096,
 	}
 
-	if _, err := NormalizeMTFBestTrainRequest(req, 2, 45, false); err == nil {
-		t.Fatal("expected context length above level 2 limit to be rejected")
+	if _, err := NormalizeMTFBestTrainRequest(req, 1, 45, false); err == nil {
+		t.Fatal("expected context length above VIP limit to be rejected")
 	}
 }
 

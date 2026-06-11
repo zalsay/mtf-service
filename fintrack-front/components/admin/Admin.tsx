@@ -302,8 +302,6 @@ const Admin: React.FC = () => {
             <div className="relative">
               <select className={selectControlClass} value={inviteForm.membership_level} onChange={(e) => setInviteForm({ ...inviteForm, membership_level: Number(e.target.value) })}>
                 <option value={1}>VIP</option>
-                <option value={2}>SVIP</option>
-                <option value={3}>UVIP</option>
               </select>
               <span className="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[20px] text-white/45">expand_more</span>
             </div>

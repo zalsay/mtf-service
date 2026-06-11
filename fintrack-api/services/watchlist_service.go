@@ -64,14 +64,10 @@ func newWatchlistLimitExceededError(limit int, count int) WatchlistLimitExceeded
 }
 
 func watchlistLimitForMembershipLevel(level int) int {
-	switch {
-	case level >= 3:
-		return 50
-	case level == 2:
-		return 10
-	default:
-		return 3
+	if level >= 1 {
+		return 30
 	}
+	return 3
 }
 
 func applyWatchlistOverflow(items []models.WatchlistItem, limit int) {
@@ -969,31 +965,17 @@ func newStringSet(values ...string) map[string]struct{} {
 }
 
 func getMTFMembershipTrainPolicy(level int) mtfMembershipTrainPolicy {
-	switch level {
-	case 3:
+	if level >= 1 {
 		return mtfMembershipTrainPolicy{
 			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
 			AllowedContextLens:     newIntSet(512, 1024, 2048),
 			AllowedHorizonLens:     newIntSet(7, 14, 28),
 		}
-	case 2:
-		return mtfMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
-			AllowedContextLens:     newIntSet(512, 1024),
-			AllowedHorizonLens:     newIntSet(7, 14, 28),
-		}
-	case 1:
-		return mtfMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("mtf-lite", "mtf-pro"),
-			AllowedContextLens:     newIntSet(512),
-			AllowedHorizonLens:     newIntSet(7, 14, 28),
-		}
-	default:
-		return mtfMembershipTrainPolicy{
-			AllowedPredictionTypes: newStringSet("mtf-lite"),
-			AllowedContextLens:     newIntSet(512),
-			AllowedHorizonLens:     newIntSet(7),
-		}
+	}
+	return mtfMembershipTrainPolicy{
+		AllowedPredictionTypes: newStringSet("mtf-lite"),
+		AllowedContextLens:     newIntSet(512, 1024),
+		AllowedHorizonLens:     newIntSet(7),
 	}
 }
 
