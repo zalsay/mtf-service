@@ -183,8 +183,13 @@ func (h *OpenAPIHandler) MTFBest(c *gin.Context) {
 		writeOpenAPIError(c, http.StatusUnauthorized, "user_mapping_required", "user is required", false)
 		return
 	}
+	if symbol := strings.TrimSpace(c.Query("symbol")); symbol != "" {
+		if !h.requireWatchlistSymbol(c, userID, symbol) {
+			return
+		}
+	}
 	horizonLen := queryInt(c, "horizon_len")
-	items, err := h.watchlist.ListAccessibleMTFBest(userID, horizonLen, c.Query("symbol"), false)
+	items, err := h.watchlist.ListWatchlistMTFBest(userID, horizonLen, c.Query("symbol"))
 	if err != nil {
 		writeOpenAPIError(c, http.StatusInternalServerError, "mtf_read_failed", err.Error(), false)
 		return
@@ -216,6 +221,14 @@ func filterMTFBestByStockType(items []models.MTFBestPrediction, stockType int) [
 }
 
 func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {
+	userID, ok := openAPIUserID(c)
+	if !ok {
+		writeOpenAPIError(c, http.StatusUnauthorized, "user_mapping_required", "user is required", false)
+		return
+	}
+	if !h.requireWatchlistSymbol(c, userID, c.Query("symbol")) {
+		return
+	}
 	horizonLen, contextLen, ok := requiredHorizonContext(c)
 	if !ok {
 		return
@@ -229,9 +242,22 @@ func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {
 }
 
 func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
+	userID, ok := openAPIUserID(c)
+	if !ok {
+		writeOpenAPIError(c, http.StatusUnauthorized, "user_mapping_required", "user is required", false)
+		return
+	}
 	uniqueKey := strings.TrimSpace(c.Query("unique_key"))
 	if uniqueKey == "" {
 		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "unique_key is required", false)
+		return
+	}
+	symbol, err := h.watchlist.GetMTFBestSymbolByUniqueKey(uniqueKey)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
+		return
+	}
+	if !h.requireWatchlistSymbol(c, userID, symbol) {
 		return
 	}
 	dates, preds, predLatest, actualLatest, changePct, err := h.watchlist.ListFuturePredictionsByUniqueKey(uniqueKey)
@@ -505,6 +531,23 @@ func (h *OpenAPIHandler) buildMTFBestWithValidationResponse(items []models.MTFBe
 		})
 	}
 	return result, nil
+}
+
+func (h *OpenAPIHandler) requireWatchlistSymbol(c *gin.Context, userID int, symbol string) bool {
+	if strings.TrimSpace(symbol) == "" {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "symbol is required", false)
+		return false
+	}
+	exists, err := h.watchlist.IsSymbolInUserWatchlist(userID, symbol)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusInternalServerError, "watchlist_check_failed", err.Error(), false)
+		return false
+	}
+	if !exists {
+		writeOpenAPIError(c, http.StatusForbidden, "watchlist_required", "symbol must be in the user's watchlist", false)
+		return false
+	}
+	return true
 }
 
 func writeOpenAPIData(c *gin.Context, status int, data interface{}) {

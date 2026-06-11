@@ -248,6 +248,8 @@ Scope: `etf:read`
 
 ## 7. MTF Open API
 
+MTF 读取类 Open API 必须限制在当前 API key 绑定用户的关注清单内。按 `symbol` 查询的接口应先校验该 `symbol` 已在 `user_watchlist` 中；按 `unique_key` 查询的接口应先反查对应 `symbol`，再校验关注清单。
+
 ### GET `/api/open/v1/mtf/best`
 
 Scope: `mtf:read`
@@ -259,7 +261,7 @@ Query:
 - `horizon_len`：可选。
 - `include_validation`：默认 `true`。
 
-语义：返回当前 API key 对应用户可访问的 best prediction 和 validation chunks。不要返回其他用户私有数据。
+语义：返回当前 API key 对应用户关注清单内标的的 best prediction 和 validation chunks。不要返回未关注标的或其他用户私有数据。
 
 ### GET `/api/open/v1/mtf/best/by-config`
 
@@ -272,13 +274,13 @@ Query:
 - `horizon_len`
 - `context_len`
 
-语义：返回最新 `mtf_lite_unique_key` 和 `mtf_pro_unique_key`。
+语义：仅当 `symbol` 已在当前用户关注清单中时，返回最新 `mtf_lite_unique_key` 和 `mtf_pro_unique_key`。
 
 ### GET `/api/open/v1/mtf/future?unique_key=...`
 
 Scope: `mtf:read`
 
-语义：读取未来预测序列、预测最新价、实际最新价、预测涨跌幅。
+语义：先通过 `unique_key` 反查标的并确认该标的已在当前用户关注清单中，再读取未来预测序列、预测最新价、实际最新价、预测涨跌幅。
 
 ### POST `/api/open/v1/mtf/predict-once`
 

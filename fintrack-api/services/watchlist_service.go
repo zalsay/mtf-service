@@ -301,6 +301,40 @@ func (s *WatchlistService) watchlistCount(userID int) (int, error) {
 	return count, nil
 }
 
+func (s *WatchlistService) IsSymbolInUserWatchlist(userID int, symbol string) (bool, error) {
+	normalizedSymbol := normalizeMTFSymbolReadKey(symbol)
+	if normalizedSymbol == "" {
+		return false, nil
+	}
+	var exists bool
+	err := s.db.Conn.QueryRow(fmt.Sprintf(`
+		SELECT EXISTS(
+			SELECT 1
+			FROM user_watchlist
+			WHERE user_id = $1
+			  AND %s = $2
+		)
+	`, mtfCanonicalSymbolExpr("symbol")), userID, normalizedSymbol).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check watchlist symbol: %v", err)
+	}
+	return exists, nil
+}
+
+func (s *WatchlistService) GetMTFBestSymbolByUniqueKey(uniqueKey string) (string, error) {
+	var symbol string
+	err := s.db.Conn.QueryRow(`
+		SELECT symbol
+		FROM mtf_best_predictions
+		WHERE unique_key = $1
+		LIMIT 1
+	`, strings.TrimSpace(uniqueKey)).Scan(&symbol)
+	if err != nil {
+		return "", fmt.Errorf("failed to get mtf best symbol: %v", err)
+	}
+	return symbol, nil
+}
+
 func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlistRequest) error {
 	stockType := 1
 	if req.StockType != nil {
@@ -2072,14 +2106,14 @@ func (s *WatchlistService) ListMTFBestByUserID(userID int) ([]models.MTFBestPred
 
 // 普通用户只查询公开数据；管理员可同时查询公开/非公开数据，并支持按 horizon_len / symbol 筛选
 func (s *WatchlistService) listScopedMTFBest(horizonLen int, symbol string, userID *int, includePrivate bool) ([]models.MTFBestPrediction, error) {
-	page, err := s.listScopedMTFBestPage(horizonLen, symbol, userID, includePrivate, 0, 0, 0)
+	page, err := s.listScopedMTFBestPage(horizonLen, symbol, userID, includePrivate, 0, 0, 0, false)
 	if err != nil {
 		return nil, err
 	}
 	return page.Items, nil
 }
 
-func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, userID *int, includePrivate bool, limit int, offset int, stockType int) (MTFBestPage, error) {
+func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, userID *int, includePrivate bool, limit int, offset int, stockType int, requireWatchlist bool) (MTFBestPage, error) {
 	if limit < 0 {
 		limit = 0
 	}
@@ -2108,6 +2142,14 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 				  AND vc.user_id = $%d
 			)
 		)`, len(args)))
+		if requireWatchlist {
+			conditions = append(conditions, fmt.Sprintf(`EXISTS (
+				SELECT 1
+				FROM user_watchlist uw
+				WHERE uw.user_id = $%d
+				  AND %s = %s
+			)`, len(args), mtfCanonicalSymbolExpr("uw.symbol"), mtfCanonicalSymbolExpr("p.symbol")))
+		}
 	} else {
 		conditions = append(conditions, "p.is_public = 1")
 	}
@@ -2276,11 +2318,11 @@ func (s *WatchlistService) ListPublicMTFBest(horizonLen int, symbol string, incl
 }
 
 func (s *WatchlistService) ListPublicMTFBestPage(horizonLen int, symbol string, includePrivate bool, limit int, offset int) (MTFBestPage, error) {
-	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, 0)
+	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, 0, false)
 }
 
 func (s *WatchlistService) ListPublicMTFBestPageByStockType(horizonLen int, symbol string, includePrivate bool, limit int, offset int, stockType int) (MTFBestPage, error) {
-	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, stockType)
+	return s.listScopedMTFBestPage(horizonLen, symbol, nil, includePrivate, limit, offset, stockType, false)
 }
 
 func (s *WatchlistService) ListAccessibleMTFBest(userID int, horizonLen int, symbol string, includePrivate bool) ([]models.MTFBestPrediction, error) {
@@ -2295,6 +2337,15 @@ func (s *WatchlistService) ListAccessibleMTFBest(userID int, horizonLen int, sym
 		}
 	}
 	return items, nil
+}
+
+func (s *WatchlistService) ListWatchlistMTFBest(userID int, horizonLen int, symbol string) ([]models.MTFBestPrediction, error) {
+	uid := userID
+	page, err := s.listScopedMTFBestPage(horizonLen, symbol, &uid, false, 0, 0, 0, true)
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
 }
 
 // 根据 unique_key 查询对应的验证集分块列表

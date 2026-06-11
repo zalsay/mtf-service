@@ -434,8 +434,18 @@ CREATE INDEX IF NOT EXISTS idx_prices_stock ON stock_prices(stock_id);
 CREATE INDEX IF NOT EXISTS idx_prices_recorded ON stock_prices(recorded_at);
 CREATE INDEX IF NOT EXISTS idx_watchlist_user ON user_watchlist(user_id);
 CREATE INDEX IF NOT EXISTS idx_watchlist_symbol ON user_watchlist(symbol);
+CREATE INDEX IF NOT EXISTS idx_user_watchlist_user_symbol_canonical
+ON user_watchlist (
+    user_id,
+    (CASE
+        WHEN regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g') <> ''
+        THEN regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g')
+        ELSE lower(trim(symbol))
+    END)
+);
 CREATE INDEX IF NOT EXISTS idx_strategy_params_user ON mtf_strategy_params(user_id);
 CREATE INDEX IF NOT EXISTS idx_mtf_best_predictions_symbol ON mtf_best_predictions(symbol);
+CREATE INDEX IF NOT EXISTS idx_mtf_best_predictions_unique_key ON mtf_best_predictions(unique_key);
 CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_user_id ON mtf_best_validation_chunks(user_id);
 CREATE INDEX IF NOT EXISTS idx_mtf_best_validation_chunks_symbol ON mtf_best_validation_chunks(symbol);
 CREATE INDEX IF NOT EXISTS idx_mtf_backtests_symbol ON mtf_backtests(symbol);

@@ -473,4 +473,146 @@ func TestOpenAPIMTFBestFiltersByStockType(t *testing.T) {
 	}
 }
 
+func TestOpenAPIMTFBestRejectsSymbolOutsideWatchlist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_best_watchlist_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	expectWatchlistSymbolCheck(mock, 7, "510300", false)
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/best", handler.AuthMiddleware("mtf:read"), handler.MTFBest)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/best?symbol=510300&include_validation=false", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	assertOpenAPIErrorCode(t, rec, http.StatusForbidden, "watchlist_required")
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPIMTFBestByConfigRejectsSymbolOutsideWatchlist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_config_watchlist_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	expectWatchlistSymbolCheck(mock, 7, "510300", false)
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/best/by-config", handler.AuthMiddleware("mtf:read"), handler.MTFBestByConfig)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/best/by-config?symbol=510300&horizon_len=7&context_len=2048", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	assertOpenAPIErrorCode(t, rec, http.StatusForbidden, "watchlist_required")
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPIMTFFutureRejectsUniqueKeyOutsideWatchlist(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_future_watchlist_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	mock.ExpectQuery("SELECT symbol FROM mtf_best_predictions").
+		WithArgs("510300-h7-c2048").
+		WillReturnRows(sqlmock.NewRows([]string{"symbol"}).AddRow("510300"))
+	expectWatchlistSymbolCheck(mock, 7, "510300", false)
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/future", handler.AuthMiddleware("mtf:read"), handler.MTFFuture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/future?unique_key=510300-h7-c2048", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	assertOpenAPIErrorCode(t, rec, http.StatusForbidden, "watchlist_required")
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func expectOpenAPIAuth(mock sqlmock.Sqlmock, apiKey string, scopes string, userID int, keyID int, now time.Time) {
+	mock.ExpectQuery("SELECT k.id, k.owner_user_id, k.scopes, k.status, k.expires_at").
+		WithArgs(services.HashOpenAPIKey(apiKey)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "owner_user_id", "scopes", "status", "expires_at",
+			"user_id", "email", "username", "is_premium", "is_admin", "membership_level", "membership_expires_at", "created_at", "updated_at",
+		}).AddRow(keyID, userID, scopes, "active", nil, userID, "alice@example.com", "alice", false, false, 3, nil, now, now))
+	mock.ExpectExec("UPDATE open_api_keys SET last_used_at").
+		WithArgs(keyID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
+func expectWatchlistSymbolCheck(mock sqlmock.Sqlmock, userID int, symbol string, exists bool) {
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs(userID, symbol).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(exists))
+}
+
+func assertOpenAPIErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, wantStatus, rec.Body.String())
+	}
+	var body struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Status != "error" || body.Error.Code != wantCode {
+		t.Fatalf("body = %#v, want error code %s", body, wantCode)
+	}
+}
+
 var _ = pq.Array
