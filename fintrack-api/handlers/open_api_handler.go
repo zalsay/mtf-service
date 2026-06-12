@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -242,11 +245,12 @@ func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {
 }
 
 func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
-	userID, ok := openAPIUserID(c)
+	user, ok := openAPIUser(c)
 	if !ok {
 		writeOpenAPIError(c, http.StatusUnauthorized, "user_mapping_required", "user is required", false)
 		return
 	}
+	userID := user.ID
 	uniqueKey := strings.TrimSpace(c.Query("unique_key"))
 	if uniqueKey == "" {
 		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "unique_key is required", false)
@@ -260,20 +264,158 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 	if !h.requireWatchlistSymbol(c, userID, symbol) {
 		return
 	}
-	dates, preds, predLatest, actualLatest, changePct, err := h.watchlist.ListFuturePredictionsByUniqueKey(uniqueKey)
+	predictReq, err := h.watchlist.GetMTFBestPredictOnceRequestByUniqueKey(uniqueKey)
 	if err != nil {
 		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
 		return
 	}
-	writeOpenAPIData(c, http.StatusOK, gin.H{
+	normalized, err := services.NormalizeMTFPredictOnceRequest(predictReq, user.MembershipLevel, userID, false)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusForbidden, "validation_error", err.Error(), false)
+		return
+	}
+	status, body, err := h.watchlist.GetMTFPredictOnceCached(normalized)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	if status != http.StatusNotFound {
+		writeOpenAPIData(c, status, buildOpenAPIFutureFromPredictOnce(uniqueKey, body))
+		return
+	}
+	status, body, err = h.watchlist.TriggerMTFPredictOnce(normalized)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	if data, ok := predictOnceData(body); ok {
+		writeOpenAPIData(c, status, buildOpenAPIFuturePayload(uniqueKey, data))
+		return
+	}
+	writeOpenAPIData(c, status, body)
+}
+
+func buildOpenAPIFutureFromPredictOnce(uniqueKey string, body map[string]interface{}) gin.H {
+	if data, ok := predictOnceData(body); ok {
+		return buildOpenAPIFuturePayload(uniqueKey, data)
+	}
+	return gin.H{"unique_key": uniqueKey, "predict_once": body}
+}
+
+func predictOnceData(body map[string]interface{}) (map[string]interface{}, bool) {
+	if body == nil {
+		return nil, false
+	}
+	data, ok := body["data"].(map[string]interface{})
+	if !ok || data == nil {
+		return nil, false
+	}
+	return data, true
+}
+
+func buildOpenAPIFuturePayload(uniqueKey string, data map[string]interface{}) gin.H {
+	dates := stringSliceFromInterface(data["future_dates"])
+	predictions := floatSliceFromInterface(data["best_prediction_values"])
+	maxLen := len(dates)
+	if len(predictions) < maxLen {
+		maxLen = len(predictions)
+	}
+	dates = dates[:maxLen]
+	predictions = predictions[:maxLen]
+	predictedLatest := lastFiniteFloat(predictions)
+	actualLatest := firstFiniteFloat(data["latest_close"], data["adjust_raw_latest_close"], data["change_base_value"])
+	changePct := 0.0
+	if actualLatest > 0 && predictedLatest > 0 {
+		changePct = (predictedLatest - actualLatest) / actualLatest * 100
+	}
+	if values := floatSliceFromInterface(data["predicted_change_percent"]); len(values) > 0 {
+		changePct = values[len(values)-1]
+	}
+	return gin.H{
 		"unique_key":               uniqueKey,
 		"dates":                    dates,
-		"predictions":              preds,
+		"predictions":              predictions,
 		"count":                    len(dates),
-		"predicted_latest":         predLatest,
+		"predicted_latest":         predictedLatest,
 		"actual_latest":            actualLatest,
 		"predicted_change_percent": changePct,
-	})
+	}
+}
+
+func stringSliceFromInterface(value interface{}) []string {
+	items, ok := value.([]interface{})
+	if !ok {
+		if typed, ok := value.([]string); ok {
+			return typed
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text := strings.TrimSpace(fmt.Sprint(item))
+		if text != "" && text != "<nil>" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func floatSliceFromInterface(value interface{}) []float64 {
+	switch typed := value.(type) {
+	case []float64:
+		return typed
+	case []interface{}:
+		out := make([]float64, 0, len(typed))
+		for _, item := range typed {
+			if value, ok := finiteFloat(item); ok {
+				out = append(out, value)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func finiteFloat(value interface{}) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		if !math.IsNaN(typed) && !math.IsInf(typed, 0) {
+			return typed, true
+		}
+	case float32:
+		value := float64(typed)
+		if !math.IsNaN(value) && !math.IsInf(value, 0) {
+			return value, true
+		}
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		if value, err := strconv.ParseFloat(string(typed), 64); err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+func lastFiniteFloat(values []float64) float64 {
+	for i := len(values) - 1; i >= 0; i-- {
+		if !math.IsNaN(values[i]) && !math.IsInf(values[i], 0) {
+			return values[i]
+		}
+	}
+	return 0
+}
+
+func firstFiniteFloat(values ...interface{}) float64 {
+	for _, value := range values {
+		if parsed, ok := finiteFloat(value); ok {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func (h *OpenAPIHandler) MTFPredictOnce(c *gin.Context) {

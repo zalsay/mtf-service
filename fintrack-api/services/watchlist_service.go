@@ -334,6 +334,77 @@ func (s *WatchlistService) GetMTFBestSymbolByUniqueKey(uniqueKey string) (string
 	return symbol, nil
 }
 
+func (s *WatchlistService) GetMTFBestPredictOnceRequestByUniqueKey(uniqueKey string) (*models.MTFPredictRequest, error) {
+	var (
+		symbol             string
+		predictionType     string
+		horizonLen         int
+		contextLen         int
+		stockType          int
+		covariateConfigRaw []byte
+		covariateSignature string
+	)
+	err := s.db.Conn.QueryRow(`
+		SELECT
+			p.symbol,
+			COALESCE(NULLIF(TRIM(p.prediction_type), ''), 'mtf-lite'),
+			p.horizon_len,
+			p.context_len,
+			COALESCE((
+				SELECT MIN(NULLIF(vc.stock_type, 0))::int
+				FROM mtf_best_validation_chunks vc
+				WHERE vc.unique_key = p.unique_key
+			), 1)::int AS stock_type,
+			COALESCE(p.covariate_config, '{}'::jsonb),
+			COALESCE(p.covariate_signature, '')
+		FROM mtf_best_predictions p
+		WHERE p.unique_key = $1
+		LIMIT 1
+	`, strings.TrimSpace(uniqueKey)).Scan(
+		&symbol,
+		&predictionType,
+		&horizonLen,
+		&contextLen,
+		&stockType,
+		&covariateConfigRaw,
+		&covariateSignature,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get mtf best predict once request: %v", err)
+	}
+	if stockType != 1 && stockType != 2 {
+		stockType = inferLookupStockTypes(symbol)[0]
+	}
+	years := 15
+	timeStep := 0
+	req := &models.MTFPredictRequest{
+		StockCode:      symbol,
+		StockType:      stockType,
+		TimeStep:       &timeStep,
+		Years:          &years,
+		PredictionType: normalizedPredictionType(predictionType),
+		HorizonLen:     &horizonLen,
+		ContextLen:     &contextLen,
+	}
+	if strings.TrimSpace(covariateSignature) != "" {
+		req.CovariateSignature = strings.TrimSpace(covariateSignature)
+	}
+	if len(covariateConfigRaw) > 0 && string(covariateConfigRaw) != "{}" {
+		var covariateConfig map[string]interface{}
+		if err := json.Unmarshal(covariateConfigRaw, &covariateConfig); err == nil && len(covariateConfig) > 0 {
+			req.CovariateConfig = covariateConfig
+		}
+	}
+	if predictionTypeUsesCovariates(req.PredictionType) {
+		preset := "market_cov_v1"
+		req.CovariatePreset = &preset
+		if req.CovariateConfig == nil {
+			req.CovariateConfig = buildMarketCovariateConfig()
+		}
+	}
+	return req, nil
+}
+
 func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlistRequest) error {
 	stockType := 1
 	if req.StockType != nil {

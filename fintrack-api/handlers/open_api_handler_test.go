@@ -578,6 +578,105 @@ func TestOpenAPIMTFFutureRejectsUniqueKeyOutsideWatchlist(t *testing.T) {
 	}
 }
 
+func TestOpenAPIMTFFutureUsesPredictOnceCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_future_once_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	mock.ExpectQuery("SELECT symbol FROM mtf_best_predictions").
+		WithArgs("510050_best_hlen_7_clen_2048_v_2.5").
+		WillReturnRows(sqlmock.NewRows([]string{"symbol"}).AddRow("510050"))
+	expectWatchlistSymbolCheck(mock, 7, "510050", true)
+	mock.ExpectQuery("FROM mtf_best_predictions p").
+		WithArgs("510050_best_hlen_7_clen_2048_v_2.5").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"symbol", "prediction_type", "horizon_len", "context_len", "stock_type",
+			"covariate_config", "covariate_signature",
+		}).AddRow("510050", "mtf-lite", 7, 2048, 2, []byte(`{}`), ""))
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/predict_once_cached" {
+			t.Fatalf("gateway path = %s, want /predict_once_cached", r.URL.Path)
+		}
+		var received map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		if received["stock_code"] != "510050" {
+			t.Fatalf("stock_code = %#v, want 510050", received["stock_code"])
+		}
+		if received["stock_type"] != float64(2) {
+			t.Fatalf("stock_type = %#v, want 2", received["stock_type"])
+		}
+		if received["prediction_type"] != "mtf-lite" {
+			t.Fatalf("prediction_type = %#v, want mtf-lite", received["prediction_type"])
+		}
+		if received["horizon_len"] != float64(7) || received["context_len"] != float64(2048) {
+			t.Fatalf("horizon/context = %#v/%#v, want 7/2048", received["horizon_len"], received["context_len"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success":true,
+			"message":"单次预测缓存命中",
+			"data":{
+				"stock_code":"510050",
+				"stock_type":2,
+				"prediction_type":"mtf-lite",
+				"context_len":2048,
+				"horizon_len":7,
+				"latest_close":3.026,
+				"future_dates":["2026-06-15","2026-06-16"],
+				"best_prediction_item":"mtf-0.6",
+				"best_prediction_values":[2.9595,2.9631],
+				"predicted_change_percent":[-2.2,-2.08]
+			}
+		}`))
+	}))
+	defer gateway.Close()
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{
+			InferenceGateway: config.InferenceGatewayConfig{BaseURL: gateway.URL, Timeout: 1},
+		}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/future", handler.AuthMiddleware("mtf:read"), handler.MTFFuture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/future?unique_key=510050_best_hlen_7_clen_2048_v_2.5", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"count":2`) {
+		t.Fatalf("expected count=2, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"dates":["2026-06-15","2026-06-16"]`) {
+		t.Fatalf("expected future dates from predict once, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"predictions":[2.9595,2.9631]`) {
+		t.Fatalf("expected predict once values, body=%s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"predicted_latest":2.9631`) {
+		t.Fatalf("expected predicted_latest from predict once values, body=%s", rec.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func expectOpenAPIAuth(mock sqlmock.Sqlmock, apiKey string, scopes string, userID int, keyID int, now time.Time) {
 	mock.ExpectQuery("SELECT k.id, k.owner_user_id, k.scopes, k.status, k.expires_at").
 		WithArgs(services.HashOpenAPIKey(apiKey)).
