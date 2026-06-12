@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -612,22 +613,28 @@ func TestOpenAPIMTFBestByConfigAggregatesWhenHorizonAndContextOmitted(t *testing
 	}
 }
 
-func TestOpenAPIMTFBestByConfigRejectsPartialConfig(t *testing.T) {
+func TestOpenAPIMTFBestByConfigAggregatesWithPartialConfigFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := []struct {
-		name string
-		url  string
-		code string
+		name        string
+		url         string
+		args        []driver.Value
+		wantHorizon int
+		wantContext int
 	}{
 		{
-			name: "missing context",
-			url:  "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&horizon_len=7",
-			code: "valid context_len is required when horizon_len is provided",
+			name:        "horizon only",
+			url:         "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&horizon_len=7",
+			args:        []driver.Value{"510050", "", 2, 7},
+			wantHorizon: 7,
+			wantContext: 2048,
 		},
 		{
-			name: "missing horizon",
-			url:  "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&context_len=2048",
-			code: "valid horizon_len is required when context_len is provided",
+			name:        "context only",
+			url:         "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&context_len=2048",
+			args:        []driver.Value{"510050", "", 2, 2048},
+			wantHorizon: 7,
+			wantContext: 2048,
 		},
 	}
 	for _, tc := range cases {
@@ -642,6 +649,13 @@ func TestOpenAPIMTFBestByConfigRejectsPartialConfig(t *testing.T) {
 			now := time.Now()
 			expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
 			expectWatchlistSymbolCheck(mock, 7, "510050", true)
+			mock.ExpectQuery("SELECT horizon_len, context_len, mtf_version, prediction_type, unique_key").
+				WithArgs(tc.args...).
+				WillReturnRows(sqlmock.NewRows([]string{
+					"horizon_len", "context_len", "mtf_version", "prediction_type", "unique_key",
+				}).
+					AddRow(tc.wantHorizon, tc.wantContext, "v_2.5", "mtf-lite", "510050_best_hlen_7_clen_2048_v_2.5").
+					AddRow(tc.wantHorizon, tc.wantContext, "v_2.5", "mtf-pro", "510050_best_hlen_7_clen_2048_v_2.5_mtf-pro"))
 
 			handler := NewOpenAPIHandler(
 				services.NewOpenAPIService(&database.DB{Conn: db}),
@@ -658,11 +672,29 @@ func TestOpenAPIMTFBestByConfigRejectsPartialConfig(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+apiKey)
 			router.ServeHTTP(rec, req)
 
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 			}
-			if !strings.Contains(rec.Body.String(), tc.code) {
-				t.Fatalf("body missing %q: %s", tc.code, rec.Body.String())
+			var body struct {
+				Data struct {
+					Count int `json:"count"`
+					Items []struct {
+						HorizonLen       int    `json:"horizon_len"`
+						ContextLen       int    `json:"context_len"`
+						MTFLiteUniqueKey string `json:"mtf_lite_unique_key"`
+						MTFProUniqueKey  string `json:"mtf_pro_unique_key"`
+					} `json:"items"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.Data.Count != 1 || len(body.Data.Items) != 1 {
+				t.Fatalf("items/count = %d/%d, want 1/1; body=%s", len(body.Data.Items), body.Data.Count, rec.Body.String())
+			}
+			item := body.Data.Items[0]
+			if item.HorizonLen != tc.wantHorizon || item.ContextLen != tc.wantContext || item.MTFLiteUniqueKey == "" || item.MTFProUniqueKey == "" {
+				t.Fatalf("item = %#v, want filtered aggregated keys", item)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("sql expectations: %v", err)

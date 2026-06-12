@@ -2022,6 +2022,10 @@ func (s *WatchlistService) GetMTFBestUniqueKeysByConfig(symbol string, horizonLe
 }
 
 func (s *WatchlistService) ListMTFBestUniqueKeysBySymbol(symbol string, stockType int, mtfVersion string) (*models.MTFBestUniqueKeysBySymbol, error) {
+	return s.ListMTFBestUniqueKeysBySymbolConfig(symbol, stockType, nil, nil, mtfVersion)
+}
+
+func (s *WatchlistService) ListMTFBestUniqueKeysBySymbolConfig(symbol string, stockType int, horizonLen *int, contextLen *int, mtfVersion string) (*models.MTFBestUniqueKeysBySymbol, error) {
 	normalizedSymbol := normalizeMTFSymbolReadKey(symbol)
 	canonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
 	args := []interface{}{normalizedSymbol, strings.TrimSpace(mtfVersion)}
@@ -2044,6 +2048,14 @@ func (s *WatchlistService) ListMTFBestUniqueKeysBySymbol(symbol string, stockTyp
 	if stockType > 0 {
 		args = append(args, stockType)
 		query += fmt.Sprintf("          AND stock_type = $%d\n", len(args))
+	}
+	if horizonLen != nil {
+		args = append(args, *horizonLen)
+		query += fmt.Sprintf("          AND horizon_len = $%d\n", len(args))
+	}
+	if contextLen != nil {
+		args = append(args, *contextLen)
+		query += fmt.Sprintf("          AND context_len = $%d\n", len(args))
 	}
 	query += fmt.Sprintf(`            ORDER BY horizon_len,
                      context_len,
