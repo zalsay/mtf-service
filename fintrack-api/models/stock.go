@@ -264,6 +264,7 @@ type MTFPredictRequest struct {
 	Years              *int                   `json:"years,omitempty"`
 	StartDate          *string                `json:"start_date,omitempty"`
 	EndDate            *string                `json:"end_date,omitempty"`
+	PredictDate        *string                `json:"predict_date,omitempty"`
 	PredictionType     string                 `json:"prediction_type,omitempty"`
 	HorizonLen         *int                   `json:"horizon_len,omitempty"`
 	ContextLen         *int                   `json:"context_len,omitempty"`

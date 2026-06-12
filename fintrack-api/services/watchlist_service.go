@@ -1373,6 +1373,9 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
 		payload["end_date"] = strings.TrimSpace(*req.EndDate)
 	}
+	if req.PredictDate != nil && strings.TrimSpace(*req.PredictDate) != "" {
+		payload["predict_date"] = strings.TrimSpace(*req.PredictDate)
+	}
 	if strings.TrimSpace(req.PredictionType) != "" {
 		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)
 	}
@@ -1461,6 +1464,9 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	}
 	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
 		payload["end_date"] = strings.TrimSpace(*req.EndDate)
+	}
+	if req.PredictDate != nil && strings.TrimSpace(*req.PredictDate) != "" {
+		payload["predict_date"] = strings.TrimSpace(*req.PredictDate)
 	}
 	if strings.TrimSpace(req.PredictionType) != "" {
 		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)

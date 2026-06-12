@@ -840,6 +840,44 @@ func TestTriggerMTFPredictOncePassesContinuationDates(t *testing.T) {
 	}
 }
 
+func TestTriggerMTFPredictOncePassesPredictDate(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"job_id":"job-test","status":"queued"}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 1,
+		},
+	})
+	predictDate := "2026-06-08"
+	req := &models.MTFPredictRequest{
+		StockCode:   "159206",
+		PredictDate: &predictDate,
+	}
+
+	status, _, err := service.TriggerMTFPredictOnce(req)
+	if err != nil {
+		t.Fatalf("expected predict once proxy to pass, got error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if received["predict_date"] != predictDate {
+		t.Fatalf("predict_date = %#v, want %s", received["predict_date"], predictDate)
+	}
+	if _, ok := received["end_date"]; ok {
+		t.Fatalf("end_date should not be injected by fintrack-api, got %#v", received["end_date"])
+	}
+}
+
 func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 	futureDate := time.Now().UTC().Format("2006-01-02")
 	var received map[string]interface{}
@@ -867,6 +905,9 @@ func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 		}
 		if received["covariate_signature"] != "sig123" {
 			t.Fatalf("covariate_signature payload = %#v, want sig123", received["covariate_signature"])
+		}
+		if received["predict_date"] != "2026-06-08" {
+			t.Fatalf("predict_date payload = %#v, want 2026-06-08", received["predict_date"])
 		}
 		if received["predict_from_best_val_end"] != true || received["chunk_until_latest"] != true {
 			t.Fatalf("expected best continuation flags in payload: %#v", received)
@@ -913,12 +954,14 @@ func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 
 	horizonLen := 7
 	contextLen := 2048
+	predictDate := "2026-06-08"
 	status, body, err := service.GetMTFPredictOnceCached(&models.MTFPredictRequest{
 		StockCode:          "sh510050",
 		StockType:          "etf",
 		PredictionType:     "mtf-pro",
 		HorizonLen:         &horizonLen,
 		ContextLen:         &contextLen,
+		PredictDate:        &predictDate,
 		CovariateSignature: "sig123",
 	})
 	if err != nil {
