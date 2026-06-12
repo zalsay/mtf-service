@@ -2538,7 +2538,7 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 	rows, err := s.db.Conn.Query(`
         SELECT dates, predictions
         FROM mtf_best_validation_chunks
-        WHERE unique_key = $1 AND start_date >= CURRENT_DATE + INTERVAL '1 day'
+        WHERE unique_key = $1 AND end_date >= CURRENT_DATE + INTERVAL '1 day'
         ORDER BY chunk_index ASC
     `, uniqueKey)
 	if err != nil {
@@ -2549,6 +2549,7 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 	var outDates []string
 	var outPreds []float64
 	var predictedLatest float64 = 0
+	today := chinaNow().Truncate(24 * time.Hour)
 
 	for rows.Next() {
 		var datesJSON, predsJSON []byte
@@ -2576,6 +2577,10 @@ func (s *WatchlistService) ListFuturePredictionsByUniqueKey(uniqueKey string) ([
 			maxLen = len(arr)
 		}
 		for i := 0; i < maxLen; i++ {
+			predictionDate, err := time.ParseInLocation(predictionCacheDateLayout, strings.TrimSpace(dates[i]), chinaNow().Location())
+			if err != nil || !predictionDate.After(today) {
+				continue
+			}
 			var p float64
 			switch v := arr[i].(type) {
 			case float64:

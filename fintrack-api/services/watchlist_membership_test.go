@@ -131,7 +131,7 @@ func TestGetMTFBestValueByUniqueKeyFallsBackToFutureChunks(t *testing.T) {
 	mock.ExpectQuery("SELECT dates, predictions").
 		WithArgs("best-key").
 		WillReturnRows(sqlmock.NewRows([]string{"dates", "predictions"}).AddRow(
-			[]byte(`["2026-03-02","2026-03-03"]`),
+			[]byte(`["2026-06-15","2026-06-16"]`),
 			[]byte(`{"mtf-0.5":[1.23,1.45]}`),
 		))
 	mock.ExpectQuery("SELECT actual_values").
@@ -151,6 +151,48 @@ func TestGetMTFBestValueByUniqueKeyFallsBackToFutureChunks(t *testing.T) {
 	}
 	if value.PredictedLatest != 1.45 || value.ActualLatest != 1.00 {
 		t.Fatalf("latest values = %v/%v, want 1.45/1.00", value.PredictedLatest, value.ActualLatest)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestListFuturePredictionsByUniqueKeyKeepsFutureDatesInsideStartedChunk(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("SELECT best_prediction_item FROM mtf_best_predictions").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"best_prediction_item"}).AddRow("mtf-0.6"))
+	mock.ExpectQuery("SELECT dates, predictions").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"dates", "predictions"}).AddRow(
+			[]byte(`["2026-06-08","2026-06-12","2026-06-15","2026-06-16"]`),
+			[]byte(`{"mtf-0.6":[2.9524,2.9583,2.9595,2.9631]}`),
+		))
+	mock.ExpectQuery("SELECT actual_values").
+		WithArgs("best-key").
+		WillReturnRows(sqlmock.NewRows([]string{"actual_values"}).AddRow([]byte(`[3.026]`)))
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	dates, preds, predictedLatest, actualLatest, changePct, err := service.ListFuturePredictionsByUniqueKey("best-key")
+	if err != nil {
+		t.Fatalf("ListFuturePredictionsByUniqueKey error = %v", err)
+	}
+	if len(dates) != 2 || dates[0] != "2026-06-15" || dates[1] != "2026-06-16" {
+		t.Fatalf("dates = %#v, want only future dates", dates)
+	}
+	if len(preds) != 2 || preds[0] != 2.9595 || preds[1] != 2.9631 {
+		t.Fatalf("preds = %#v, want future prediction values", preds)
+	}
+	if predictedLatest != 2.9631 || actualLatest != 3.026 {
+		t.Fatalf("latest values = %v/%v, want 2.9631/3.026", predictedLatest, actualLatest)
+	}
+	if changePct >= 0 {
+		t.Fatalf("changePct = %v, want negative change", changePct)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
