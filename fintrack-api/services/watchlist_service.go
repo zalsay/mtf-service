@@ -46,7 +46,6 @@ func (s *WatchlistService) Config() *config.Config {
 var ErrSymbolNotFound = errors.New("symbol not found")
 
 const mtfBestStaleRefreshAfter = 180 * 24 * time.Hour
-const mtfPredictOnceBestMaxAgeDays = 180
 
 var ErrDuplicateSymbol = errors.New("duplicate symbol")
 
@@ -1321,11 +1320,6 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	if req.ForceRequeue != nil {
 		payload["force_requeue"] = *req.ForceRequeue
 	}
-	bestMaxAgeDays := mtfPredictOnceBestMaxAgeDays
-	if req.BestMaxAgeDays != nil && *req.BestMaxAgeDays > 0 {
-		bestMaxAgeDays = *req.BestMaxAgeDays
-	}
-	payload["best_max_age_days"] = bestMaxAgeDays
 	predictFromBestEnd := true
 	if req.PredictFromBestEnd != nil {
 		predictFromBestEnd = *req.PredictFromBestEnd
@@ -1421,11 +1415,6 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	if req.Covariates != nil {
 		payload["covariates"] = req.Covariates
 	}
-	bestMaxAgeDays := mtfPredictOnceBestMaxAgeDays
-	if req.BestMaxAgeDays != nil && *req.BestMaxAgeDays > 0 {
-		bestMaxAgeDays = *req.BestMaxAgeDays
-	}
-	payload["best_max_age_days"] = bestMaxAgeDays
 	predictFromBestEnd := true
 	if req.PredictFromBestEnd != nil {
 		predictFromBestEnd = *req.PredictFromBestEnd

@@ -704,8 +704,8 @@ func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	if received["force_requeue"] != true {
 		t.Fatalf("expected force_requeue=true in payload, got %#v", received["force_requeue"])
 	}
-	if received["best_max_age_days"] != float64(180) {
-		t.Fatalf("best_max_age_days = %#v, want 180", received["best_max_age_days"])
+	if _, ok := received["best_max_age_days"]; ok {
+		t.Fatalf("best_max_age_days should not be forwarded, got %#v", received["best_max_age_days"])
 	}
 	if received["predict_from_best_val_end"] != true {
 		t.Fatalf("predict_from_best_val_end = %#v, want true", received["predict_from_best_val_end"])
@@ -732,12 +732,10 @@ func TestTriggerMTFPredictOnceAllowsBestContinuationOverrides(t *testing.T) {
 			Timeout: 1,
 		},
 	})
-	bestMaxAgeDays := 90
 	predictFromBestEnd := false
 	chunkUntilLatest := false
 	req := &models.MTFPredictRequest{
 		StockCode:          "600246",
-		BestMaxAgeDays:     &bestMaxAgeDays,
 		PredictFromBestEnd: &predictFromBestEnd,
 		ChunkUntilLatest:   &chunkUntilLatest,
 	}
@@ -749,8 +747,8 @@ func TestTriggerMTFPredictOnceAllowsBestContinuationOverrides(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", status)
 	}
-	if received["best_max_age_days"] != float64(90) {
-		t.Fatalf("best_max_age_days = %#v, want 90", received["best_max_age_days"])
+	if _, ok := received["best_max_age_days"]; ok {
+		t.Fatalf("best_max_age_days should not be forwarded, got %#v", received["best_max_age_days"])
 	}
 	if received["predict_from_best_val_end"] != false {
 		t.Fatalf("predict_from_best_val_end = %#v, want false", received["predict_from_best_val_end"])

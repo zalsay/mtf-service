@@ -265,7 +265,6 @@ type MTFPredictRequest struct {
 	ForceRequeue       *bool                  `json:"force_requeue,omitempty"`
 	QueuePriority      string                 `json:"queue_priority,omitempty"`
 	RefreshReason      string                 `json:"refresh_reason,omitempty"`
-	BestMaxAgeDays     *int                   `json:"best_max_age_days,omitempty"`
 	PredictFromBestEnd *bool                  `json:"predict_from_best_val_end,omitempty"`
 	ChunkUntilLatest   *bool                  `json:"chunk_until_latest,omitempty"`
 	CovariatePreset    *string                `json:"covariate_preset,omitempty"`

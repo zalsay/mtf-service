@@ -295,7 +295,6 @@ Scope: `mtf:predict`
   "prediction_type": "mtf-lite",
   "horizon_len": 7,
   "context_len": 256,
-  "best_max_age_days": 180,
   "prefer_cache": true
 }
 ```
@@ -305,7 +304,7 @@ Scope: `mtf:predict`
 1. 当 `prefer_cache=true` 时先查缓存。
 2. 缓存 miss 后再按用户会员权限触发 `/predict_once`。
 3. 必须注入解析后的 `user_id`，不能信任外部请求体里的 `user_id`。
-4. fintrack-api 默认向推理网关注入 `best_max_age_days=180`、`predict_from_best_val_end=true`、`chunk_until_latest=true`；180 日内 best 均视为有效，并从 best `val_end_date` 续跑到当前可用 chunk。
+4. fintrack-api 默认向推理网关注入 `predict_from_best_val_end=true`、`chunk_until_latest=true`；best 可用性由最新 once 接口自动处理，并从 best `val_end_date` 续跑到当前可用 chunk。
 
 ### POST `/api/open/v1/mtf/predict-best`
 
