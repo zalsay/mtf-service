@@ -918,7 +918,21 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	request.PredictionTypeValue = request.PredictionType()
 	normalized["prediction_type"] = request.PredictionTypeValue
 
+	predictDate := modelsNormalizeDateOrDefault(request.PredictDate, time.Time{})
+	if predictDate != "" {
+		normalized["predict_date"] = predictDate
+		request.PredictDate = predictDate
+	} else {
+		delete(normalized, "predict_date")
+		request.PredictDate = nil
+	}
+
 	endDateFallback := time.Now().In(shanghaiLocation)
+	if predictDate != "" && isPredictOnceTarget(targetPath) {
+		if parsed, err := time.ParseInLocation("20060102", predictDate, shanghaiLocation); err == nil {
+			endDateFallback = parsed
+		}
+	}
 	if targetPath == "/internal/predict_for_best_sync" {
 		endDateFallback = time.Time{}
 	}
@@ -953,6 +967,15 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 		return nil, request, err
 	}
 	return updatedBody, request, nil
+}
+
+func isPredictOnceTarget(targetPath string) bool {
+	switch targetPath {
+	case "/internal/predict_once_sync", "/internal/predict_once_main_sync", "/internal/predict_once_cached_sync":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeUZIAnalyzePayload(body []byte, request models.UZIAnalyzeRequest) ([]byte, models.UZIAnalyzeRequest, error) {

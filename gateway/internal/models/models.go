@@ -41,6 +41,7 @@ type InferenceRequest struct {
 	Years                   any    `json:"years,omitempty"`
 	StartDate               any    `json:"start_date,omitempty"`
 	EndDate                 any    `json:"end_date,omitempty"`
+	PredictDate             any    `json:"predict_date,omitempty"`
 	HorizonLen              any    `json:"horizon_len,omitempty"`
 	ContextLen              any    `json:"context_len,omitempty"`
 	UserID                  any    `json:"user_id,omitempty"`

@@ -60,7 +60,13 @@ func (s *Server) lookupPredictionCache(ctx context.Context, request models.Infer
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return http.StatusBadGateway, nil, fmt.Errorf("decode postgres prediction cache data: %w", err)
 	}
-	if !isPredictionCacheFresh(payload, time.Now().UTC()) {
+	freshAt := time.Now().UTC()
+	if predictDate := modelsNormalizeDateOrDefault(request.PredictDate, time.Time{}); predictDate != "" {
+		if parsed, err := time.ParseInLocation("20060102", predictDate, time.UTC); err == nil {
+			freshAt = parsed
+		}
+	}
+	if !isPredictionCacheFresh(payload, freshAt) {
 		return http.StatusNotFound, predictOnceCacheNotFoundBody(request.StockCode, "单次预测缓存已过期", "prediction cache stale"), nil
 	}
 	payload["cache_hit"] = true

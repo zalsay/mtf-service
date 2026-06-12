@@ -96,6 +96,51 @@ func TestPredictOnceCachedReadsOnlyPredictionCache(t *testing.T) {
 	}
 }
 
+func TestPredictOnceCachedUsesPredictDateForFreshness(t *testing.T) {
+	handler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
+			t.Fatalf("unexpected postgres handler path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"code":200,
+			"message":"Success",
+			"data":{
+				"unique_key":"300442_direct_st_1_hlen_7_clen_2048_fd_test",
+				"stock_code":"300442",
+				"stock_type":1,
+				"prediction_type":"mtf-lite",
+				"mtf_version":"2.5",
+				"context_len":2048,
+				"horizon_len":7,
+				"latest_data_date":"2026-06-01",
+				"future_dates":["2026-06-02","2026-06-03"],
+				"best_prediction_item":"mtf-0.7",
+				"best_prediction_values":[80.1,80.2],
+				"predictions":{"mtf-0.7":[80.1,80.2]}
+			}
+		}`))
+	}))
+	defer handler.Close()
+
+	server := NewServerWithOptions(nil, ServerOptions{PostgresHandlerURL: handler.URL})
+	body := strings.NewReader(`{
+		"stock_code":"300442",
+		"stock_type":"stock",
+		"horizon_len":7,
+		"context_len":2048,
+		"prediction_type":"mtf-lite",
+		"predict_date":"2026-06-02"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/predict_once_cached", body)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPredictOnceCachedDoesNotFallbackToValidationChunk(t *testing.T) {
 	var requestedPaths []string
 	handler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +411,91 @@ func TestNormalizeInferencePayloadPreservesExplicitBestSyncDates(t *testing.T) {
 	}
 	if normalized["start_date"] != "20110601" {
 		t.Fatalf("expected normalized body start_date=20110601, got %#v", normalized["start_date"])
+	}
+	if normalized["end_date"] != "20260601" {
+		t.Fatalf("expected normalized body end_date=20260601, got %#v", normalized["end_date"])
+	}
+}
+
+func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510050",
+		"stock_type": 2,
+		"years": 15,
+		"predict_date": "2026-06-02",
+		"horizon_len": 7,
+		"context_len": 2048,
+		"prediction_type": "mtf-lite"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	if normalizedRequest.PredictDate != "20260602" {
+		t.Fatalf("expected predict_date to be normalized, got %#v", normalizedRequest.PredictDate)
+	}
+	if normalizedRequest.EndDate != "20260602" {
+		t.Fatalf("expected predict_date to drive end_date, got %#v", normalizedRequest.EndDate)
+	}
+	if normalizedRequest.StartDate != "20110602" {
+		t.Fatalf("expected start_date to derive from predict_date and years, got %#v", normalizedRequest.StartDate)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if normalized["predict_date"] != "20260602" {
+		t.Fatalf("expected normalized body predict_date=20260602, got %#v", normalized["predict_date"])
+	}
+	if normalized["end_date"] != "20260602" {
+		t.Fatalf("expected normalized body end_date=20260602, got %#v", normalized["end_date"])
+	}
+	if normalized["start_date"] != "20110602" {
+		t.Fatalf("expected normalized body start_date=20110602, got %#v", normalized["start_date"])
+	}
+}
+
+func TestNormalizeInferencePayloadExplicitEndDateOverridesPredictDate(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510050",
+		"stock_type": 2,
+		"years": 15,
+		"predict_date": "2026-06-02",
+		"end_date": "2026-06-01",
+		"horizon_len": 7,
+		"context_len": 2048,
+		"prediction_type": "mtf-lite"
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	if normalizedRequest.EndDate != "20260601" {
+		t.Fatalf("expected explicit end_date to win, got %#v", normalizedRequest.EndDate)
+	}
+	if normalizedRequest.StartDate != "20110601" {
+		t.Fatalf("expected start_date to derive from explicit end_date, got %#v", normalizedRequest.StartDate)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("unmarshal normalized body: %v", err)
+	}
+	if normalized["predict_date"] != "20260602" {
+		t.Fatalf("expected normalized body predict_date=20260602, got %#v", normalized["predict_date"])
 	}
 	if normalized["end_date"] != "20260601" {
 		t.Fatalf("expected normalized body end_date=20260601, got %#v", normalized["end_date"])

@@ -259,6 +259,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
 - 地址：`http://<host>:59010/predict_once`
 
 请求体使用同一套基础字段，但语义不同：`/predict_once` 只基于已有 best 做最新单 chunk 预测，不会补跑训练 + 验证。
+可选字段 `predict_date` 用于把某一天当作本次 once 推理的“今日”，支持 `YYYYMMDD`、`YYYY-MM-DD` 等格式；未显式传 `end_date` 时，gateway 会用 `predict_date` 生成 `end_date`，并按 `years` 反推 `start_date`。如果同时传入 `end_date`，以 `end_date` 为准。
 
 ```json
 {
@@ -266,6 +267,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
   "stock_type": "stock",
   "time_step": 0,
   "years": 15,
+  "predict_date": "2026-06-02",
   "horizon_len": 7,
   "context_len": 2048,
   "prediction_type": "mtf-lite",
@@ -283,6 +285,7 @@ curl -X POST http://127.0.0.1:59010/predict_once \
     "stock_type": "stock",
     "time_step": 0,
     "years": 15,
+    "predict_date": "2026-06-02",
     "horizon_len": 7,
     "context_len": 2048,
     "prediction_type": "mtf-lite",
