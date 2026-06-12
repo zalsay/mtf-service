@@ -270,11 +270,11 @@ Scope: `mtf:read`
 Query:
 
 - `symbol`
-- `stock_type`
-- `horizon_len`
-- `context_len`
+- `stock_type`：可选，ETF 可传 `2`。
+- `horizon_len`：可选；与 `context_len` 必须同时传入或同时省略。
+- `context_len`：可选；与 `horizon_len` 必须同时传入或同时省略。
 
-语义：仅当 `symbol` 已在当前用户关注清单中时，返回最新 `mtf_lite_unique_key` 和 `mtf_pro_unique_key`。
+语义：仅当 `symbol` 已在当前用户关注清单中时查询 best key。若同时传入 `horizon_len` 和 `context_len`，返回该配置下最新 `mtf_lite_unique_key` 和 `mtf_pro_unique_key`；若两者都省略，则按 `symbol + stock_type` 返回该标的所有可用配置的聚合 key 列表。只传其中一个参数会返回 `400 validation_error`。
 
 ### GET `/api/open/v1/mtf/future?unique_key=...`
 

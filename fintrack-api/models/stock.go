@@ -147,6 +147,13 @@ type MTFBestUniqueKeysByConfig struct {
 	MTFProUniqueKey  string `json:"mtf_pro_unique_key"`
 }
 
+type MTFBestUniqueKeysBySymbol struct {
+	Symbol    string                      `json:"symbol"`
+	StockType int                         `json:"stock_type,omitempty"`
+	Count     int                         `json:"count"`
+	Items     []MTFBestUniqueKeysByConfig `json:"items"`
+}
+
 type MTFBestValue struct {
 	UniqueKey                     string    `json:"unique_key"`
 	BestPredictionItem            string    `json:"best_prediction_item"`

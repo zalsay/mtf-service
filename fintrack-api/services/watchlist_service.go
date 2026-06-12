@@ -2021,6 +2021,96 @@ func (s *WatchlistService) GetMTFBestUniqueKeysByConfig(symbol string, horizonLe
 	return result, nil
 }
 
+func (s *WatchlistService) ListMTFBestUniqueKeysBySymbol(symbol string, stockType int, mtfVersion string) (*models.MTFBestUniqueKeysBySymbol, error) {
+	normalizedSymbol := normalizeMTFSymbolReadKey(symbol)
+	canonicalSymbolExpr := mtfCanonicalSymbolExpr("symbol")
+	args := []interface{}{normalizedSymbol, strings.TrimSpace(mtfVersion)}
+
+	query := fmt.Sprintf(`
+        SELECT horizon_len, context_len, mtf_version, prediction_type, unique_key
+        FROM (
+            SELECT DISTINCT ON (horizon_len, context_len, mtf_version, prediction_type)
+                horizon_len,
+                context_len,
+                mtf_version,
+                prediction_type,
+                unique_key,
+                updated_at,
+                id
+            FROM mtf_best_predictions
+            WHERE %s = $1
+              AND ($2 = '' OR mtf_version = $2)
+    `, canonicalSymbolExpr)
+	if stockType > 0 {
+		args = append(args, stockType)
+		query += fmt.Sprintf("          AND stock_type = $%d\n", len(args))
+	}
+	query += fmt.Sprintf(`            ORDER BY horizon_len,
+                     context_len,
+                     mtf_version,
+                     prediction_type,
+                     CASE WHEN %s = lower(trim(symbol)) THEN 0 ELSE 1 END,
+                     updated_at DESC,
+                     id DESC
+        ) latest
+        ORDER BY horizon_len ASC, context_len DESC, mtf_version ASC, prediction_type ASC
+    `, canonicalSymbolExpr)
+
+	rows, err := s.db.Conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query mtf_best_predictions by symbol: %v", err)
+	}
+	defer rows.Close()
+
+	itemsByConfig := make(map[string]*models.MTFBestUniqueKeysByConfig)
+	keys := make([]string, 0)
+	for rows.Next() {
+		var horizonLen int
+		var contextLen int
+		var version string
+		var predictionType string
+		var uniqueKey string
+		if err := rows.Scan(&horizonLen, &contextLen, &version, &predictionType, &uniqueKey); err != nil {
+			return nil, fmt.Errorf("failed to scan mtf_best_predictions by symbol: %v", err)
+		}
+		configKey := fmt.Sprintf("%d/%d/%s", horizonLen, contextLen, version)
+		item, exists := itemsByConfig[configKey]
+		if !exists {
+			item = &models.MTFBestUniqueKeysByConfig{
+				Symbol:     normalizedSymbol,
+				MTFVersion: version,
+				HorizonLen: horizonLen,
+				ContextLen: contextLen,
+			}
+			itemsByConfig[configKey] = item
+			keys = append(keys, configKey)
+		}
+		switch normalizeTrainPredictionType(predictionType) {
+		case "mtf-pro":
+			item.MTFProUniqueKey = uniqueKey
+		default:
+			item.MTFLiteUniqueKey = uniqueKey
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate mtf_best_predictions by symbol: %v", err)
+	}
+	if len(keys) == 0 {
+		return nil, sql.ErrNoRows
+	}
+
+	items := make([]models.MTFBestUniqueKeysByConfig, 0, len(keys))
+	for _, key := range keys {
+		items = append(items, *itemsByConfig[key])
+	}
+	return &models.MTFBestUniqueKeysBySymbol{
+		Symbol:    normalizedSymbol,
+		StockType: stockType,
+		Count:     len(items),
+		Items:     items,
+	}, nil
+}
+
 // 按 unique_key 查询单条 MTF 回测结果
 func (s *WatchlistService) GetMTFBacktestByUniqueKey(uniqueKey string) (map[string]interface{}, error) {
 	row := s.db.Conn.QueryRow(`

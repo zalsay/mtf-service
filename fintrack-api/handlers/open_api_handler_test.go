@@ -541,6 +541,136 @@ func TestOpenAPIMTFBestByConfigRejectsSymbolOutsideWatchlist(t *testing.T) {
 	}
 }
 
+func TestOpenAPIMTFBestByConfigAggregatesWhenHorizonAndContextOmitted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_config_all_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	expectWatchlistSymbolCheck(mock, 7, "510050", true)
+	mock.ExpectQuery("SELECT horizon_len, context_len, mtf_version, prediction_type, unique_key").
+		WithArgs("510050", "", 2).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"horizon_len", "context_len", "mtf_version", "prediction_type", "unique_key",
+		}).
+			AddRow(7, 2048, "v_2.5", "mtf-lite", "510050_best_hlen_7_clen_2048_v_2.5").
+			AddRow(7, 2048, "v_2.5", "mtf-pro", "510050_best_hlen_7_clen_2048_v_2.5_mtf-pro").
+			AddRow(14, 2048, "v_2.5", "mtf-lite", "510050_best_hlen_14_clen_2048_v_2.5"))
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/best/by-config", handler.AuthMiddleware("mtf:read"), handler.MTFBestByConfig)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Symbol    string `json:"symbol"`
+			StockType int    `json:"stock_type"`
+			Count     int    `json:"count"`
+			Items     []struct {
+				HorizonLen       int    `json:"horizon_len"`
+				ContextLen       int    `json:"context_len"`
+				MTFVersion       string `json:"mtf_version"`
+				MTFLiteUniqueKey string `json:"mtf_lite_unique_key"`
+				MTFProUniqueKey  string `json:"mtf_pro_unique_key"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Data.Symbol != "510050" || body.Data.StockType != 2 || body.Data.Count != 2 {
+		t.Fatalf("data summary = %#v, body=%s", body.Data, rec.Body.String())
+	}
+	if len(body.Data.Items) != 2 {
+		t.Fatalf("items length = %d, want 2; body=%s", len(body.Data.Items), rec.Body.String())
+	}
+	first := body.Data.Items[0]
+	if first.HorizonLen != 7 || first.ContextLen != 2048 || first.MTFLiteUniqueKey == "" || first.MTFProUniqueKey == "" {
+		t.Fatalf("first item = %#v, want aggregated lite/pro 7/2048 keys", first)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPIMTFBestByConfigRejectsPartialConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cases := []struct {
+		name string
+		url  string
+		code string
+	}{
+		{
+			name: "missing context",
+			url:  "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&horizon_len=7",
+			code: "valid context_len is required when horizon_len is provided",
+		},
+		{
+			name: "missing horizon",
+			url:  "/api/open/v1/mtf/best/by-config?symbol=510050&stock_type=2&context_len=2048",
+			code: "valid horizon_len is required when context_len is provided",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("sqlmock: %v", err)
+			}
+			defer db.Close()
+
+			apiKey := "ftk_mtf_config_partial_key"
+			now := time.Now()
+			expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+			expectWatchlistSymbolCheck(mock, 7, "510050", true)
+
+			handler := NewOpenAPIHandler(
+				services.NewOpenAPIService(&database.DB{Conn: db}),
+				services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{}),
+				nil,
+				nil,
+				nil,
+			)
+			router := gin.New()
+			router.GET("/api/open/v1/mtf/best/by-config", handler.AuthMiddleware("mtf:read"), handler.MTFBestByConfig)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.code) {
+				t.Fatalf("body missing %q: %s", tc.code, rec.Body.String())
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("sql expectations: %v", err)
+			}
+		})
+	}
+}
+
 func TestOpenAPIMTFFutureRejectsUniqueKeyOutsideWatchlist(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, mock, err := sqlmock.New()

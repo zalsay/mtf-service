@@ -229,8 +229,21 @@ func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {
 	if !h.requireWatchlistSymbol(c, userID, c.Query("symbol")) {
 		return
 	}
-	horizonLen, contextLen, ok := requiredHorizonContext(c)
+	horizonLen, contextLen, hasConfig, ok := optionalHorizonContext(c)
 	if !ok {
+		return
+	}
+	if !hasConfig {
+		stockType, ok := optionalPositiveIntQuery(c, "stock_type")
+		if !ok {
+			return
+		}
+		result, err := h.watchlist.ListMTFBestUniqueKeysBySymbol(c.Query("symbol"), stockType, "")
+		if err != nil {
+			writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
+			return
+		}
+		writeOpenAPIData(c, http.StatusOK, result)
 		return
 	}
 	item, err := h.watchlist.GetMTFBestUniqueKeysByConfig(c.Query("symbol"), horizonLen, contextLen, "")
@@ -676,4 +689,44 @@ func requiredHorizonContext(c *gin.Context) (int, int, bool) {
 		return 0, 0, false
 	}
 	return horizonLen, contextLen, true
+}
+
+func optionalHorizonContext(c *gin.Context) (int, int, bool, bool) {
+	horizonRaw := strings.TrimSpace(c.Query("horizon_len"))
+	contextRaw := strings.TrimSpace(c.Query("context_len"))
+	if horizonRaw == "" && contextRaw == "" {
+		return 0, 0, false, true
+	}
+	if horizonRaw == "" {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid horizon_len is required when context_len is provided", false)
+		return 0, 0, false, false
+	}
+	if contextRaw == "" {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid context_len is required when horizon_len is provided", false)
+		return 0, 0, false, false
+	}
+	horizonLen, err := strconv.Atoi(horizonRaw)
+	if err != nil || horizonLen <= 0 {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid horizon_len is required", false)
+		return 0, 0, false, false
+	}
+	contextLen, err := strconv.Atoi(contextRaw)
+	if err != nil || contextLen <= 0 {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid context_len is required", false)
+		return 0, 0, false, false
+	}
+	return horizonLen, contextLen, true, true
+}
+
+func optionalPositiveIntQuery(c *gin.Context, name string) (int, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid "+name+" is required", false)
+		return 0, false
+	}
+	return value, true
 }
