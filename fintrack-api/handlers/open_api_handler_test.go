@@ -660,17 +660,17 @@ func TestOpenAPIMTFFutureUsesPredictOnceCache(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"count":2`) {
-		t.Fatalf("expected count=2, body=%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"unique_key":"510050_best_hlen_7_clen_2048_v_2.5"`) {
+		t.Fatalf("expected unique_key passthrough, body=%s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"dates":["2026-06-15","2026-06-16"]`) {
-		t.Fatalf("expected future dates from predict once, body=%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"future_dates":["2026-06-15","2026-06-16"]`) {
+		t.Fatalf("expected future_dates from predict once, body=%s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"predictions":[2.9595,2.9631]`) {
+	if !strings.Contains(rec.Body.String(), `"best_prediction_values":[2.9595,2.9631]`) {
 		t.Fatalf("expected predict once values, body=%s", rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"predicted_latest":2.9631`) {
-		t.Fatalf("expected predicted_latest from predict once values, body=%s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"predicted_change_percent":[-2.2,-2.08]`) {
+		t.Fatalf("expected predicted_change_percent array from predict once, body=%s", rec.Body.String())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)

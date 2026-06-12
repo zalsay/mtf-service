@@ -1,9 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
-	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -289,15 +286,15 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 		return
 	}
 	if data, ok := predictOnceData(body); ok {
-		writeOpenAPIData(c, status, buildOpenAPIFuturePayload(uniqueKey, data))
+		writeOpenAPIData(c, status, buildOpenAPIFutureData(uniqueKey, data))
 		return
 	}
 	writeOpenAPIData(c, status, body)
 }
 
-func buildOpenAPIFutureFromPredictOnce(uniqueKey string, body map[string]interface{}) gin.H {
+func buildOpenAPIFutureFromPredictOnce(uniqueKey string, body map[string]interface{}) interface{} {
 	if data, ok := predictOnceData(body); ok {
-		return buildOpenAPIFuturePayload(uniqueKey, data)
+		return buildOpenAPIFutureData(uniqueKey, data)
 	}
 	return gin.H{"unique_key": uniqueKey, "predict_once": body}
 }
@@ -313,109 +310,12 @@ func predictOnceData(body map[string]interface{}) (map[string]interface{}, bool)
 	return data, true
 }
 
-func buildOpenAPIFuturePayload(uniqueKey string, data map[string]interface{}) gin.H {
-	dates := stringSliceFromInterface(data["future_dates"])
-	predictions := floatSliceFromInterface(data["best_prediction_values"])
-	maxLen := len(dates)
-	if len(predictions) < maxLen {
-		maxLen = len(predictions)
-	}
-	dates = dates[:maxLen]
-	predictions = predictions[:maxLen]
-	predictedLatest := lastFiniteFloat(predictions)
-	actualLatest := firstFiniteFloat(data["latest_close"], data["adjust_raw_latest_close"], data["change_base_value"])
-	changePct := 0.0
-	if actualLatest > 0 && predictedLatest > 0 {
-		changePct = (predictedLatest - actualLatest) / actualLatest * 100
-	}
-	if values := floatSliceFromInterface(data["predicted_change_percent"]); len(values) > 0 {
-		changePct = values[len(values)-1]
-	}
-	return gin.H{
-		"unique_key":               uniqueKey,
-		"dates":                    dates,
-		"predictions":              predictions,
-		"count":                    len(dates),
-		"predicted_latest":         predictedLatest,
-		"actual_latest":            actualLatest,
-		"predicted_change_percent": changePct,
-	}
-}
-
-func stringSliceFromInterface(value interface{}) []string {
-	items, ok := value.([]interface{})
-	if !ok {
-		if typed, ok := value.([]string); ok {
-			return typed
-		}
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		text := strings.TrimSpace(fmt.Sprint(item))
-		if text != "" && text != "<nil>" {
-			out = append(out, text)
-		}
+func buildOpenAPIFutureData(uniqueKey string, data map[string]interface{}) gin.H {
+	out := gin.H{"unique_key": uniqueKey}
+	for key, value := range data {
+		out[key] = value
 	}
 	return out
-}
-
-func floatSliceFromInterface(value interface{}) []float64 {
-	switch typed := value.(type) {
-	case []float64:
-		return typed
-	case []interface{}:
-		out := make([]float64, 0, len(typed))
-		for _, item := range typed {
-			if value, ok := finiteFloat(item); ok {
-				out = append(out, value)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func finiteFloat(value interface{}) (float64, bool) {
-	switch typed := value.(type) {
-	case float64:
-		if !math.IsNaN(typed) && !math.IsInf(typed, 0) {
-			return typed, true
-		}
-	case float32:
-		value := float64(typed)
-		if !math.IsNaN(value) && !math.IsInf(value, 0) {
-			return value, true
-		}
-	case int:
-		return float64(typed), true
-	case int64:
-		return float64(typed), true
-	case json.Number:
-		if value, err := strconv.ParseFloat(string(typed), 64); err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) {
-			return value, true
-		}
-	}
-	return 0, false
-}
-
-func lastFiniteFloat(values []float64) float64 {
-	for i := len(values) - 1; i >= 0; i-- {
-		if !math.IsNaN(values[i]) && !math.IsInf(values[i], 0) {
-			return values[i]
-		}
-	}
-	return 0
-}
-
-func firstFiniteFloat(values ...interface{}) float64 {
-	for _, value := range values {
-		if parsed, ok := finiteFloat(value); ok {
-			return parsed
-		}
-	}
-	return 0
 }
 
 func (h *OpenAPIHandler) MTFPredictOnce(c *gin.Context) {

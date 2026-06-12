@@ -280,7 +280,7 @@ Query:
 
 Scope: `mtf:read`
 
-语义：先通过 `unique_key` 反查标的并确认该标的已在当前用户关注清单中，再按该 best 配置复用 Web 端 `/api/v1/mtf/predict-once` 逻辑。若已有 fresh once 缓存，直接从 once `data.future_dates` 与 `data.best_prediction_values` 返回未来预测序列；若缓存未命中，则触发 once 任务并返回任务信息，调用方可通过 `/api/open/v1/mtf/jobs/{job_id}` 查询最终结果。
+语义：先通过 `unique_key` 反查标的并确认该标的已在当前用户关注清单中，再按该 best 配置复用 Web 端 `/api/v1/mtf/predict-once` 逻辑。若已有 fresh once 缓存，`data` 直接返回 once 结果结构，包括 `future_dates`、`best_prediction_values`、`predicted_change_percent`、`latest_close`、`latest_data_date` 等字段，并额外带上请求的 `unique_key`；若缓存未命中，则触发 once 任务并返回任务信息，调用方可通过 `/api/open/v1/mtf/jobs/{job_id}` 查询最终结果。
 
 ### POST `/api/open/v1/mtf/predict-once`
 
