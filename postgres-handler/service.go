@@ -73,13 +73,31 @@ func (h *DatabaseHandler) BatchInsertStockData(dataList []StockData) error {
 		return fmt.Errorf("failed to begin transaction: %v", tx.Error)
 	}
 	deleteSQL := `
-    DELETE FROM stock_data
-    WHERE date_str = $1 AND symbol = $2 AND type = $3`
+	    DELETE FROM stock_data
+	    WHERE date_str = $1 AND symbol = $2 AND type = $3`
 	insertSQL := `
-    INSERT INTO stock_data (
-        datetime, date_str, open, close, high, low, volume, amount, amplitude,
-        percentage_change, amount_change, turnover_rate, type, symbol
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+	    INSERT INTO stock_data (
+	        datetime, date_str, open, close, high, low, volume, amount, amplitude,
+	        percentage_change, amount_change, turnover_rate, type, symbol
+	    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+	dailyUpsertSQL := `
+	    INSERT INTO daily_data (
+	        symbol, stock_type, trading_date, latest_price, change_amount, change_percent,
+	        open, high, low, volume, turnover, turnover_rate
+	    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	    ON CONFLICT (symbol, stock_type) DO UPDATE SET
+	        trading_date = EXCLUDED.trading_date,
+	        latest_price = EXCLUDED.latest_price,
+	        change_amount = EXCLUDED.change_amount,
+	        change_percent = EXCLUDED.change_percent,
+	        open = EXCLUDED.open,
+	        high = EXCLUDED.high,
+	        low = EXCLUDED.low,
+	        volume = EXCLUDED.volume,
+	        turnover = EXCLUDED.turnover,
+	        turnover_rate = EXCLUDED.turnover_rate,
+	        updated_at = NOW()
+	    WHERE daily_data.trading_date <= EXCLUDED.trading_date`
 	for _, data := range dataList {
 		// Ensure date_str is populated (YYYY-MM-DD)
 		dateStr := data.DateStr
@@ -99,6 +117,17 @@ func (h *DatabaseHandler) BatchInsertStockData(dataList []StockData) error {
 			tx.Rollback()
 			return fmt.Errorf("failed to execute batch insert: %v", err)
 		}
+		tradingDate := data.Datetime
+		if parsed, err := time.Parse("2006-01-02", dateStr); err == nil {
+			tradingDate = parsed
+		}
+		if err := tx.Exec(dailyUpsertSQL,
+			normalizedSymbol, data.Type, tradingDate, data.Close, data.AmountChange, data.PercentageChange,
+			data.Open, data.High, data.Low, data.Volume, int64(data.Amount), data.TurnoverRate,
+		).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to upsert daily_data: %v", err)
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return fmt.Errorf("failed to commit transaction: %v", err)
@@ -106,10 +135,45 @@ func (h *DatabaseHandler) BatchInsertStockData(dataList []StockData) error {
 	return nil
 }
 
+func (h *DatabaseHandler) upsertDailyDataFromEtf(tx interface {
+	Exec(string, ...interface{}) *gorm.DB
+}, d EtfDailyData) error {
+	upsertSQL := `
+	    INSERT INTO daily_data (
+	        symbol, stock_type, trading_date, name, latest_price, change_amount, change_percent,
+	        buy, sell, prev_close, open, high, low, volume, turnover, turnover_rate
+	    ) VALUES ($1, 2, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+	    ON CONFLICT (symbol, stock_type) DO UPDATE SET
+	        trading_date = EXCLUDED.trading_date,
+	        name = EXCLUDED.name,
+	        latest_price = EXCLUDED.latest_price,
+	        change_amount = EXCLUDED.change_amount,
+	        change_percent = EXCLUDED.change_percent,
+	        buy = EXCLUDED.buy,
+	        sell = EXCLUDED.sell,
+	        prev_close = EXCLUDED.prev_close,
+	        open = EXCLUDED.open,
+	        high = EXCLUDED.high,
+	        low = EXCLUDED.low,
+	        volume = EXCLUDED.volume,
+	        turnover = EXCLUDED.turnover,
+	        turnover_rate = EXCLUDED.turnover_rate,
+	        updated_at = NOW()
+	    WHERE daily_data.trading_date <= EXCLUDED.trading_date`
+	return tx.Exec(upsertSQL,
+		normalizeStockSymbol(d.Code), d.TradingDate, d.Name, d.LatestPrice, d.ChangeAmount, d.ChangePercent,
+		d.Buy, d.Sell, d.PrevClose, d.Open, d.High, d.Low, d.Volume, d.Turnover,
+	).Error
+}
+
 func (h *DatabaseHandler) UpsertEtfDaily(data *EtfDailyData) error {
+	tx := h.db.Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("failed to begin transaction: %v", tx.Error)
+	}
 	query := `
-    INSERT INTO etf_daily (
-        code, trading_date, name, latest_price, change_amount, change_percent,
+	    INSERT INTO etf_daily (
+	        code, trading_date, name, latest_price, change_amount, change_percent,
         buy, sell, prev_close, open, high, low, volume, turnover
     ) VALUES ($1, $2, $3, $4, $5, $6,
               $7, $8, $9, $10, $11, $12, $13, $14)
@@ -122,14 +186,22 @@ func (h *DatabaseHandler) UpsertEtfDaily(data *EtfDailyData) error {
         sell = EXCLUDED.sell,
         prev_close = EXCLUDED.prev_close,
         open = EXCLUDED.open,
-        high = EXCLUDED.high,
-        low = EXCLUDED.low,
-        volume = EXCLUDED.volume,
-        turnover = EXCLUDED.turnover`
-	return h.db.Exec(query,
+	        high = EXCLUDED.high,
+	        low = EXCLUDED.low,
+	        volume = EXCLUDED.volume,
+	        turnover = EXCLUDED.turnover`
+	if err := tx.Exec(query,
 		data.Code, data.TradingDate, data.Name, data.LatestPrice, data.ChangeAmount, data.ChangePercent,
 		data.Buy, data.Sell, data.PrevClose, data.Open, data.High, data.Low, data.Volume, data.Turnover,
-	).Error
+	).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := h.upsertDailyDataFromEtf(tx, *data); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to upsert daily_data from etf_daily: %v", err)
+	}
+	return tx.Commit().Error
 }
 
 func (h *DatabaseHandler) BatchInsertMTFForecast(list []MTFForecast) error {
@@ -193,6 +265,10 @@ func (h *DatabaseHandler) BatchUpsertEtfDaily(dataList []EtfDailyData) error {
 		).Error; err != nil {
 			tx.Rollback()
 			return fmt.Errorf("failed to execute etf upsert batch: %v", err)
+		}
+		if err := h.upsertDailyDataFromEtf(tx, d); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to upsert daily_data from etf batch: %v", err)
 		}
 	}
 	if err := tx.Commit().Error; err != nil {

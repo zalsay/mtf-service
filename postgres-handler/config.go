@@ -133,6 +133,54 @@ func (h *DatabaseHandler) initializeDatabase() error {
 		return fmt.Errorf("failed to create etf_daily table: %v", err)
 	}
 
+	createDailyDataSQL := `
+    CREATE TABLE IF NOT EXISTS daily_data (
+        symbol TEXT NOT NULL,
+        stock_type INTEGER NOT NULL,
+        trading_date DATE NOT NULL,
+        name TEXT,
+        latest_price NUMERIC(12,4),
+        change_amount NUMERIC(12,4),
+        change_percent NUMERIC(12,4),
+        buy NUMERIC(12,4),
+        sell NUMERIC(12,4),
+        prev_close NUMERIC(12,4),
+        open NUMERIC(12,4),
+        high NUMERIC(12,4),
+        low NUMERIC(12,4),
+        volume BIGINT,
+        turnover BIGINT,
+        turnover_rate NUMERIC(12,6),
+        created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+        PRIMARY KEY (symbol, stock_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_daily_data_trading_date ON daily_data (trading_date);
+    CREATE INDEX IF NOT EXISTS idx_daily_data_stock_type ON daily_data (stock_type);
+    `
+	if err := h.db.Exec(createDailyDataSQL).Error; err != nil {
+		return fmt.Errorf("failed to create daily_data table: %v", err)
+	}
+	alterDailyDataSQL := `
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS name TEXT;
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS latest_price NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS change_amount NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS change_percent NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS buy NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS sell NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS prev_close NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS open NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS high NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS low NUMERIC(12,4);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS volume BIGINT;
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS turnover BIGINT;
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS turnover_rate NUMERIC(12,6);
+    ALTER TABLE daily_data ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW();
+    `
+	if err := h.db.Exec(alterDailyDataSQL).Error; err != nil {
+		return fmt.Errorf("failed to migrate daily_data table: %v", err)
+	}
+
 	createIndexInfoSQL := `
     CREATE TABLE IF NOT EXISTS index_info (
         code TEXT PRIMARY KEY,

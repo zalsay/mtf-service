@@ -39,9 +39,30 @@ type EtfDailyData struct {
 	Low           float64   `json:"low" gorm:"column:low"`
 	Volume        int64     `json:"volume" gorm:"column:volume"`
 	Turnover      int64     `json:"turnover" gorm:"column:turnover"`
+	TurnoverRate  float64   `json:"turnover_rate" gorm:"column:turnover_rate"`
 }
 
 func (EtfDailyData) TableName() string { return "etf_daily" }
+
+type DailyData struct {
+	Symbol        string    `json:"symbol" gorm:"column:symbol;primaryKey"`
+	StockType     int       `json:"stock_type" gorm:"column:stock_type;primaryKey"`
+	TradingDate   time.Time `json:"trading_date" gorm:"column:trading_date"`
+	Name          string    `json:"name" gorm:"column:name"`
+	LatestPrice   float64   `json:"latest_price" gorm:"column:latest_price"`
+	ChangeAmount  float64   `json:"change_amount" gorm:"column:change_amount"`
+	ChangePercent float64   `json:"change_percent" gorm:"column:change_percent"`
+	Buy           float64   `json:"buy" gorm:"column:buy"`
+	Sell          float64   `json:"sell" gorm:"column:sell"`
+	PrevClose     float64   `json:"prev_close" gorm:"column:prev_close"`
+	Open          float64   `json:"open" gorm:"column:open"`
+	High          float64   `json:"high" gorm:"column:high"`
+	Low           float64   `json:"low" gorm:"column:low"`
+	Volume        int64     `json:"volume" gorm:"column:volume"`
+	Turnover      int64     `json:"turnover" gorm:"column:turnover"`
+}
+
+func (DailyData) TableName() string { return "daily_data" }
 
 type IndexInfo struct {
 	Code        string    `json:"code" gorm:"column:code;primaryKey"`

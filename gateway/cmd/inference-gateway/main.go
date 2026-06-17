@@ -200,7 +200,9 @@ func main() {
 			SupportsDirectCov: false,
 			SupportsNonCov:    false,
 		},
-		{
+	}
+	if rocmURL != "" && rocmConcurrency > 0 {
+		endpoints = append(endpoints, backend.Endpoint{
 			Name:              "rocm",
 			Role:              models.BackendRoleMain,
 			URL:               rocmURL,
@@ -208,7 +210,7 @@ func main() {
 			SupportsCov:       true,
 			SupportsDirectCov: true,
 			SupportsNonCov:    true,
-		},
+		})
 	}
 	if cpuXregURL != "" && cpuXregConcurrency > 0 {
 		endpoints = append(endpoints, backend.Endpoint{

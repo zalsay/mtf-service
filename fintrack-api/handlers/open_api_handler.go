@@ -151,7 +151,7 @@ func (h *OpenAPIHandler) ETFQuotes(c *gin.Context) {
 		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
 		return
 	}
-	quotes, err := h.watchlist.GetLatestQuotesBySymbols(req.Symbols)
+	quotes, err := h.watchlist.GetLatestQuotes(&req)
 	if err != nil {
 		writeOpenAPIError(c, http.StatusInternalServerError, "quotes_failed", err.Error(), false)
 		return

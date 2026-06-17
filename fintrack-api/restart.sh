@@ -80,8 +80,8 @@ fi
 server_port="$(read_configured_port)"
 stop_port_processes "$server_port"
 
-echo "Starting fintrack-api with go run ."
-nohup go run . >> "$LOG_FILE" 2>&1 &
+echo "Starting fintrack-api with ./run"
+nohup ./run >> "$LOG_FILE" 2>&1 &
 new_pid="$!"
 echo "$new_pid" > "$PID_FILE"
 

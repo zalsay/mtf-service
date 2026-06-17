@@ -1370,10 +1370,16 @@ export const backtestAPI = {
 };
 
 export const quotesAPI = {
-  batchLatest: async (symbols: string[]): Promise<{ quotes: Array<{ symbol: string; latest_price?: number; change_percent?: number; trading_date?: string; turnover_rate?: number }> }> => {
+  batchLatest: async (
+    symbols: Array<string | { symbol: string; stock_type?: number }>,
+  ): Promise<{ quotes: Array<{ symbol: string; latest_price?: number; change_percent?: number; trading_date?: string; turnover_rate?: number }> }> => {
+    const useItems = symbols.some((item) => typeof item !== 'string');
+    const body = useItems
+      ? { items: symbols.map((item) => typeof item === 'string' ? { symbol: item } : item) }
+      : { symbols };
     return apiRequest('/quotes/batch-latest', {
       method: 'POST',
-      body: JSON.stringify({ symbols }),
+      body: JSON.stringify(body),
     });
   },
 };

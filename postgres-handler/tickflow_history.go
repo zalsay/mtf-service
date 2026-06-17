@@ -34,6 +34,7 @@ const (
 	defaultTickflowHTTPTimeout  = 30 * time.Second
 	defaultTickflowTradingCheck = "000001.SH"
 	defaultHistoryProviderOrder = "tickflow,daily,eastmoney,baidu"
+	defaultHistoryPersistBatch  = 50
 )
 
 type TickflowHistoryRequest struct {
@@ -89,10 +90,19 @@ type tickflowCompactKlineData struct {
 }
 
 type tickflowInstrumentsResponse struct {
-	Data []struct {
-		Symbol string `json:"symbol"`
-		Name   string `json:"name"`
-	} `json:"data"`
+	Data []TickflowInstrument `json:"data"`
+}
+
+type TickflowInstrument struct {
+	Symbol      string         `json:"symbol"`
+	Exchange    string         `json:"exchange,omitempty"`
+	Code        string         `json:"code,omitempty"`
+	Name        string         `json:"name,omitempty"`
+	Region      string         `json:"region,omitempty"`
+	Type        string         `json:"type,omitempty"`
+	Ext         map[string]any `json:"ext,omitempty"`
+	StockType   int            `json:"stock_type,omitempty"`
+	ListingDate string         `json:"listing_date,omitempty"`
 }
 
 type tickflowAPIError struct {
@@ -140,6 +150,7 @@ func (h *DatabaseHandler) tickflowHistoryHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": "HISTORY_FETCH_FAILED", "message": err.Error()})
 		return
 	}
+	h.persistTickflowHistoryAsync(req.Symbol, stockType, records)
 
 	c.JSON(http.StatusOK, TickflowHistoryResponse{
 		Code:      200,
@@ -149,6 +160,116 @@ func (h *DatabaseHandler) tickflowHistoryHandler(c *gin.Context) {
 		Rows:      len(records),
 		Data:      records,
 	})
+}
+
+func (h *DatabaseHandler) persistTickflowHistoryAsync(symbol string, stockType int, records []TickflowMarketRecord) {
+	if h == nil || len(records) == 0 {
+		return
+	}
+	data := tickflowRecordsToStockData(symbol, stockType, records)
+	if len(data) == 0 {
+		return
+	}
+	go func() {
+		batchSize := historyPersistBatchSize()
+		for offset := 0; offset < len(data); offset += batchSize {
+			end := offset + batchSize
+			if end > len(data) {
+				end = len(data)
+			}
+			if err := h.BatchInsertStockData(data[offset:end]); err != nil {
+				log.Printf(
+					"market history async persist failed: symbol=%s stock_type=%d offset=%d size=%d err=%v",
+					normalizeStockSymbol(symbol),
+					stockType,
+					offset,
+					end-offset,
+					err,
+				)
+				return
+			}
+		}
+		log.Printf(
+			"market history async persist complete: symbol=%s stock_type=%d rows=%d batch_size=%d",
+			normalizeStockSymbol(symbol),
+			stockType,
+			len(data),
+			batchSize,
+		)
+	}()
+}
+
+func historyPersistBatchSize() int {
+	raw := strings.TrimSpace(getEnv("HISTORY_ASYNC_PERSIST_BATCH_SIZE", ""))
+	if raw == "" {
+		return defaultHistoryPersistBatch
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return defaultHistoryPersistBatch
+	}
+	return value
+}
+
+func tickflowRecordsToStockData(symbol string, stockType int, records []TickflowMarketRecord) []StockData {
+	storageSymbol := normalizeStockSymbol(firstNonEmpty(symbol, tickflowRecordSymbol(records)))
+	data := make([]StockData, 0, len(records))
+	for _, record := range records {
+		dt, dateStr, ok := tickflowRecordDateTime(record)
+		if !ok {
+			continue
+		}
+		data = append(data, StockData{
+			Datetime:         dt,
+			DateStr:          dateStr,
+			Open:             record.Open,
+			Close:            record.Close,
+			High:             record.High,
+			Low:              record.Low,
+			Volume:           record.Volume,
+			Amount:           record.Amount,
+			Amplitude:        record.Amplitude,
+			PercentageChange: record.PercentageChange,
+			AmountChange:     record.AmountChange,
+			TurnoverRate:     record.TurnoverRate,
+			Type:             stockType,
+			Symbol:           storageSymbol,
+		})
+	}
+	return data
+}
+
+func tickflowRecordSymbol(records []TickflowMarketRecord) string {
+	for _, record := range records {
+		if strings.TrimSpace(record.Symbol) != "" {
+			return record.Symbol
+		}
+	}
+	return ""
+}
+
+func tickflowRecordDateTime(record TickflowMarketRecord) (time.Time, string, bool) {
+	dateStr := strings.TrimSpace(firstNonEmpty(record.DateStr, record.TradeDate))
+	if strings.TrimSpace(record.Datetime) != "" {
+		if dt, err := time.Parse(time.RFC3339, record.Datetime); err == nil {
+			if dateStr == "" {
+				dateStr = dt.Format("2006-01-02")
+			}
+			return dt, dateStr, true
+		}
+		if dt, err := time.Parse("2006-01-02", record.Datetime); err == nil {
+			if dateStr == "" {
+				dateStr = dt.Format("2006-01-02")
+			}
+			return dt, dateStr, true
+		}
+	}
+	if dateStr != "" {
+		if dt, err := time.Parse("2006-01-02", dateStr); err == nil {
+			return dt, dateStr, true
+		}
+	}
+	return time.Time{}, "", false
 }
 
 func (h *DatabaseHandler) tickflowTradingDayHandler(c *gin.Context) {
@@ -192,7 +313,13 @@ func (h *DatabaseHandler) tickflowInstrumentsHandler(c *gin.Context) {
 		return
 	}
 
-	items := make([]gin.H, 0)
+	type requestedInstrument struct {
+		Raw       string
+		Symbol    string
+		StockType int
+	}
+	requested := make([]requestedInstrument, 0)
+	tickflowSymbols := make([]string, 0)
 	for _, raw := range strings.Split(rawSymbols, ",") {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
@@ -200,12 +327,39 @@ func (h *DatabaseHandler) tickflowInstrumentsHandler(c *gin.Context) {
 		}
 		stockType := inferStockTypeFromSymbol(raw)
 		symbol := toTickflowSymbol(raw, stockType)
-		name := h.lookupInstrumentName(c.Request.Context(), symbol, stockType)
-		items = append(items, gin.H{
-			"symbol":     symbol,
-			"name":       name,
-			"stock_type": stockType,
-		})
+		requested = append(requested, requestedInstrument{Raw: raw, Symbol: symbol, StockType: stockType})
+		tickflowSymbols = append(tickflowSymbols, symbol)
+	}
+
+	instrumentsBySymbol := map[string]TickflowInstrument{}
+	if len(tickflowSymbols) > 0 {
+		instruments, err := fetchTickflowInstruments(c.Request.Context(), tickflowSymbols)
+		if err != nil {
+			log.Printf("tickflow instruments metadata fetch failed: symbols=%s err=%v", strings.Join(tickflowSymbols, ","), err)
+		}
+		for _, instrument := range instruments {
+			instrumentsBySymbol[strings.ToUpper(strings.TrimSpace(instrument.Symbol))] = normalizeTickflowInstrument(instrument)
+		}
+	}
+
+	items := make([]TickflowInstrument, 0, len(requested))
+	for _, item := range requested {
+		instrument, ok := instrumentsBySymbol[strings.ToUpper(item.Symbol)]
+		if !ok {
+			instrument = TickflowInstrument{
+				Symbol: item.Symbol,
+				Code:   digitsOnly(item.Symbol),
+				Name:   h.lookupInstrumentName(c.Request.Context(), item.Symbol, item.StockType),
+			}
+		}
+		instrument.StockType = item.StockType
+		if strings.TrimSpace(instrument.Symbol) == "" {
+			instrument.Symbol = item.Symbol
+		}
+		if strings.TrimSpace(instrument.Code) == "" {
+			instrument.Code = digitsOnly(instrument.Symbol)
+		}
+		items = append(items, instrument)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"code": 200, "provider": tickflowProviderName, "data": items})
@@ -300,23 +454,63 @@ func fetchTickflowKlines(ctx context.Context, symbol string, startDate time.Time
 	return parsed.Data, nil
 }
 
-func fetchTickflowInstrumentName(ctx context.Context, symbol string) (string, error) {
+func fetchTickflowInstruments(ctx context.Context, symbols []string) ([]TickflowInstrument, error) {
 	values := url.Values{}
-	values.Set("symbols", symbol)
+	cleaned := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		symbol = strings.TrimSpace(symbol)
+		if symbol != "" {
+			cleaned = append(cleaned, symbol)
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil, nil
+	}
+	values.Set("symbols", strings.Join(cleaned, ","))
 	body, err := tickflowGet(ctx, tickflowBaseURL()+"/v1/instruments?"+values.Encode())
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	var parsed tickflowInstrumentsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+	result := make([]TickflowInstrument, 0, len(parsed.Data))
+	for _, item := range parsed.Data {
+		result = append(result, normalizeTickflowInstrument(item))
+	}
+	return result, nil
+}
+
+func fetchTickflowInstrumentName(ctx context.Context, symbol string) (string, error) {
+	instruments, err := fetchTickflowInstruments(ctx, []string{symbol})
+	if err != nil {
 		return "", err
 	}
-	for _, item := range parsed.Data {
+	for _, item := range instruments {
 		if strings.EqualFold(item.Symbol, symbol) {
 			return strings.TrimSpace(item.Name), nil
 		}
 	}
 	return "", nil
+}
+
+func normalizeTickflowInstrument(instrument TickflowInstrument) TickflowInstrument {
+	instrument.Symbol = strings.TrimSpace(instrument.Symbol)
+	instrument.Exchange = strings.TrimSpace(instrument.Exchange)
+	instrument.Code = strings.TrimSpace(instrument.Code)
+	instrument.Name = strings.TrimSpace(instrument.Name)
+	instrument.Region = strings.TrimSpace(instrument.Region)
+	instrument.Type = strings.TrimSpace(instrument.Type)
+	if strings.TrimSpace(instrument.Code) == "" {
+		instrument.Code = digitsOnly(instrument.Symbol)
+	}
+	if instrument.Ext != nil {
+		if listingDate, ok := instrument.Ext["listing_date"].(string); ok {
+			instrument.ListingDate = strings.TrimSpace(listingDate)
+		}
+	}
+	return instrument
 }
 
 func tickflowGet(ctx context.Context, endpoint string) ([]byte, error) {

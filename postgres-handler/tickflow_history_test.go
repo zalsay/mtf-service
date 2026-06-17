@@ -128,3 +128,32 @@ func TestDefaultHistoryProviderOrderDoesNotRequireEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeTickflowInstrumentPromotesListingDate(t *testing.T) {
+	got := normalizeTickflowInstrument(TickflowInstrument{
+		Symbol:   " 515880.SH ",
+		Exchange: " SH ",
+		Name:     " 通信ETF国泰 ",
+		Region:   " CN ",
+		Type:     " etf ",
+		Ext: map[string]any{
+			"listing_date": "2019-09-06",
+		},
+	})
+
+	if got.Symbol != "515880.SH" {
+		t.Fatalf("Symbol = %q, want 515880.SH", got.Symbol)
+	}
+	if got.Code != "515880" {
+		t.Fatalf("Code = %q, want 515880", got.Code)
+	}
+	if got.Exchange != "SH" || got.Region != "CN" || got.Type != "etf" {
+		t.Fatalf("unexpected metadata: %#v", got)
+	}
+	if got.Name != "通信ETF国泰" {
+		t.Fatalf("Name = %q, want 通信ETF国泰", got.Name)
+	}
+	if got.ListingDate != "2019-09-06" {
+		t.Fatalf("ListingDate = %q, want 2019-09-06", got.ListingDate)
+	}
+}

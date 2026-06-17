@@ -10,6 +10,7 @@ REMOTE_BASE_DIR="${REMOTE_BASE_DIR:-/root/workers}"
 SSH_KNOWN_HOSTS_FILE="${SSH_KNOWN_HOSTS_FILE:-${HOME}/.ssh/known_hosts}"
 REMOTE_TMP_NAME="${REMOTE_TMP_NAME:-run.codex.tmp}"
 REMOTE_BINARY_NAME="${REMOTE_BINARY_NAME:-run}"
+USE_SSH_AGENT=0
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -17,7 +18,7 @@ log() {
 
 usage() {
     cat <<'EOF'
-Usage: ./deploy.sh [api|handler|all]
+Usage: ./deploy.sh [--agent] [api|handler|all]
 
 Targets:
   api      Build fintrack-api/run, upload to /root/workers/fintrack-api/run, restart fintrack-api
@@ -68,9 +69,11 @@ deploy_service() {
 
     local ssh_opts=(
         -o BatchMode=yes
-        -o "IdentityAgent=${SSH_AUTH_SOCK}"
         -o "UserKnownHostsFile=${SSH_KNOWN_HOSTS_FILE}"
     )
+    if [[ "${USE_SSH_AGENT}" == "1" ]]; then
+        ssh_opts+=(-o "IdentityAgent=${SSH_AUTH_SOCK}")
+    fi
     local scp_opts=("${ssh_opts[@]}")
 
     log "ensuring remote directory ${REMOTE_HOST}:${remote_dir}"
@@ -97,17 +100,35 @@ EOF
 }
 
 main() {
-    local target="${1:-api}"
-    if [[ "${target}" == "-h" || "${target}" == "--help" ]]; then
-        usage
-        exit 0
-    fi
+    local target="api"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --agent)
+                USE_SSH_AGENT=1
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            api|handler|all)
+                target="$1"
+                shift
+                ;;
+            *)
+                usage >&2
+                exit 2
+                ;;
+        esac
+    done
 
     require_cmd make
     require_cmd scp
     require_cmd ssh
-    require_cmd ssh-add
-    require_ssh_agent
+    if [[ "${USE_SSH_AGENT}" == "1" ]]; then
+        require_cmd ssh-add
+        require_ssh_agent
+    fi
 
     case "${target}" in
         api)
@@ -125,8 +146,13 @@ main() {
                 "${HANDLER_REMOTE_CONTAINER:-pos-handler}"
             ;;
         all)
-            "$0" api
-            "$0" handler
+            if [[ "${USE_SSH_AGENT}" == "1" ]]; then
+                "$0" --agent api
+                "$0" --agent handler
+            else
+                "$0" api
+                "$0" handler
+            fi
             ;;
         *)
             usage >&2

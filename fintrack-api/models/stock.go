@@ -321,7 +321,13 @@ type MTFBacktestRequest struct {
 }
 
 type BatchSymbolsRequest struct {
-	Symbols []string `json:"symbols" binding:"required"`
+	Symbols []string           `json:"symbols"`
+	Items   []BatchSymbolInput `json:"items"`
+}
+
+type BatchSymbolInput struct {
+	Symbol    string `json:"symbol" binding:"required"`
+	StockType int    `json:"stock_type"`
 }
 
 type LatestQuote struct {

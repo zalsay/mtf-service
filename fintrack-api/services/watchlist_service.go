@@ -434,19 +434,18 @@ func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlist
 		return newWatchlistLimitExceededError(limit, count)
 	}
 	candidates := symbolNameLookupCandidates(symLower)
-	var table string
-	if stockType == 2 {
-		table = "etf_daily"
-	} else {
-		table = "a_stock_comment_daily"
-	}
-	query := fmt.Sprintf("SELECT COALESCE(name, '') FROM %s WHERE code = ANY($1) ORDER BY trading_date DESC LIMIT 1", table)
-	err = s.db.Conn.QueryRow(query, pq.Array(candidates)).Scan(&name)
+	err = s.db.Conn.QueryRow(`
+		SELECT COALESCE(name, '')
+		FROM daily_data
+		WHERE stock_type = $1
+		  AND regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g') = ANY($2)
+		LIMIT 1
+	`, stockType, pq.Array(candidates)).Scan(&name)
 	if err == sql.ErrNoRows {
 		return ErrSymbolNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("failed to query %s: %v", table, err)
+		return fmt.Errorf("failed to query daily_data: %v", err)
 	}
 
 	nameStr := strings.TrimSpace(name.String)
@@ -474,20 +473,53 @@ func (s *WatchlistService) AddToWatchlist(userID int, req *models.AddToWatchlist
 }
 
 func (s *WatchlistService) GetLatestQuotesBySymbols(symbols []string) ([]models.LatestQuote, error) {
+	return s.GetLatestQuotes(&models.BatchSymbolsRequest{Symbols: symbols})
+}
+
+func (s *WatchlistService) GetLatestQuotes(req *models.BatchSymbolsRequest) ([]models.LatestQuote, error) {
+	if req == nil {
+		return []models.LatestQuote{}, nil
+	}
+	symbols := req.Symbols
+	if len(req.Items) > 0 {
+		symbols = make([]string, 0, len(req.Items))
+		for _, item := range req.Items {
+			symbols = append(symbols, item.Symbol)
+		}
+	}
 	if len(symbols) == 0 {
 		return []models.LatestQuote{}, nil
 	}
 
 	codes := make([]string, 0, len(symbols))
+	entryTypeOrders := make([][]int, 0, len(symbols))
 	codeToSymbol := make(map[string]string, len(symbols))
-	for _, sym := range symbols {
+	typeCodes := make(map[int][]string)
+	addCode := func(sym string, stockTypes []int) {
 		c := normalizeMarketQuoteCode(sym)
 		if c == "" {
-			continue
+			return
 		}
 		codes = append(codes, c)
+		entryTypeOrders = append(entryTypeOrders, stockTypes)
 		if _, exists := codeToSymbol[c]; !exists {
 			codeToSymbol[c] = sym
+		}
+		for _, stockType := range stockTypes {
+			typeCodes[stockType] = append(typeCodes[stockType], c)
+		}
+	}
+	if len(req.Items) > 0 {
+		for _, item := range req.Items {
+			stockType := item.StockType
+			if stockType != 1 && stockType != 2 {
+				stockType = inferLookupStockTypes(item.Symbol)[0]
+			}
+			addCode(item.Symbol, []int{stockType})
+		}
+	} else {
+		for _, sym := range symbols {
+			addCode(sym, inferLookupStockTypes(sym))
 		}
 	}
 
@@ -495,101 +527,82 @@ func (s *WatchlistService) GetLatestQuotesBySymbols(symbols []string) ([]models.
 		return []models.LatestQuote{}, nil
 	}
 
-	placeholders := make([]string, len(codes))
-	args := make([]interface{}, len(codes))
-	for i, c := range codes {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = c
-	}
-
-	qStock := fmt.Sprintf(`
-        SELECT DISTINCT ON (regexp_replace(lower(trim(code)), '[^0-9]', '', 'g'))
-            code, trading_date, latest_price, change_percent, turnover_rate
-        FROM a_stock_comment_daily
-        WHERE regexp_replace(lower(trim(code)), '[^0-9]', '', 'g') IN (%s)
-        ORDER BY regexp_replace(lower(trim(code)), '[^0-9]', '', 'g'), trading_date DESC
-    `, strings.Join(placeholders, ","))
-
-	rows, err := s.db.Conn.Query(qStock, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query a_stock_comment_daily: %v", err)
-	}
-	defer rows.Close()
-
 	quotes := make(map[string]models.LatestQuote)
-	for rows.Next() {
-		var code string
-		var dt time.Time
-		var price sql.NullFloat64
-		var change sql.NullFloat64
-		var turnover sql.NullFloat64
-		if err := rows.Scan(&code, &dt, &price, &change, &turnover); err != nil {
-			return nil, fmt.Errorf("failed to scan a_stock_comment_daily: %v", err)
+	for _, stockType := range []int{1, 2} {
+		groupCodes := uniqueStrings(typeCodes[stockType])
+		if len(groupCodes) == 0 {
+			continue
 		}
-		normalizedCode := normalizeMarketQuoteCode(code)
-		sym := codeToSymbol[normalizedCode]
-		p := models.LatestQuote{Symbol: sym}
-		ds := dt.Format("2006-01-02")
-		p.TradingDate = &ds
-		if price.Valid {
-			p.LatestPrice = &price.Float64
+		rows, err := s.db.Conn.Query(`
+		SELECT
+			symbol AS code_norm,
+			trading_date,
+			latest_price,
+			change_percent,
+			turnover_rate
+		FROM daily_data
+		WHERE stock_type = $1
+		  AND symbol = ANY($2)
+	`, stockType, pq.Array(groupCodes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to query daily_data stock_type=%d: %v", stockType, err)
 		}
-		if change.Valid {
-			p.ChangePercent = &change.Float64
+		for rows.Next() {
+			var code string
+			var dt time.Time
+			var price sql.NullFloat64
+			var change sql.NullFloat64
+			var turnover sql.NullFloat64
+			if err := rows.Scan(&code, &dt, &price, &change, &turnover); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan daily_data stock_type=%d: %v", stockType, err)
+			}
+			normalizedCode := normalizeMarketQuoteCode(code)
+			sym := codeToSymbol[normalizedCode]
+			p := models.LatestQuote{Symbol: sym}
+			ds := dt.Format("2006-01-02")
+			p.TradingDate = &ds
+			if price.Valid {
+				p.LatestPrice = &price.Float64
+			}
+			if change.Valid {
+				p.ChangePercent = &change.Float64
+			}
+			if turnover.Valid {
+				p.TurnoverRate = &turnover.Float64
+			}
+			key := quoteLookupKey(normalizedCode, stockType)
+			quotes[key] = p
 		}
-		if turnover.Valid {
-			p.TurnoverRate = &turnover.Float64
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to iterate daily_data stock_type=%d: %v", stockType, err)
 		}
-		quotes[normalizedCode] = p
-	}
-
-	qEtf := fmt.Sprintf(`
-        SELECT DISTINCT ON (regexp_replace(lower(trim(code)), '[^0-9]', '', 'g'))
-            code, trading_date, latest_price, change_percent
-        FROM etf_daily
-        WHERE regexp_replace(lower(trim(code)), '[^0-9]', '', 'g') IN (%s)
-        ORDER BY regexp_replace(lower(trim(code)), '[^0-9]', '', 'g'), trading_date DESC
-    `, strings.Join(placeholders, ","))
-
-	rows2, err := s.db.Conn.Query(qEtf, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query etf_daily: %v", err)
-	}
-	defer rows2.Close()
-	for rows2.Next() {
-		var code string
-		var dt time.Time
-		var price sql.NullFloat64
-		var change sql.NullFloat64
-		if err := rows2.Scan(&code, &dt, &price, &change); err != nil {
-			return nil, fmt.Errorf("failed to scan etf_daily: %v", err)
-		}
-		normalizedCode := normalizeMarketQuoteCode(code)
-		sym := codeToSymbol[normalizedCode]
-		p := models.LatestQuote{Symbol: sym}
-		ds := dt.Format("2006-01-02")
-		p.TradingDate = &ds
-		if price.Valid {
-			p.LatestPrice = &price.Float64
-		}
-		if change.Valid {
-			p.ChangePercent = &change.Float64
-		}
-		if _, exists := quotes[normalizedCode]; !exists {
-			quotes[normalizedCode] = p
-		}
+		rows.Close()
 	}
 
 	result := make([]models.LatestQuote, 0, len(symbols))
-	for _, c := range codes {
-		if q, ok := quotes[c]; ok {
-			result = append(result, q)
-		} else {
-			result = append(result, models.LatestQuote{Symbol: codeToSymbol[c]})
+	for i, c := range codes {
+		var found *models.LatestQuote
+		for _, stockType := range entryTypeOrders[i] {
+			if q, ok := quotes[quoteLookupKey(c, stockType)]; ok {
+				quote := q
+				found = &quote
+				break
+			}
 		}
+		if found == nil {
+			empty := models.LatestQuote{Symbol: codeToSymbol[c]}
+			found = &empty
+		}
+		result = append(result, *found)
 	}
 	mergeLatestExternalQuotes(result, codes, codeToSymbol, fetchEastmoneyPreviousTradingQuotes(codes, codeToSymbol))
 	return result, nil
+}
+
+func quoteLookupKey(code string, stockType int) string {
+	return fmt.Sprintf("%d:%s", stockType, code)
 }
 
 func normalizeMarketQuoteCode(symbol string) string {
@@ -764,30 +777,20 @@ func uniqueStrings(values []string) []string {
 func (s *WatchlistService) LookupStockName(symbol string, stockType int) (string, error) {
 	var name sql.NullString
 	candidates := symbolNameLookupCandidates(symbol)
-	var table string
-	if stockType == 2 {
-		table = "etf_daily"
-		query := fmt.Sprintf("SELECT COALESCE(name, '') FROM %s WHERE code = ANY($1) ORDER BY trading_date DESC LIMIT 1", table)
-		err := s.db.Conn.QueryRow(query, pq.Array(candidates)).Scan(&name)
-		if err == sql.ErrNoRows {
-			return "", ErrSymbolNotFound
-		}
-		if err != nil {
-			return "", fmt.Errorf("failed to query %s: %v", table, err)
-		}
-		return strings.TrimSpace(name.String), nil
-	} else {
-		table = "a_stock_comment_daily"
-		query := fmt.Sprintf("SELECT COALESCE(name, '') FROM %s WHERE code = ANY($1) ORDER BY trading_date DESC LIMIT 1", table)
-		err := s.db.Conn.QueryRow(query, pq.Array(candidates)).Scan(&name)
-		if err == sql.ErrNoRows {
-			return "", ErrSymbolNotFound
-		}
-		if err != nil {
-			return "", fmt.Errorf("failed to query %s: %v", table, err)
-		}
-		return strings.TrimSpace(name.String), nil
+	err := s.db.Conn.QueryRow(`
+		SELECT COALESCE(name, '')
+		FROM daily_data
+		WHERE stock_type = $1
+		  AND regexp_replace(lower(trim(symbol)), '[^0-9]', '', 'g') = ANY($2)
+		LIMIT 1
+	`, stockType, pq.Array(candidates)).Scan(&name)
+	if err == sql.ErrNoRows {
+		return "", ErrSymbolNotFound
 	}
+	if err != nil {
+		return "", fmt.Errorf("failed to query daily_data: %v", err)
+	}
+	return strings.TrimSpace(name.String), nil
 }
 
 func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, error) {
@@ -802,9 +805,19 @@ func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, err
 			COALESCE(tbp.unique_key, ''),
 			COALESCE(tbp.mtf_version, ''),
 			COALESCE(uw.strategy_unique_key, ''),
-			COALESCE(tsp.name, '')
+			COALESCE(tsp.name, ''),
+			dd.latest_price,
+			dd.change_percent,
+			dd.volume
 		FROM user_watchlist uw
 		LEFT JOIN stocks s ON uw.symbol = s.symbol
+		LEFT JOIN daily_data dd
+			ON dd.stock_type = COALESCE(uw.stock_type, 1)
+			AND regexp_replace(lower(trim(dd.symbol)), '[^0-9]', '', 'g') = CASE
+				WHEN regexp_replace(lower(trim(uw.symbol)), '[^0-9]', '', 'g') <> ''
+				THEN regexp_replace(lower(trim(uw.symbol)), '[^0-9]', '', 'g')
+				ELSE lower(trim(uw.symbol))
+			END
 		LEFT JOIN LATERAL (
 			SELECT unique_key, mtf_version
 			FROM mtf_best_predictions
@@ -835,12 +848,16 @@ func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, err
 		var item models.WatchlistItem
 		var uniqueKey, version, strategyKey, strategyName string
 		var stockType int
+		var price sql.NullFloat64
+		var changePercent sql.NullFloat64
+		var volume sql.NullInt64
 
 		err := rows.Scan(
 			&item.ID, &item.Stock.Symbol, &item.AddedAt, &item.Notes, &stockType,
 			&item.Stock.CompanyName,
 			&uniqueKey, &version,
 			&strategyKey, &strategyName,
+			&price, &changePercent, &volume,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan watchlist item: %v", err)
@@ -848,6 +865,21 @@ func (s *WatchlistService) GetWatchlist(userID int) ([]models.WatchlistItem, err
 		if strings.TrimSpace(item.Stock.CompanyName) == "" {
 			if name, lookupErr := s.LookupStockName(item.Stock.Symbol, stockType); lookupErr == nil {
 				item.Stock.CompanyName = name
+			}
+		}
+		if price.Valid {
+			var changePercentValue *float64
+			if changePercent.Valid {
+				changePercentValue = &changePercent.Float64
+			}
+			var volumeValue *int64
+			if volume.Valid {
+				volumeValue = &volume.Int64
+			}
+			item.CurrentPrice = &models.StockPrice{
+				Price:         price.Float64,
+				ChangePercent: changePercentValue,
+				Volume:        volumeValue,
 			}
 		}
 

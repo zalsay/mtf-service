@@ -149,3 +149,29 @@ func TestSyncSymbolRangeUsesLookbackWindow(t *testing.T) {
 		t.Fatalf("expected lookback range 20260425~20260430, got %s~%s", historyPayload.StartDate, historyPayload.EndDate)
 	}
 }
+
+func TestDailyStockSyncerTradingDayUsesToken(t *testing.T) {
+	historyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/trading-day" {
+			t.Fatalf("unexpected trading day path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("X-Token"); got != "token" {
+			t.Fatalf("expected X-Token header, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(tradingDayResponse{
+			Code:         http.StatusOK,
+			Date:         r.URL.Query().Get("date"),
+			IsTradingDay: true,
+		})
+	}))
+	defer historyServer.Close()
+
+	syncer := NewDailyStockSyncer("http://postgres.invalid", historyServer.URL, "token", time.UTC, 22, 0, 4, 0)
+	ok, err := syncer.isTradingDay(context.Background(), "20260616")
+	if err != nil {
+		t.Fatalf("isTradingDay() error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected trading day")
+	}
+}

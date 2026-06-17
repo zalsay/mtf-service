@@ -127,6 +127,7 @@ func (s *Level1DailySyncer) isTradingDay(ctx context.Context, date string) (bool
 	if err != nil {
 		return false, err
 	}
+	req.Header.Set("X-Token", s.apiToken)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return false, err

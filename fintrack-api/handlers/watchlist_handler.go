@@ -244,12 +244,12 @@ func (h *WatchlistHandler) GetBatchLatestQuotes(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if len(req.Symbols) == 0 {
+	if len(req.Symbols) == 0 && len(req.Items) == 0 {
 		c.JSON(http.StatusOK, gin.H{"quotes": []models.LatestQuote{}})
 		return
 	}
 
-	quotes, err := h.watchlistService.GetLatestQuotesBySymbols(req.Symbols)
+	quotes, err := h.watchlistService.GetLatestQuotes(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

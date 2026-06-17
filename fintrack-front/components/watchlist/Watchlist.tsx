@@ -1228,12 +1228,15 @@ const Watchlist: React.FC<WatchlistProps> = ({
           !!item && !!item.stock?.symbol,
       );
       setWatchlistItems(validWatchlistItems);
-      const symbols = validWatchlistItems
-        .map((it: WatchlistItem) => getItemSymbol(it))
-        .filter(Boolean) as string[];
-      if (symbols.length > 0) {
+      const quoteItems = validWatchlistItems
+        .map((it: WatchlistItem) => ({
+          symbol: getItemSymbol(it),
+          stock_type: it.stock_type || 1,
+        }))
+        .filter((item) => !!item.symbol);
+      if (quoteItems.length > 0) {
         try {
-          const res = await quotesAPI.batchLatest(symbols);
+          const res = await quotesAPI.batchLatest(quoteItems);
           const map: Record<
             string,
             {

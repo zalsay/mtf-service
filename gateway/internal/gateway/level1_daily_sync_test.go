@@ -57,6 +57,9 @@ func TestLevel1RunOnceSkipsNonTradingDay(t *testing.T) {
 		if r.URL.Path != "/api/v1/trading-day" {
 			t.Fatalf("unexpected history path: %s", r.URL.Path)
 		}
+		if got := r.Header.Get("X-Token"); got != "token" {
+			t.Fatalf("expected X-Token header, got %q", got)
+		}
 		_ = json.NewEncoder(w).Encode(tradingDayResponse{
 			Code:         http.StatusOK,
 			Date:         r.URL.Query().Get("date"),
