@@ -86,8 +86,9 @@ func (s *Level1DailySyncer) loop(ctx context.Context) {
 
 func (s *Level1DailySyncer) RunOnce(ctx context.Context) error {
 	now := time.Now().In(s.location)
-	targetDate := now.Format("20060102")
-	targetDateDashed := now.Format("2006-01-02")
+	target := now.AddDate(0, 0, -1)
+	targetDate := target.Format("20060102")
+	targetDateDashed := target.Format("2006-01-02")
 
 	if s.historyBaseURL != "" {
 		isTradingDay, err := s.isTradingDay(ctx, targetDate)

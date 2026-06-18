@@ -605,6 +605,91 @@ func quoteLookupKey(code string, stockType int) string {
 	return fmt.Sprintf("%d:%s", stockType, code)
 }
 
+func (s *WatchlistService) GetLatestDailyQuotes(req *models.BatchSymbolsRequest) ([]models.LatestQuote, error) {
+	if req == nil || len(req.Items) == 0 {
+		return []models.LatestQuote{}, nil
+	}
+	typeCodes := make(map[int][]string)
+	codeToSymbol := make(map[string]string, len(req.Items))
+	for _, item := range req.Items {
+		stockType := item.StockType
+		if stockType != 1 && stockType != 2 {
+			stockType = inferLookupStockTypes(item.Symbol)[0]
+		}
+		code := normalizeMarketQuoteCode(item.Symbol)
+		if code == "" {
+			continue
+		}
+		typeCodes[stockType] = append(typeCodes[stockType], code)
+		if _, exists := codeToSymbol[quoteLookupKey(code, stockType)]; !exists {
+			codeToSymbol[quoteLookupKey(code, stockType)] = item.Symbol
+		}
+	}
+
+	quotes := make([]models.LatestQuote, 0, len(req.Items))
+	quoteByKey := make(map[string]models.LatestQuote, len(req.Items))
+	for _, stockType := range []int{1, 2} {
+		codes := uniqueStrings(typeCodes[stockType])
+		if len(codes) == 0 {
+			continue
+		}
+		rows, err := s.db.Conn.Query(`
+			SELECT symbol, trading_date, latest_price, change_percent, turnover_rate
+			FROM daily_data
+			WHERE stock_type = $1
+			  AND symbol = ANY($2)
+		`, stockType, pq.Array(codes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to query latest daily_data stock_type=%d: %v", stockType, err)
+		}
+		for rows.Next() {
+			var symbol string
+			var dt time.Time
+			var price sql.NullFloat64
+			var change sql.NullFloat64
+			var turnover sql.NullFloat64
+			if err := rows.Scan(&symbol, &dt, &price, &change, &turnover); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("failed to scan latest daily_data stock_type=%d: %v", stockType, err)
+			}
+			code := normalizeMarketQuoteCode(symbol)
+			key := quoteLookupKey(code, stockType)
+			quote := models.LatestQuote{Symbol: codeToSymbol[key]}
+			dateText := dt.Format("2006-01-02")
+			quote.TradingDate = &dateText
+			if price.Valid {
+				quote.LatestPrice = &price.Float64
+			}
+			if change.Valid {
+				quote.ChangePercent = &change.Float64
+			}
+			if turnover.Valid {
+				quote.TurnoverRate = &turnover.Float64
+			}
+			quoteByKey[key] = quote
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to iterate latest daily_data stock_type=%d: %v", stockType, err)
+		}
+		rows.Close()
+	}
+
+	for _, item := range req.Items {
+		stockType := item.StockType
+		if stockType != 1 && stockType != 2 {
+			stockType = inferLookupStockTypes(item.Symbol)[0]
+		}
+		code := normalizeMarketQuoteCode(item.Symbol)
+		if quote, ok := quoteByKey[quoteLookupKey(code, stockType)]; ok {
+			quotes = append(quotes, quote)
+		} else {
+			quotes = append(quotes, models.LatestQuote{Symbol: item.Symbol})
+		}
+	}
+	return quotes, nil
+}
+
 func normalizeMarketQuoteCode(symbol string) string {
 	trimmed := strings.ToLower(strings.TrimSpace(symbol))
 	if trimmed == "" {

@@ -239,7 +239,6 @@ const extractSeriesFromChunks = (
         const maxLen = Math.min(
             chunk.dates?.length || 0,
             chunk.actual_values?.length || 0,
-            chunkPredictions.length,
         );
 
         for (let index = 0; index < maxLen; index += 1) {

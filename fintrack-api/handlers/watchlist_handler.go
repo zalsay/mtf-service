@@ -575,6 +575,48 @@ func slimMTFBestPredictionResponse(item models.MTFBestPrediction) gin.H {
 	return best
 }
 
+func slimAccessibleMTFBestResponse(best gin.H) gin.H {
+	out := gin.H{
+		"unique_key":           best["unique_key"],
+		"symbol":               best["symbol"],
+		"mtf_version":          best["mtf_version"],
+		"best_prediction_item": best["best_prediction_item"],
+		"best_metrics":         slimBestMetrics(best["best_metrics"]),
+		"prediction_type":      best["prediction_type"],
+		"short_name":           best["short_name"],
+		"watchlist_count":      best["watchlist_count"],
+		"context_len":          best["context_len"],
+		"horizon_len":          best["horizon_len"],
+		"stock_type":           best["stock_type"],
+		"updated_at":           best["updated_at"],
+	}
+	if value, ok := best["covariate_signature"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		out["covariate_signature"] = value
+	}
+	return out
+}
+
+func slimBestMetrics(value interface{}) gin.H {
+	metrics := gin.H{}
+	var raw map[string]interface{}
+	switch v := value.(type) {
+	case string:
+		if err := json.Unmarshal([]byte(v), &raw); err != nil {
+			return metrics
+		}
+	case map[string]interface{}:
+		raw = v
+	case gin.H:
+		raw = map[string]interface{}(v)
+	default:
+		return metrics
+	}
+	if composite, ok := raw["composite_score"]; ok {
+		metrics["composite_score"] = composite
+	}
+	return metrics
+}
+
 func slimMTFValidationChunkResponse(chunk models.SaveMTFValChunkRequest) gin.H {
 	out := gin.H{
 		"chunk_index":              chunk.ChunkIndex,
@@ -604,6 +646,229 @@ func slimMTFValidationChunkResponse(chunk models.SaveMTFValChunkRequest) gin.H {
 		delete(out, "actual_change_percent")
 	}
 	return out
+}
+
+type latestActualPoint struct {
+	Date  string
+	Price float64
+}
+
+func latestActualPointKey(symbol string, stockType int) string {
+	return fmt.Sprintf("%d:%s", stockType, normalizeMTFResponseSymbol(symbol))
+}
+
+func slimAccessibleMTFValidationChunkResponse(chunk gin.H, bestKey string) gin.H {
+	out := gin.H{
+		"chunk_index":       chunk["chunk_index"],
+		"start_date":        chunk["start_date"],
+		"end_date":          chunk["end_date"],
+		"symbol":            chunk["symbol"],
+		"stock_type":        chunk["stock_type"],
+		"actual_values":     chunk["actual_values"],
+		"dates":             chunk["dates"],
+		"prediction_type":   chunk["prediction_type"],
+		"predictions":       pickPredictionSeries(chunk["predictions"], bestKey),
+		"adjust_raw_chunks": slimAdjustRawChunk(chunk["adjust_raw_chunks"], bestKey),
+	}
+	if value, ok := chunk["actual_change_percent"]; ok {
+		out["actual_change_percent"] = value
+	}
+	if value, ok := chunk["predicted_change_percent"]; ok {
+		out["predicted_change_percent"] = pickPredictionSeries(value, bestKey)
+	}
+	if value, ok := chunk["change_base_value"]; ok {
+		out["change_base_value"] = value
+	}
+	if value, ok := chunk["change_base_date"]; ok {
+		out["change_base_date"] = value
+	}
+	if raw := out["adjust_raw_chunks"]; raw == nil {
+		delete(out, "adjust_raw_chunks")
+	}
+	return out
+}
+
+func appendLatestActualPointToLastChunk(chunks []gin.H, latest latestActualPoint) []gin.H {
+	if len(chunks) == 0 || latest.Date == "" || !(latest.Price > 0) {
+		return chunks
+	}
+	last := chunks[len(chunks)-1]
+	dates := interfaceToStringSlice(last["dates"])
+	if len(dates) == 0 {
+		return chunks
+	}
+	actuals := interfaceToFloatSlice(last["actual_values"])
+	if len(actuals) == 0 {
+		return chunks
+	}
+	lastDate := strings.TrimSpace(dates[len(dates)-1])
+	if lastDate == latest.Date || lastDate > latest.Date {
+		return chunks
+	}
+	nextDates := append(append([]string{}, dates...), latest.Date)
+	nextActuals := append(append([]float64{}, actuals...), latest.Price)
+	last["dates"] = nextDates
+	last["actual_values"] = nextActuals
+	if changes := interfaceToFloatSlice(last["actual_change_percent"]); len(changes) > 0 {
+		change := 0.0
+		if len(actuals) > 0 && actuals[len(actuals)-1] > 0 {
+			change = (latest.Price - actuals[len(actuals)-1]) / actuals[len(actuals)-1] * 100
+		}
+		last["actual_change_percent"] = append(append([]float64{}, changes...), change)
+	}
+	chunks[len(chunks)-1] = last
+	return chunks
+}
+
+func interfaceToStringSlice(value interface{}) []string {
+	switch arr := value.(type) {
+	case []string:
+		return arr
+	case []interface{}:
+		out := make([]string, 0, len(arr))
+		for _, item := range arr {
+			out = append(out, strings.TrimSpace(fmt.Sprint(item)))
+		}
+		return out
+	}
+	return nil
+}
+
+func interfaceToFloatSlice(value interface{}) []float64 {
+	out := []float64{}
+	switch arr := value.(type) {
+	case []float64:
+		return arr
+	case []float32:
+		for _, item := range arr {
+			out = append(out, float64(item))
+		}
+	case []int:
+		for _, item := range arr {
+			out = append(out, float64(item))
+		}
+	case []int64:
+		for _, item := range arr {
+			out = append(out, float64(item))
+		}
+	case []interface{}:
+		for _, item := range arr {
+			switch v := item.(type) {
+			case float64:
+				out = append(out, v)
+			case float32:
+				out = append(out, float64(v))
+			case int:
+				out = append(out, float64(v))
+			case int64:
+				out = append(out, float64(v))
+			case json.Number:
+				if f, err := v.Float64(); err == nil {
+					out = append(out, f)
+				}
+			case string:
+				if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					out = append(out, f)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func pickPredictionSeries(value interface{}, bestKey string) gin.H {
+	if bestKey == "" {
+		return gin.H{}
+	}
+	switch predictions := value.(type) {
+	case map[string]interface{}:
+		if series, ok := predictions[bestKey]; ok {
+			return gin.H{bestKey: series}
+		}
+	case gin.H:
+		if series, ok := predictions[bestKey]; ok {
+			return gin.H{bestKey: series}
+		}
+	}
+	return gin.H{}
+}
+
+func slimAdjustRawChunk(value interface{}, bestKey string) interface{} {
+	if value == nil {
+		return nil
+	}
+	filter := func(raw map[string]interface{}) gin.H {
+		out := gin.H{}
+		for _, key := range []string{"dates", "actual_values", "actual_change_percent", "change_base_value", "change_base_date"} {
+			if v, ok := raw[key]; ok {
+				out[key] = v
+			}
+		}
+		if v, ok := raw["predictions"]; ok {
+			out["predictions"] = pickPredictionSeries(v, bestKey)
+		}
+		if v, ok := raw["predicted_change_percent"]; ok {
+			out["predicted_change_percent"] = pickPredictionSeries(v, bestKey)
+		}
+		return out
+	}
+	switch raw := value.(type) {
+	case map[string]interface{}:
+		return filter(raw)
+	case gin.H:
+		return filter(map[string]interface{}(raw))
+	case []interface{}:
+		items := make([]gin.H, 0, len(raw))
+		for _, item := range raw {
+			if m, ok := item.(map[string]interface{}); ok {
+				items = append(items, filter(m))
+			}
+		}
+		if len(items) > 0 {
+			return items
+		}
+	}
+	return nil
+}
+
+func slimAccessibleMTFBestItems(items []gin.H, latestByKey map[string]latestActualPoint) []gin.H {
+	result := make([]gin.H, 0, len(items))
+	for _, item := range items {
+		best, ok := item["best"].(gin.H)
+		if !ok {
+			result = append(result, item)
+			continue
+		}
+		bestKey := strings.TrimSpace(fmt.Sprint(best["best_prediction_item"]))
+		slimChunks := []gin.H{}
+		if chunks, ok := item["chunks"].([]gin.H); ok {
+			slimChunks = make([]gin.H, 0, len(chunks))
+			for _, chunk := range chunks {
+				slimChunks = append(slimChunks, slimAccessibleMTFValidationChunkResponse(chunk, bestKey))
+			}
+		}
+		stockType := 0
+		switch value := best["stock_type"].(type) {
+		case int:
+			stockType = value
+		case int64:
+			stockType = int(value)
+		case float64:
+			stockType = int(value)
+		}
+		if latest, ok := latestByKey[latestActualPointKey(fmt.Sprint(best["symbol"]), stockType)]; ok {
+			slimChunks = appendLatestActualPointToLastChunk(slimChunks, latest)
+		}
+		out := gin.H{
+			"best":   slimAccessibleMTFBestResponse(best),
+			"chunks": slimChunks,
+		}
+		if value, ok := item["max_deviation_percent"]; ok {
+			out["max_deviation_percent"] = value
+		}
+		result = append(result, out)
+	}
+	return result
 }
 
 func (h *WatchlistHandler) buildMTFBestWithValidationResponse(items []models.MTFBestPrediction) ([]gin.H, error) {
@@ -931,6 +1196,30 @@ func (h *WatchlistHandler) ListAccessibleMTFBestWithValidation(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	latestByKey := map[string]latestActualPoint{}
+	quoteReq := models.BatchSymbolsRequest{Items: make([]models.BatchSymbolInput, 0, len(items))}
+	for _, item := range items {
+		stockType := item.StockType
+		if stockType != 1 && stockType != 2 {
+			stockType = 1
+		}
+		quoteReq.Items = append(quoteReq.Items, models.BatchSymbolInput{Symbol: item.Symbol, StockType: stockType})
+	}
+	if len(quoteReq.Items) > 0 {
+		quotes, quoteErr := h.watchlistService.GetLatestDailyQuotes(&quoteReq)
+		if quoteErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": quoteErr.Error()})
+			return
+		}
+		for index, quote := range quotes {
+			if quote.TradingDate == nil || quote.LatestPrice == nil || index >= len(quoteReq.Items) {
+				continue
+			}
+			item := quoteReq.Items[index]
+			latestByKey[latestActualPointKey(item.Symbol, item.StockType)] = latestActualPoint{Date: *quote.TradingDate, Price: *quote.LatestPrice}
+		}
+	}
+	result = slimAccessibleMTFBestItems(result, latestByKey)
 
 	c.JSON(http.StatusOK, gin.H{"items": result, "count": len(result)})
 }

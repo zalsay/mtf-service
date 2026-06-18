@@ -208,8 +208,9 @@ func (s *DailyStockSyncer) loop(ctx context.Context) {
 
 func (s *DailyStockSyncer) RunOnce(ctx context.Context) (*syncRunSummary, error) {
 	now := time.Now().In(s.location)
-	targetDate := now.Format("20060102")
-	targetDateDashed := now.Format("2006-01-02")
+	target := now.AddDate(0, 0, -1)
+	targetDate := target.Format("20060102")
+	targetDateDashed := target.Format("2006-01-02")
 
 	isTradingDay, err := s.isTradingDay(ctx, targetDate)
 	if err != nil {
