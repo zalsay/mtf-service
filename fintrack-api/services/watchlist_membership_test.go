@@ -71,6 +71,50 @@ func TestSaveMTFBestPersistsPredictionValues(t *testing.T) {
 	}
 }
 
+func TestSaveStrategyParamsPersistsPersonalStrategyAsPrivate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	userID := 1
+	name := "3.5+-1"
+	mock.ExpectExec("INSERT INTO mtf_strategy_params").
+		WithArgs(
+			"tpl_personal", userID, &name,
+			3.5, -1.0, 100000.0,
+			true, 1.0, 0.0,
+			0.2, 0.05,
+			0.001, 0.2, 0.5,
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	service := NewWatchlistService(&database.DB{Conn: db}, &config.Config{})
+	err = service.SaveStrategyParams(&models.SaveStrategyParamsRequest{
+		UniqueKey:              "tpl_personal",
+		UserID:                 &userID,
+		Name:                   &name,
+		BuyThresholdPct:        3.5,
+		SellThresholdPct:       -1.0,
+		InitialCash:            100000.0,
+		EnableRebalance:        true,
+		MaxPositionPct:         1.0,
+		MinPositionPct:         0.0,
+		SlopePositionPerPct:    0.2,
+		RebalanceTolerancePct:  0.05,
+		TradeFeeRate:           0.001,
+		TakeProfitThresholdPct: 0.2,
+		TakeProfitSellFrac:     0.5,
+	})
+	if err != nil {
+		t.Fatalf("SaveStrategyParams error = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestGetMTFBestValueByUniqueKeyReturnsSavedValues(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -112,6 +156,14 @@ func TestGetMTFBestValueByUniqueKeyReturnsSavedValues(t *testing.T) {
 }
 
 func TestGetMTFBestValueByUniqueKeyFallsBackToFutureChunks(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -158,6 +210,14 @@ func TestGetMTFBestValueByUniqueKeyFallsBackToFutureChunks(t *testing.T) {
 }
 
 func TestListFuturePredictionsByUniqueKeyKeepsFutureDatesInsideStartedChunk(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -182,10 +242,10 @@ func TestListFuturePredictionsByUniqueKeyKeepsFutureDatesInsideStartedChunk(t *t
 	if err != nil {
 		t.Fatalf("ListFuturePredictionsByUniqueKey error = %v", err)
 	}
-	if len(dates) != 2 || dates[0] != "2026-06-15" || dates[1] != "2026-06-16" {
+	if len(dates) != 3 || dates[0] != "2026-06-12" || dates[1] != "2026-06-15" || dates[2] != "2026-06-16" {
 		t.Fatalf("dates = %#v, want only future dates", dates)
 	}
-	if len(preds) != 2 || preds[0] != 2.9595 || preds[1] != 2.9631 {
+	if len(preds) != 3 || preds[0] != 2.9583 || preds[1] != 2.9595 || preds[2] != 2.9631 {
 		t.Fatalf("preds = %#v, want future prediction values", preds)
 	}
 	if predictedLatest != 2.9631 || actualLatest != 3.026 {
@@ -200,12 +260,20 @@ func TestListFuturePredictionsByUniqueKeyKeepsFutureDatesInsideStartedChunk(t *t
 }
 
 func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
 	req := &models.MTFBestTrainRequest{
 		StockCode:      "000001",
 		StockType:      1,
 		PredictionType: "non_cov",
 		HorizonLen:     7,
-		ContextLen:     512,
+		ContextLen:     1024,
 	}
 
 	normalized, err := NormalizeMTFBestTrainRequest(req, 0, 12, false)
@@ -214,6 +282,9 @@ func TestNormalizeMTFBestTrainRequestLevel0AllowsOnlyFixedNonCov(t *testing.T) {
 	}
 	if normalized.UserID == nil || *normalized.UserID != 12 {
 		t.Fatalf("expected user_id to be injected")
+	}
+	if normalized.EndDate == nil || *normalized.EndDate != "2026-06-10" {
+		t.Fatalf("expected end_date to default to yesterday, got %#v", normalized.EndDate)
 	}
 	if normalized.CovariateConfig != nil {
 		t.Fatalf("expected non_cov request to keep covariate_config nil")
@@ -247,7 +318,7 @@ func TestNormalizeMTFBestTrainRequestMtfProBuildsCovariates(t *testing.T) {
 		StockType:      2,
 		PredictionType: "mtf-pro",
 		HorizonLen:     7,
-		ContextLen:     512,
+		ContextLen:     2048,
 	}
 
 	normalized, err := NormalizeMTFBestTrainRequest(req, 1, 88, false)
@@ -667,6 +738,14 @@ func TestNormalizeMTFPredictOnceRequestAdminInjectsForceRequeue(t *testing.T) {
 }
 
 func TestNormalizeMTFPredictOnceRequestNonAdminDoesNotForceRequeue(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
 	force := true
 	req := &models.MTFPredictRequest{
 		StockCode:    "000001",
@@ -688,6 +767,26 @@ func TestNormalizeMTFPredictOnceRequestNonAdminDoesNotForceRequeue(t *testing.T)
 	if normalized.ForceRequeue != nil {
 		t.Fatalf("expected non-admin request to clear force_requeue")
 	}
+	if normalized.EndDate == nil || *normalized.EndDate != "2026-06-10" {
+		t.Fatalf("expected end_date to default to yesterday, got %#v", normalized.EndDate)
+	}
+}
+
+func TestNormalizeMTFPredictOnceRequestPreservesExplicitEndDate(t *testing.T) {
+	endDate := "2026-06-01"
+	req := &models.MTFPredictRequest{
+		StockCode: "000001",
+		StockType: 1,
+		EndDate:   &endDate,
+	}
+
+	normalized, err := NormalizeMTFPredictOnceRequest(req, 0, 88, false)
+	if err != nil {
+		t.Fatalf("expected predict once request to pass, got error: %v", err)
+	}
+	if normalized.EndDate == nil || *normalized.EndDate != endDate {
+		t.Fatalf("expected explicit end_date to be preserved, got %#v", normalized.EndDate)
+	}
 }
 
 func TestNormalizeMTFPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testing.T) {
@@ -707,6 +806,14 @@ func TestNormalizeMTFPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testing.T)
 }
 
 func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
 	var received map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/predict_once" {
@@ -746,6 +853,9 @@ func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	if received["force_requeue"] != true {
 		t.Fatalf("expected force_requeue=true in payload, got %#v", received["force_requeue"])
 	}
+	if received["end_date"] != "2026-06-10" {
+		t.Fatalf("end_date = %#v, want 2026-06-10", received["end_date"])
+	}
 	if _, ok := received["best_max_age_days"]; ok {
 		t.Fatalf("best_max_age_days should not be forwarded, got %#v", received["best_max_age_days"])
 	}
@@ -754,6 +864,49 @@ func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	}
 	if received["chunk_until_latest"] != true {
 		t.Fatalf("chunk_until_latest = %#v, want true", received["chunk_until_latest"])
+	}
+}
+
+func TestTriggerMTFPredictSendsDateBounds(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/predict_for_best" {
+			t.Fatalf("expected /predict_for_best path, got %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"job_id":"job-test","status":"queued"}`))
+	}))
+	defer server.Close()
+
+	service := NewWatchlistService(nil, &config.Config{
+		InferenceGateway: config.InferenceGatewayConfig{
+			BaseURL: server.URL,
+			Timeout: 1,
+		},
+	})
+	startDate := "2011-06-10"
+	endDate := "2026-06-10"
+	req := &models.MTFPredictRequest{
+		StockCode: "000001",
+		StartDate: &startDate,
+		EndDate:   &endDate,
+	}
+
+	status, _, err := service.TriggerMTFPredict(req)
+	if err != nil {
+		t.Fatalf("expected predict proxy to pass, got error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", status)
+	}
+	if received["start_date"] != startDate {
+		t.Fatalf("start_date = %#v, want %s", received["start_date"], startDate)
+	}
+	if received["end_date"] != endDate {
+		t.Fatalf("end_date = %#v, want %s", received["end_date"], endDate)
 	}
 }
 

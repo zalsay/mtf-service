@@ -1,0 +1,6 @@
+<clickhouse>
+    <!-- 将 HTTP 接口改为 8124，与 docker-compose 端口映射一致 -->
+    <http_port>8124</http_port>
+    <!-- 将 Native TCP 接口改为 9001，与 docker-compose 端口映射一致 -->
+    <tcp_port>9001</tcp_port>
+</clickhouse>

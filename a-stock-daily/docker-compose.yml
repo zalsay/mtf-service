@@ -1,0 +1,70 @@
+version: "3.8"
+
+services:
+  a-stock-clickhouse:
+    image: ${CLICKHOUSE_IMAGE:-docker.xuanyuan.run/clickhouse/clickhouse-server:24.12}
+    container_name: a-stock-clickhouse
+    environment:
+      CLICKHOUSE_DB: stock_db
+      CLICKHOUSE_USER: stock_user
+      CLICKHOUSE_PASSWORD: stock_pass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "58123:8123"
+    volumes:
+      - a_stock_clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  a-stock-daily:
+    build:
+      context: .
+      args:
+        A_STOCK_ARCHIVE_URL: ${A_STOCK_ARCHIVE_URL:-https://gh-proxy.com/https://github.com/map-A/A-stock-level1-dump/archive}
+        CARGO_REGISTRY_MIRROR: ${CARGO_REGISTRY_MIRROR:-sparse+https://rsproxy.cn/index/}
+        RUST_IMAGE: ${RUST_IMAGE:-docker.xuanyuan.run/rust:1.94-bookworm}
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+    container_name: a-stock-daily
+    depends_on:
+      a-stock-clickhouse:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      CLICKHOUSE_URL: http://a-stock-clickhouse:8123
+      CLICKHOUSE_DATABASE: stock_db
+      CLICKHOUSE_USER: stock_user
+      CLICKHOUSE_PASSWORD: stock_pass
+      POSTGRES_HANDLER_URL: ${POSTGRES_HANDLER_URL:-http://host.docker.internal:58004}
+      POSTGRES_HANDLER_TOKEN: ${POSTGRES_HANDLER_TOKEN:-fintrack-dev-token}
+      SERVICE_PORT: "8080"
+      TRIGGER_TOKEN: ${A_STOCK_DAILY_TRIGGER_TOKEN:-fintrack-dev-token}
+      AUTO_DAILY_SYNC_ENABLED: ${AUTO_DAILY_SYNC_ENABLED:-true}
+      DAILY_SYNC_MODE: ${DAILY_SYNC_MODE:-tdx}
+      DAILY_RUN_HOUR: ${DAILY_RUN_HOUR:-22}
+      DAILY_RUN_MINUTE: ${DAILY_RUN_MINUTE:-0}
+      SYMBOL_SOURCE: ${SYMBOL_SOURCE:-watchlist}
+      FINTRACK_DATABASE_URL: ${FINTRACK_DATABASE_URL:-postgresql://user_THtJYy:password_CnKYP8@8.163.5.7:50432/fintrack?sslmode=disable}
+      STOCK_UNIVERSE: ${STOCK_UNIVERSE:-postgres}
+      EXPORT_TO_POSTGRES: ${EXPORT_TO_POSTGRES:-true}
+      DOWNLOAD_CONCURRENT: ${DOWNLOAD_CONCURRENT:-50}
+      TDX_BACKFILL_WORKERS: ${TDX_BACKFILL_WORKERS:-8}
+      TDX_BACKFILL_PAGES: ${TDX_BACKFILL_PAGES:-8}
+      TDX_BACKFILL_COUNT: ${TDX_BACKFILL_COUNT:-800}
+      TDX_DAILY_COUNT: ${TDX_DAILY_COUNT:-10}
+      POSTGRES_BATCH_SIZE: ${POSTGRES_BATCH_SIZE:-1000}
+      STOCK_TYPE: "1"
+    ports:
+      - "${A_STOCK_DAILY_TRIGGER_PORT:-59088}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  a_stock_clickhouse_data:

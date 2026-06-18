@@ -191,3 +191,17 @@ func TestEastmoneySecIDInfersMarket(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultMarketEndDateUsesYesterdayInChinaTime(t *testing.T) {
+	original := chinaNowFunc
+	chinaNowFunc = func() time.Time {
+		return time.Date(2026, 6, 11, 10, 0, 0, 0, chinaLocation())
+	}
+	defer func() {
+		chinaNowFunc = original
+	}()
+
+	if got := defaultMarketEndDate(); got != "2026-06-10" {
+		t.Fatalf("defaultMarketEndDate() = %q, want 2026-06-10", got)
+	}
+}

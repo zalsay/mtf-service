@@ -47,6 +47,10 @@ var ErrSymbolNotFound = errors.New("symbol not found")
 
 const mtfBestStaleRefreshAfter = 180 * 24 * time.Hour
 
+var chinaNowFunc = func() time.Time {
+	return time.Now().In(chinaLocation())
+}
+
 var ErrDuplicateSymbol = errors.New("duplicate symbol")
 
 type WatchlistLimitExceededError struct {
@@ -839,11 +843,28 @@ func eastmoneySecID(code string, symbol string) string {
 }
 
 func chinaNow() time.Time {
+	return chinaNowFunc()
+}
+
+func chinaLocation() *time.Location {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		loc = time.FixedZone("CST", 8*60*60)
 	}
-	return time.Now().In(loc)
+	return loc
+}
+
+func defaultMarketEndDate() string {
+	return chinaNow().AddDate(0, 0, -1).Format("2006-01-02")
+}
+
+func requestEndDateOrDefault(req *models.MTFPredictRequest) string {
+	if req != nil && req.EndDate != nil {
+		if endDate := strings.TrimSpace(*req.EndDate); endDate != "" {
+			return endDate
+		}
+	}
+	return defaultMarketEndDate()
 }
 
 func uniqueStrings(values []string) []string {
@@ -1244,11 +1265,13 @@ func NormalizeMTFBestTrainRequest(req *models.MTFBestTrainRequest, membershipLev
 	contextLen := req.ContextLen
 	uid := userID
 	forceEnqueue := isAdmin
+	endDate := defaultMarketEndDate()
 	normalized := &models.MTFPredictRequest{
 		StockCode:      req.StockCode,
 		StockType:      req.StockType,
 		PredictionType: predictionType,
 		Years:          &years,
+		EndDate:        &endDate,
 		HorizonLen:     &horizonLen,
 		ContextLen:     &contextLen,
 		UserID:         &uid,
@@ -1285,6 +1308,10 @@ func NormalizeMTFPredictOnceRequest(req *models.MTFPredictRequest, membershipLev
 	normalized.UserID = &uid
 	normalized.ForceEnqueue = nil
 	normalized.ForceRequeue = nil
+	if normalized.EndDate == nil || strings.TrimSpace(*normalized.EndDate) == "" {
+		endDate := defaultMarketEndDate()
+		normalized.EndDate = &endDate
+	}
 	if isAdmin {
 		force := true
 		normalized.ForceEnqueue = &force
@@ -1343,6 +1370,10 @@ func (s *WatchlistService) TriggerMTFPredict(req *models.MTFPredictRequest) (int
 	if req.Years != nil {
 		payload["years"] = *req.Years
 	}
+	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
+		payload["start_date"] = strings.TrimSpace(*req.StartDate)
+	}
+	payload["end_date"] = requestEndDateOrDefault(req)
 	if strings.TrimSpace(req.PredictionType) != "" {
 		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)
 	}
@@ -1487,11 +1518,10 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 	if req.StartDate != nil && strings.TrimSpace(*req.StartDate) != "" {
 		payload["start_date"] = strings.TrimSpace(*req.StartDate)
 	}
-	if req.EndDate != nil && strings.TrimSpace(*req.EndDate) != "" {
-		payload["end_date"] = strings.TrimSpace(*req.EndDate)
-	}
 	if req.PredictDate != nil && strings.TrimSpace(*req.PredictDate) != "" {
 		payload["predict_date"] = strings.TrimSpace(*req.PredictDate)
+	} else {
+		payload["end_date"] = requestEndDateOrDefault(req)
 	}
 	if strings.TrimSpace(req.PredictionType) != "" {
 		payload["prediction_type"] = strings.TrimSpace(req.PredictionType)
@@ -2425,15 +2455,15 @@ func (s *WatchlistService) listScopedMTFBestPage(horizonLen int, symbol string, 
 				FROM mtf_best_validation_chunks vc
 				WHERE vc.unique_key = p.unique_key
 				  AND vc.user_id = $%d
-			)
-		)`, len(args)))
+				)
+			)`, len(args)))
 		if requireWatchlist {
 			conditions = append(conditions, fmt.Sprintf(`EXISTS (
-				SELECT 1
-				FROM user_watchlist uw
-				WHERE uw.user_id = $%d
-				  AND %s = %s
-			)`, len(args), mtfCanonicalSymbolExpr("uw.symbol"), mtfCanonicalSymbolExpr("p.symbol")))
+					SELECT 1
+					FROM user_watchlist uw
+					WHERE uw.user_id = $%d
+					  AND %s = %s
+				)`, len(args), mtfCanonicalSymbolExpr("uw.symbol"), mtfCanonicalSymbolExpr("p.symbol")))
 		}
 	} else {
 		conditions = append(conditions, "p.is_public = 1")
@@ -3218,13 +3248,13 @@ func (s *WatchlistService) SaveStrategyParams(req *models.SaveStrategyParamsRequ
 	}
 	_, err := s.db.Conn.Exec(`
         INSERT INTO mtf_strategy_params (
-            unique_key, user_id, name,
+            unique_key, user_id, name, is_public,
             buy_threshold_pct, sell_threshold_pct, initial_cash,
             enable_rebalance, max_position_pct, min_position_pct,
             slope_position_per_pct, rebalance_tolerance_pct,
             trade_fee_rate, take_profit_threshold_pct, take_profit_sell_frac
         ) VALUES (
-            $1, $2, $3,
+            $1, $2, $3, 0,
             $4, $5, $6,
             $7, $8, $9,
             $10, $11,
@@ -3233,6 +3263,7 @@ func (s *WatchlistService) SaveStrategyParams(req *models.SaveStrategyParamsRequ
         ON CONFLICT (unique_key) DO UPDATE SET
             user_id = EXCLUDED.user_id,
             name = EXCLUDED.name,
+            is_public = 0,
             buy_threshold_pct = EXCLUDED.buy_threshold_pct,
             sell_threshold_pct = EXCLUDED.sell_threshold_pct,
             initial_cash = EXCLUDED.initial_cash,

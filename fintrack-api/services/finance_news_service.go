@@ -20,6 +20,7 @@ const (
 	financeNewsLHBURL          = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 	financeNewsHotETFURL       = "https://ai.meetlife.top/hot-etf/latest"
 	financeNewsHotETFCachePath = "data/hot-etf/latest.html"
+	hotETFCacheMaxAge          = 24 * time.Hour
 )
 
 type FinanceNewsService struct {
@@ -142,12 +143,26 @@ func (s *FinanceNewsService) loadHotETFHTML(ctx context.Context) (string, error)
 	if cachePath == "" {
 		cachePath = financeNewsHotETFCachePath
 	}
+	var cachedBody string
+	var cacheModTime time.Time
 	if raw, err := os.ReadFile(cachePath); err == nil && len(raw) > 0 {
-		return string(raw), nil
+		cachedBody = string(raw)
+		if info, statErr := os.Stat(cachePath); statErr == nil {
+			cacheModTime = info.ModTime()
+		}
 	}
-	body, err := s.getText(ctx, s.hotETFURL, nil)
+	if cachedBody != "" && !cacheModTime.IsZero() && time.Since(cacheModTime) < hotETFCacheMaxAge {
+		return cachedBody, nil
+	}
+	body, remoteModTime, err := s.getHotETFHTML(ctx)
 	if err != nil {
+		if cachedBody != "" {
+			return cachedBody, nil
+		}
 		return "", err
+	}
+	if cachedBody != "" && !remoteModTime.IsZero() && !remoteModTime.After(cacheModTime) {
+		return cachedBody, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		return "", fmt.Errorf("cache hot ETF html: create dir: %w", err)
@@ -155,7 +170,30 @@ func (s *FinanceNewsService) loadHotETFHTML(ctx context.Context) (string, error)
 	if err := os.WriteFile(cachePath, []byte(body), 0o644); err != nil {
 		return "", fmt.Errorf("cache hot ETF html: write file: %w", err)
 	}
+	if !remoteModTime.IsZero() {
+		if err := os.Chtimes(cachePath, remoteModTime, remoteModTime); err != nil {
+			return "", fmt.Errorf("cache hot ETF html: update time: %w", err)
+		}
+	}
 	return body, nil
+}
+
+func (s *FinanceNewsService) getHotETFHTML(ctx context.Context) (string, time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.hotETFURL, nil)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	resp, err := s.httpClient().Do(req)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("provider_error: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", time.Time{}, fmt.Errorf("provider_error: upstream returned %d", resp.StatusCode)
+	}
+	modTime, _ := http.ParseTime(resp.Header.Get("Last-Modified"))
+	body, err := readHTTPText(resp.Body)
+	return body, modTime, err
 }
 
 func normalizeFinanceNewsQuery(query FinanceNewsQuery) FinanceNewsQuery {

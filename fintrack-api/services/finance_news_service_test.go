@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFinanceNewsServiceListsColumnNews(t *testing.T) {
@@ -209,7 +210,7 @@ func TestFinanceNewsServiceListsHotETFDetails(t *testing.T) {
 	}
 }
 
-func TestFinanceNewsServiceUsesLocalHotETFHTMLWhenPresent(t *testing.T) {
+func TestFinanceNewsServiceUsesLocalHotETFHTMLBeforeCacheExpires(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
@@ -224,6 +225,10 @@ func TestFinanceNewsServiceUsesLocalHotETFHTMLWhenPresent(t *testing.T) {
 	if err := os.WriteFile(cachePath, []byte(hotETFTestHTML("华夏本地ETF", "510300")), 0o644); err != nil {
 		t.Fatalf("write cache: %v", err)
 	}
+	localTime := time.Now().Add(-23 * time.Hour)
+	if err := os.Chtimes(cachePath, localTime, localTime); err != nil {
+		t.Fatalf("set cache time: %v", err)
+	}
 
 	service := newTestFinanceNewsService(server)
 	service.hotETFCachePath = cachePath
@@ -236,6 +241,94 @@ func TestFinanceNewsServiceUsesLocalHotETFHTMLWhenPresent(t *testing.T) {
 	}
 	if result.Count != 1 || result.Items[0].Code != "510300" || result.Items[0].Name != "华夏本地ETF" {
 		t.Fatalf("unexpected cached hot ETF result: %#v", result)
+	}
+}
+
+func TestFinanceNewsServiceUsesExpiredLocalHotETFHTMLWhenRemoteIsNotNewer(t *testing.T) {
+	requests := 0
+	localTime := time.Now().Add(-25 * time.Hour).Truncate(time.Second)
+	remoteTime := localTime.Add(-time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Last-Modified", remoteTime.Format(http.TimeFormat))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(hotETFTestHTML("华夏远端ETF", "159919")))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "hot-etf", "latest.html")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte(hotETFTestHTML("华夏本地ETF", "510300")), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+	if err := os.Chtimes(cachePath, localTime, localTime); err != nil {
+		t.Fatalf("set cache time: %v", err)
+	}
+
+	service := newTestFinanceNewsService(server)
+	service.hotETFCachePath = cachePath
+	result, err := service.ListHotETF(context.Background())
+	if err != nil {
+		t.Fatalf("ListHotETF error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("remote requests = %d, want 1", requests)
+	}
+	if result.Count != 1 || result.Items[0].Code != "510300" || result.Items[0].Name != "华夏本地ETF" {
+		t.Fatalf("unexpected cached hot ETF result: %#v", result)
+	}
+}
+
+func TestFinanceNewsServiceRefreshesHotETFHTMLWhenRemoteIsNewer(t *testing.T) {
+	requests := 0
+	remoteTime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Last-Modified", remoteTime.Format(http.TimeFormat))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(hotETFTestHTML("华夏远端ETF", "159919")))
+	}))
+	defer server.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "hot-etf", "latest.html")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir cache dir: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte(hotETFTestHTML("华夏本地ETF", "510300")), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+	localTime := time.Now().Add(-25 * time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(cachePath, localTime, localTime); err != nil {
+		t.Fatalf("set cache time: %v", err)
+	}
+
+	service := newTestFinanceNewsService(server)
+	service.hotETFCachePath = cachePath
+	result, err := service.ListHotETF(context.Background())
+	if err != nil {
+		t.Fatalf("ListHotETF error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("remote requests = %d, want 1", requests)
+	}
+	raw, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("read refreshed cache: %v", err)
+	}
+	if !strings.Contains(string(raw), "华夏远端ETF") {
+		t.Fatalf("cache body missing remote html: %s", string(raw))
+	}
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatalf("stat refreshed cache: %v", err)
+	}
+	if !info.ModTime().Equal(remoteTime) {
+		t.Fatalf("cache mtime = %v, want %v", info.ModTime(), remoteTime)
+	}
+	if result.Count != 1 || result.Items[0].Code != "159919" || result.Items[0].Name != "华夏远端ETF" {
+		t.Fatalf("unexpected remote hot ETF result: %#v", result)
 	}
 }
 

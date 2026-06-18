@@ -275,7 +275,7 @@ const getItemCompanyName = (item: any) => item?.stock?.company_name || getItemSy
 const getBacktestUniqueKey = (item: any) => item?.unique_key || '';
 const BACKTEST_MODEL_OPTIONS: Array<'mtf-lite' | 'mtf-pro'> = ['mtf-lite', 'mtf-pro'];
 const BACKTEST_HORIZON_OPTIONS = [7, 14, 28];
-const BACKTEST_CONTEXT_OPTIONS = [256, 512, 1024, 2048];
+const BACKTEST_CONTEXT_OPTIONS = [512, 1024, 2048];
 const liteMetricHeaderStyle = {
     backgroundColor: 'rgba(226, 232, 240, 0.14)',
 };

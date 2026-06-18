@@ -1,0 +1,82 @@
+diff --git a/postgres-handler/docker-compose.yml b/postgres-handler/docker-compose.yml
+index 7aee5b1..0000000 100644
+--- a/postgres-handler/docker-compose.yml
++++ b/postgres-handler/docker-compose.yml
+@@ -13,6 +13,7 @@ services:
+     environment:
+       - TZ=Asia/Shanghai
+       - PORT=8080
++      - API_TOKEN=${API_TOKEN:-fintrack-dev-token}
+ 
+     # 端口映射
+     ports:
+@@ -23,4 +24,57 @@ services:
+     #   interval: 30s
+     #   timeout: 10s
+     #   start_period: 5s
+     #   retries: 3
++
++  a-stock-clickhouse:
++    image: ${CLICKHOUSE_IMAGE:-docker.xuanyuan.run/clickhouse/clickhouse-server:24.12}
++    container_name: a-stock-clickhouse
++    profiles:
++      - a-stock-daily
++    environment:
++      CLICKHOUSE_DB: stock_db
++      CLICKHOUSE_USER: stock_user
++      CLICKHOUSE_PASSWORD: stock_pass
++      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
++    ports:
++      - "58123:8123"
++    volumes:
++      - a_stock_clickhouse_data:/var/lib/clickhouse
++    ulimits:
++      nofile:
++        soft: 262144
++        hard: 262144
++    healthcheck:
++      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
++      interval: 10s
++      timeout: 5s
++      retries: 12
++
++  a-stock-daily:
++    build:
++      context: ../a-stock-daily
++      args:
++        A_STOCK_ARCHIVE_URL: ${A_STOCK_ARCHIVE_URL:-https://gh-proxy.com/https://github.com/map-A/A-stock-level1-dump/archive}
++        CARGO_REGISTRY_MIRROR: ${CARGO_REGISTRY_MIRROR:-sparse+https://rsproxy.cn/index/}
++        RUST_IMAGE: ${RUST_IMAGE:-docker.xuanyuan.run/rust:1.94-bookworm}
++        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
++    container_name: a-stock-daily
++    profiles:
++      - a-stock-daily
++    depends_on:
++      pos-handler:
++        condition: service_started
++      a-stock-clickhouse:
++        condition: service_healthy
++    environment:
++      TZ: Asia/Shanghai
++      CLICKHOUSE_URL: http://a-stock-clickhouse:8123
++      CLICKHOUSE_DATABASE: stock_db
++      CLICKHOUSE_USER: stock_user
++      CLICKHOUSE_PASSWORD: stock_pass
++      POSTGRES_HANDLER_URL: http://pos-handler:8080
++      POSTGRES_HANDLER_TOKEN: ${API_TOKEN:-fintrack-dev-token}
++      SERVICE_PORT: "8080"
++      TRIGGER_TOKEN: ${A_STOCK_DAILY_TRIGGER_TOKEN:-fintrack-dev-token}
++      AUTO_DAILY_SYNC_ENABLED: ${AUTO_DAILY_SYNC_ENABLED:-true}
++      DAILY_RUN_HOUR: ${DAILY_RUN_HOUR:-22}
++      DAILY_RUN_MINUTE: ${DAILY_RUN_MINUTE:-0}
++      STOCK_UNIVERSE: ${STOCK_UNIVERSE:-all}
++      EXPORT_TO_POSTGRES: ${EXPORT_TO_POSTGRES:-true}
++      DOWNLOAD_CONCURRENT: ${DOWNLOAD_CONCURRENT:-50}
++      POSTGRES_BATCH_SIZE: ${POSTGRES_BATCH_SIZE:-1000}
++      STOCK_TYPE: "1"
++    ports:
++      - "${A_STOCK_DAILY_TRIGGER_PORT:-58088}:8080"
++    restart: unless-stopped
++
++volumes:
++  a_stock_clickhouse_data:
