@@ -128,6 +128,10 @@ func formatDailySyncSchedules(schedules []dailySyncSchedule) string {
 	return strings.Join(parts, ",")
 }
 
+func level1DailyToken(postgresHandlerToken string) string {
+	return getenvWithAliases([]string{"A_STOCK_DAILY_TOKEN", "LEVEL1_DAILY_TOKEN", "DAILY_STOCK_SYNC_TOKEN"}, postgresHandlerToken)
+}
+
 func main() {
 	port := getenv("SERVICE_PORT", "9010")
 	xpuURL := getenv("XPU_BACKEND_URL", "http://ai-functions-xpu:9008")
@@ -161,6 +165,7 @@ func main() {
 	dailyStockSyncLookbackDays := getenvInt("DAILY_STOCK_SYNC_LOOKBACK_DAYS", 0)
 	dailyStockSyncTimezone := getenv("DAILY_STOCK_SYNC_TIMEZONE", "Asia/Shanghai")
 	level1DailyURL := strings.TrimSpace(os.Getenv("A_STOCK_DAILY_URL"))
+	level1TriggerToken := level1DailyToken(postgresHandlerToken)
 	level1DailyConcurrent := getenvInt("A_STOCK_DAILY_CONCURRENT", 50)
 	if dailyStockSyncMode == "" {
 		if level1DailyURL != "" {
@@ -250,10 +255,11 @@ func main() {
 		schedules := dailySyncSchedules(dailyStockSyncHour, dailyStockSyncMinute, dailyStockSyncExtraTimes)
 		for _, schedule := range schedules {
 			if dailyStockSyncMode == "level1" {
-				dailySyncer := gateway.NewLevel1DailySyncer(
+				dailySyncer := gateway.NewLevel1DailySyncerWithTokens(
 					level1DailyURL,
 					historyServiceURL,
-					apiToken,
+					level1TriggerToken,
+					postgresHandlerToken,
 					location,
 					schedule.Hour,
 					schedule.Minute,
@@ -264,7 +270,7 @@ func main() {
 				dailySyncer := gateway.NewDailyStockSyncer(
 					postgresHandlerURL,
 					historyServiceURL,
-					apiToken,
+					postgresHandlerToken,
 					location,
 					schedule.Hour,
 					schedule.Minute,

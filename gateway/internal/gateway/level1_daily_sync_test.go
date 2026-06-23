@@ -76,3 +76,42 @@ func TestLevel1RunOnceSkipsNonTradingDay(t *testing.T) {
 		t.Fatalf("expected no trigger calls, got %d", triggerCalls)
 	}
 }
+
+func TestLevel1RunOnceUsesSeparateHistoryAndTriggerTokens(t *testing.T) {
+	triggerCalls := 0
+	triggerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		triggerCalls++
+		if got := r.Header.Get("X-Token"); got != "level1-token" {
+			t.Fatalf("expected trigger X-Token header, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(level1TriggerResponse{
+			Date:     "20260602",
+			Mode:     "daily",
+			ExitCode: 0,
+		})
+	}))
+	defer triggerServer.Close()
+
+	historyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/trading-day" {
+			t.Fatalf("unexpected history path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("X-Token"); got != "history-token" {
+			t.Fatalf("expected history X-Token header, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(tradingDayResponse{
+			Code:         http.StatusOK,
+			Date:         r.URL.Query().Get("date"),
+			IsTradingDay: true,
+		})
+	}))
+	defer historyServer.Close()
+
+	syncer := NewLevel1DailySyncerWithTokens(triggerServer.URL, historyServer.URL, "level1-token", "history-token", time.UTC, 22, 0, 50)
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error: %v", err)
+	}
+	if triggerCalls != 1 {
+		t.Fatalf("expected one trigger call, got %d", triggerCalls)
+	}
+}

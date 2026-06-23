@@ -45,19 +45,24 @@ func (h *DatabaseHandler) InsertStockData(data *StockData) error {
 		dateStr = data.Datetime.Format("2006-01-02")
 	}
 	data.Symbol = normalizeStockSymbol(data.Symbol)
-	if err := h.db.Exec(
-		`DELETE FROM stock_data WHERE date_str = $1 AND symbol = $2 AND type = $3`,
-		dateStr,
-		data.Symbol,
-		data.Type,
-	).Error; err != nil {
-		return fmt.Errorf("failed to delete existing stock data: %v", err)
-	}
 	query := `
     INSERT INTO stock_data (
         datetime, date_str, open, close, high, low, volume, amount, amplitude,
         percentage_change, amount_change, turnover_rate, type, symbol
     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    ON CONFLICT (date_str, symbol, type) DO UPDATE SET
+        datetime = EXCLUDED.datetime,
+        open = EXCLUDED.open,
+        close = EXCLUDED.close,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        volume = EXCLUDED.volume,
+        amount = EXCLUDED.amount,
+        amplitude = EXCLUDED.amplitude,
+        percentage_change = EXCLUDED.percentage_change,
+        amount_change = EXCLUDED.amount_change,
+        turnover_rate = EXCLUDED.turnover_rate,
+        updated_at = CURRENT_TIMESTAMP
     RETURNING id, created_at, updated_at`
 	row := h.db.Raw(query,
 		data.Datetime, dateStr, data.Open, data.Close, data.High, data.Low,
@@ -72,14 +77,24 @@ func (h *DatabaseHandler) BatchInsertStockData(dataList []StockData) error {
 	if tx.Error != nil {
 		return fmt.Errorf("failed to begin transaction: %v", tx.Error)
 	}
-	deleteSQL := `
-	    DELETE FROM stock_data
-	    WHERE date_str = $1 AND symbol = $2 AND type = $3`
-	insertSQL := `
+	upsertSQL := `
 	    INSERT INTO stock_data (
 	        datetime, date_str, open, close, high, low, volume, amount, amplitude,
 	        percentage_change, amount_change, turnover_rate, type, symbol
-	    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
+	    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	    ON CONFLICT (date_str, symbol, type) DO UPDATE SET
+	        datetime = EXCLUDED.datetime,
+	        open = EXCLUDED.open,
+	        close = EXCLUDED.close,
+	        high = EXCLUDED.high,
+	        low = EXCLUDED.low,
+	        volume = EXCLUDED.volume,
+	        amount = EXCLUDED.amount,
+	        amplitude = EXCLUDED.amplitude,
+	        percentage_change = EXCLUDED.percentage_change,
+	        amount_change = EXCLUDED.amount_change,
+	        turnover_rate = EXCLUDED.turnover_rate,
+	        updated_at = CURRENT_TIMESTAMP`
 	dailyUpsertSQL := `
 	    INSERT INTO daily_data (
 	        symbol, stock_type, trading_date, latest_price, change_amount, change_percent,
@@ -105,11 +120,7 @@ func (h *DatabaseHandler) BatchInsertStockData(dataList []StockData) error {
 			dateStr = data.Datetime.Format("2006-01-02")
 		}
 		normalizedSymbol := normalizeStockSymbol(data.Symbol)
-		if err := tx.Exec(deleteSQL, dateStr, normalizedSymbol, data.Type).Error; err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to delete existing stock data: %v", err)
-		}
-		if err := tx.Exec(insertSQL,
+		if err := tx.Exec(upsertSQL,
 			data.Datetime, dateStr, data.Open, data.Close, data.High, data.Low,
 			data.Volume, data.Amount, data.Amplitude, data.PercentageChange,
 			data.AmountChange, data.TurnoverRate, data.Type, normalizedSymbol,
@@ -544,9 +555,13 @@ func (h *DatabaseHandler) ListStockSymbols() ([]StockSymbolMeta, error) {
     FROM (
         SELECT %s AS normalized_symbol, type, date_str
         FROM stock_data
+        UNION ALL
+        SELECT %s AS normalized_symbol, stock_type AS type, '' AS date_str
+        FROM user_watchlist
+        WHERE symbol IS NOT NULL AND trim(symbol) <> '' AND stock_type > 0
     ) normalized_rows
     GROUP BY normalized_symbol, type
-    ORDER BY type ASC, normalized_symbol ASC`, normalizedSymbolExpr)).Rows()
+    ORDER BY type ASC, normalized_symbol ASC`, normalizedSymbolExpr, normalizedSymbolExpr)).Rows()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list stock symbols: %v", err)
 	}

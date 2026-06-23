@@ -199,3 +199,93 @@ func TestListPublicMTFBestWithValidationGroupsVariantsBySymbol(t *testing.T) {
 		t.Fatalf("sql expectations: %v", err)
 	}
 }
+
+func TestSlimAccessibleMTFBestItemsKeepsOnlyFrontendFields(t *testing.T) {
+	items := []gin.H{
+		{
+			"best": gin.H{
+				"unique_key":           "best-key",
+				"symbol":               "sh562950",
+				"mtf_version":          "2.5",
+				"best_prediction_item": "mtf-0.5",
+				"best_metrics":         `{"composite_score":12.3,"unused":99}`,
+				"prediction_type":      "mtf-lite",
+				"short_name":           "",
+				"watchlist_count":      7,
+				"context_len":          2048,
+				"horizon_len":          7,
+				"stock_type":           2,
+				"created_at":           "2026-01-01T00:00:00Z",
+				"updated_at":           "2026-01-02T00:00:00Z",
+				"covariate_analysis":   gin.H{"unused": true},
+			},
+			"chunks": []gin.H{
+				{
+					"chunk_index":              3,
+					"start_date":               "2026-01-01",
+					"end_date":                 "2026-01-07",
+					"symbol":                   "sh562950",
+					"stock_type":               2,
+					"predictions":              gin.H{"mtf-0.5": []float64{1.1, 1.2}, "unused": []float64{9}},
+					"actual_values":            []float64{1.0, 1.1},
+					"predicted_change_percent": gin.H{"mtf-0.5": []float64{1, 2}, "unused": []float64{9}},
+					"actual_change_percent":    []float64{0, 1},
+					"change_base_value":        1.0,
+					"change_base_date":         "2025-12-31",
+					"dates":                    []string{"2026-01-01", "2026-01-02"},
+					"prediction_type":          "mtf-lite",
+					"adjust_raw_chunks":        gin.H{"predictions": gin.H{"unused": []float64{9}}},
+				},
+				{
+					"chunk_index":              4,
+					"start_date":               "2026-06-04",
+					"end_date":                 "2026-06-12",
+					"symbol":                   "sh562950",
+					"stock_type":               2,
+					"predictions":              gin.H{"mtf-0.5": []float64{2.1, 2.2}},
+					"actual_values":            []float64{2.0, 2.1},
+					"predicted_change_percent": gin.H{"mtf-0.5": []float64{1, 2}},
+					"actual_change_percent":    []float64{0, 1},
+					"dates":                    []string{"2026-06-04", "2026-06-05"},
+				},
+			},
+			"max_deviation_percent": 5.5,
+		},
+	}
+
+	result := slimAccessibleMTFBestItems(items, nil)
+	if len(result) != 1 {
+		t.Fatalf("len(result) = %d, want 1", len(result))
+	}
+
+	best := result[0]["best"].(gin.H)
+	for _, key := range []string{"stock_type", "created_at", "covariate_analysis", "short_name"} {
+		if _, ok := best[key]; ok {
+			t.Fatalf("best contains %q: %#v", key, best)
+		}
+	}
+	metrics := best["best_metrics"].(gin.H)
+	if metrics["composite_score"] != float64(12.3) || len(metrics) != 1 {
+		t.Fatalf("best_metrics = %#v, want only composite_score", metrics)
+	}
+
+	chunks := result[0]["chunks"].([]gin.H)
+	if len(chunks) != 1 {
+		t.Fatalf("len(chunks) = %d, want latest drawable chunk only", len(chunks))
+	}
+	chunk := chunks[0]
+	if chunk["start_date"] != "2026-06-04" {
+		t.Fatalf("chunk start_date = %#v, want latest chunk 2026-06-04", chunk["start_date"])
+	}
+	for _, key := range []string{"chunk_index", "end_date", "symbol", "prediction_type", "change_base_value", "change_base_date", "stock_type"} {
+		if _, ok := chunk[key]; ok {
+			t.Fatalf("chunk contains %q: %#v", key, chunk)
+		}
+	}
+	if _, ok := chunk["predictions"].(gin.H)["mtf-0.5"]; !ok {
+		t.Fatalf("chunk predictions = %#v, want best prediction series", chunk["predictions"])
+	}
+	if _, ok := chunk["adjust_raw_chunks"]; ok {
+		t.Fatalf("chunk contains empty adjust_raw_chunks: %#v", chunk)
+	}
+}

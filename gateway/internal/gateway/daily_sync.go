@@ -423,6 +423,7 @@ func (s *DailyStockSyncer) syncSymbolRange(ctx context.Context, meta stockSymbol
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Token", s.apiToken)
 
 	resp, err := s.client.Do(req)
 	if err != nil {

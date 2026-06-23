@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"fintrack-api/models"
 	"fintrack-api/services"
@@ -583,12 +584,13 @@ func slimAccessibleMTFBestResponse(best gin.H) gin.H {
 		"best_prediction_item": best["best_prediction_item"],
 		"best_metrics":         slimBestMetrics(best["best_metrics"]),
 		"prediction_type":      best["prediction_type"],
-		"short_name":           best["short_name"],
 		"watchlist_count":      best["watchlist_count"],
 		"context_len":          best["context_len"],
 		"horizon_len":          best["horizon_len"],
-		"stock_type":           best["stock_type"],
 		"updated_at":           best["updated_at"],
+	}
+	if value, ok := best["short_name"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+		out["short_name"] = value
 	}
 	if value, ok := best["covariate_signature"]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
 		out["covariate_signature"] = value
@@ -659,33 +661,77 @@ func latestActualPointKey(symbol string, stockType int) string {
 
 func slimAccessibleMTFValidationChunkResponse(chunk gin.H, bestKey string) gin.H {
 	out := gin.H{
-		"chunk_index":       chunk["chunk_index"],
-		"start_date":        chunk["start_date"],
-		"end_date":          chunk["end_date"],
-		"symbol":            chunk["symbol"],
-		"stock_type":        chunk["stock_type"],
-		"actual_values":     chunk["actual_values"],
-		"dates":             chunk["dates"],
-		"prediction_type":   chunk["prediction_type"],
-		"predictions":       pickPredictionSeries(chunk["predictions"], bestKey),
-		"adjust_raw_chunks": slimAdjustRawChunk(chunk["adjust_raw_chunks"], bestKey),
+		"start_date":    chunk["start_date"],
+		"actual_values": chunk["actual_values"],
+		"dates":         chunk["dates"],
+	}
+	if stockType := ginHInt(chunk, "stock_type"); stockType == 1 {
+		out["stock_type"] = stockType
+	}
+	if predictions := pickPredictionSeries(chunk["predictions"], bestKey); len(predictions) > 0 {
+		out["predictions"] = predictions
 	}
 	if value, ok := chunk["actual_change_percent"]; ok {
 		out["actual_change_percent"] = value
 	}
 	if value, ok := chunk["predicted_change_percent"]; ok {
-		out["predicted_change_percent"] = pickPredictionSeries(value, bestKey)
+		if predictedChange := pickPredictionSeries(value, bestKey); len(predictedChange) > 0 {
+			out["predicted_change_percent"] = predictedChange
+		}
 	}
-	if value, ok := chunk["change_base_value"]; ok {
-		out["change_base_value"] = value
-	}
-	if value, ok := chunk["change_base_date"]; ok {
-		out["change_base_date"] = value
-	}
-	if raw := out["adjust_raw_chunks"]; raw == nil {
-		delete(out, "adjust_raw_chunks")
+	if raw := slimAdjustRawChunk(chunk["adjust_raw_chunks"], bestKey); hasSlimAdjustRawChunk(raw) {
+		out["adjust_raw_chunks"] = raw
 	}
 	return out
+}
+
+func latestDrawableAccessibleChunk(chunks []gin.H, bestKey string) (gin.H, bool) {
+	var latest gin.H
+	var latestTime time.Time
+	for _, chunk := range chunks {
+		if !isDrawableAccessibleChunk(chunk, bestKey) {
+			continue
+		}
+		chunkTime := parseMTFChunkDate(fmt.Sprint(chunk["start_date"]))
+		if latest == nil || chunkTime.After(latestTime) {
+			latest = chunk
+			latestTime = chunkTime
+		}
+	}
+	if latest == nil {
+		return nil, false
+	}
+	return latest, true
+}
+
+func isDrawableAccessibleChunk(chunk gin.H, bestKey string) bool {
+	if len(interfaceToStringSlice(chunk["dates"])) == 0 {
+		return false
+	}
+	if len(interfaceToFloatSlice(chunk["actual_values"])) == 0 {
+		return false
+	}
+	predictions := pickPredictionSeries(chunk["predictions"], bestKey)
+	if len(predictions) == 0 {
+		return false
+	}
+	for _, series := range predictions {
+		return len(interfaceToFloatSlice(series)) > 0
+	}
+	return false
+}
+
+func parseMTFChunkDate(value string) time.Time {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02", "20060102", time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func appendLatestActualPointToLastChunk(chunks []gin.H, latest latestActualPoint) []gin.H {
@@ -793,6 +839,39 @@ func pickPredictionSeries(value interface{}, bestKey string) gin.H {
 	return gin.H{}
 }
 
+func ginHInt(values gin.H, key string) int {
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		if n, err := value.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+func hasSlimAdjustRawChunk(value interface{}) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case gin.H:
+		return len(v) > 0
+	case []gin.H:
+		return len(v) > 0
+	default:
+		return true
+	}
+}
+
 func slimAdjustRawChunk(value interface{}, bestKey string) interface{} {
 	if value == nil {
 		return nil
@@ -805,10 +884,17 @@ func slimAdjustRawChunk(value interface{}, bestKey string) interface{} {
 			}
 		}
 		if v, ok := raw["predictions"]; ok {
-			out["predictions"] = pickPredictionSeries(v, bestKey)
+			if predictions := pickPredictionSeries(v, bestKey); len(predictions) > 0 {
+				out["predictions"] = predictions
+			}
 		}
 		if v, ok := raw["predicted_change_percent"]; ok {
-			out["predicted_change_percent"] = pickPredictionSeries(v, bestKey)
+			if predictedChange := pickPredictionSeries(v, bestKey); len(predictedChange) > 0 {
+				out["predicted_change_percent"] = predictedChange
+			}
+		}
+		if len(out) == 0 {
+			return nil
 		}
 		return out
 	}
@@ -821,7 +907,9 @@ func slimAdjustRawChunk(value interface{}, bestKey string) interface{} {
 		items := make([]gin.H, 0, len(raw))
 		for _, item := range raw {
 			if m, ok := item.(map[string]interface{}); ok {
-				items = append(items, filter(m))
+				if slim := filter(m); len(slim) > 0 {
+					items = append(items, slim)
+				}
 			}
 		}
 		if len(items) > 0 {
@@ -842,8 +930,7 @@ func slimAccessibleMTFBestItems(items []gin.H, latestByKey map[string]latestActu
 		bestKey := strings.TrimSpace(fmt.Sprint(best["best_prediction_item"]))
 		slimChunks := []gin.H{}
 		if chunks, ok := item["chunks"].([]gin.H); ok {
-			slimChunks = make([]gin.H, 0, len(chunks))
-			for _, chunk := range chunks {
+			if chunk, ok := latestDrawableAccessibleChunk(chunks, bestKey); ok {
 				slimChunks = append(slimChunks, slimAccessibleMTFValidationChunkResponse(chunk, bestKey))
 			}
 		}

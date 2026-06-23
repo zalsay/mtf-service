@@ -17,3 +17,23 @@ func TestParseDailySyncTimeRejectsInvalidValues(t *testing.T) {
 		}
 	}
 }
+
+func TestLevel1DailyTokenDefaultsToPostgresHandlerToken(t *testing.T) {
+	t.Setenv("A_STOCK_DAILY_TOKEN", "")
+	t.Setenv("LEVEL1_DAILY_TOKEN", "")
+	t.Setenv("DAILY_STOCK_SYNC_TOKEN", "")
+
+	if got := level1DailyToken("postgres-token"); got != "postgres-token" {
+		t.Fatalf("level1DailyToken() = %q, want postgres-token", got)
+	}
+}
+
+func TestLevel1DailyTokenCanBeOverridden(t *testing.T) {
+	t.Setenv("A_STOCK_DAILY_TOKEN", "level1-token")
+	t.Setenv("LEVEL1_DAILY_TOKEN", "")
+	t.Setenv("DAILY_STOCK_SYNC_TOKEN", "")
+
+	if got := level1DailyToken("postgres-token"); got != "level1-token" {
+		t.Fatalf("level1DailyToken() = %q, want level1-token", got)
+	}
+}

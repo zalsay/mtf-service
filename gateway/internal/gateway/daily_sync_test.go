@@ -21,6 +21,9 @@ func TestSyncSymbolRangeFetchesLatestDateGapInOneRequest(t *testing.T) {
 		if r.URL.Path != "/api/v1/history" {
 			t.Fatalf("unexpected history path: %s", r.URL.Path)
 		}
+		if got := r.Header.Get("X-Token"); got != "token" {
+			t.Fatalf("expected history X-Token header, got %q", got)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&historyPayload); err != nil {
 			t.Fatalf("decode history payload: %v", err)
 		}

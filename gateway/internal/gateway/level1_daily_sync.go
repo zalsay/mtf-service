@@ -16,7 +16,8 @@ type Level1DailySyncer struct {
 	client         *http.Client
 	level1BaseURL  string
 	historyBaseURL string
-	apiToken       string
+	level1Token    string
+	historyToken   string
 	location       *time.Location
 	scheduleHour   int
 	scheduleMinute int
@@ -39,6 +40,19 @@ func NewLevel1DailySyncer(
 	scheduleMinute int,
 	concurrent int,
 ) *Level1DailySyncer {
+	return NewLevel1DailySyncerWithTokens(level1BaseURL, historyBaseURL, apiToken, apiToken, location, scheduleHour, scheduleMinute, concurrent)
+}
+
+func NewLevel1DailySyncerWithTokens(
+	level1BaseURL string,
+	historyBaseURL string,
+	level1Token string,
+	historyToken string,
+	location *time.Location,
+	scheduleHour int,
+	scheduleMinute int,
+	concurrent int,
+) *Level1DailySyncer {
 	if location == nil {
 		location = time.Local
 	}
@@ -51,7 +65,8 @@ func NewLevel1DailySyncer(
 		},
 		level1BaseURL:  strings.TrimRight(level1BaseURL, "/"),
 		historyBaseURL: strings.TrimRight(historyBaseURL, "/"),
-		apiToken:       apiToken,
+		level1Token:    level1Token,
+		historyToken:   historyToken,
 		location:       location,
 		scheduleHour:   scheduleHour,
 		scheduleMinute: scheduleMinute,
@@ -128,7 +143,7 @@ func (s *Level1DailySyncer) isTradingDay(ctx context.Context, date string) (bool
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("X-Token", s.apiToken)
+	req.Header.Set("X-Token", s.historyToken)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return false, err
@@ -165,7 +180,7 @@ func (s *Level1DailySyncer) triggerDaily(ctx context.Context, date string) (*lev
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Token", s.apiToken)
+	req.Header.Set("X-Token", s.level1Token)
 
 	resp, err := s.client.Do(req)
 	if err != nil {
