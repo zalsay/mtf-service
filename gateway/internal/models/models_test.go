@@ -7,11 +7,12 @@ import (
 
 func TestRequestKeyIncludesPredictionTypeAndCovariateSignature(t *testing.T) {
 	nonCov := InferenceRequest{
-		StockCode:  "sh510050",
-		StockType:  2,
-		Years:      1,
-		HorizonLen: 7,
-		ContextLen: 2048,
+		StockCode:           "sh510050",
+		StockType:           2,
+		Years:               1,
+		HorizonLen:          7,
+		ContextLen:          2048,
+		PredictionTypeValue: "mtf-lite",
 	}
 	cov := InferenceRequest{
 		StockCode:       "sh510050",
@@ -93,17 +94,25 @@ func TestCovariateSignaturePrefersExplicitRequestValue(t *testing.T) {
 
 func TestNormalizePredictionTypeMapsLegacyNames(t *testing.T) {
 	tests := map[string]string{
-		"":         "",
-		"non_cov":  "mtf-lite",
-		"cov":      "mtf-pro",
-		"mtf-lite": "mtf-lite",
-		"mtf-pro":  "mtf-pro",
+		"":           "",
+		"non_cov":    "mtf-lite",
+		"cov":        "mtf-pro",
+		"covariates": "mtf-pro",
+		"mtf-lite":   "mtf-lite",
+		"mtf-pro":    "mtf-pro",
 	}
 
 	for input, want := range tests {
 		if got := NormalizePredictionType(input); got != want {
 			t.Fatalf("NormalizePredictionType(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestPredictionTypeDefaultsToMTFPro(t *testing.T) {
+	request := InferenceRequest{}
+	if got := request.PredictionType(); got != PredictionTypeMTFPro {
+		t.Fatalf("PredictionType() = %q, want %q", got, PredictionTypeMTFPro)
 	}
 }
 

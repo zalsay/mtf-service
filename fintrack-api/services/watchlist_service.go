@@ -1693,7 +1693,7 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	if !ok || data == nil {
 		return http.StatusNotFound, predictionCacheNotFoundBody(stockCode, "未找到单次预测缓存", "prediction cache not found"), nil
 	}
-	if !isPredictionCacheFresh(data, time.Now().UTC()) {
+	if !isPredictionCacheFresh(data, predictionCacheFreshnessDate(req)) {
 		return http.StatusNotFound, predictionCacheNotFoundBody(stockCode, "单次预测缓存已过期", "prediction cache stale"), nil
 	}
 	slimData := slimPredictionCacheData(data)
@@ -1707,6 +1707,20 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 		responseBody["gpu_id"] = gpuID
 	}
 	return http.StatusOK, responseBody, nil
+}
+
+func predictionCacheFreshnessDate(req *models.MTFPredictRequest) time.Time {
+	now := chinaNow()
+	if req == nil || req.PredictDate == nil {
+		return now
+	}
+	raw := strings.TrimSpace(*req.PredictDate)
+	for _, layout := range []string{"2006-01-02", "20060102", time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, raw, now.Location()); err == nil {
+			return parsed
+		}
+	}
+	return now
 }
 
 func predictionCacheNotFoundBody(stockCode, message, errorCode string) map[string]interface{} {

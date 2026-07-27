@@ -25,7 +25,7 @@ services, gateway components, and frontend application code.
 - Go 1.24+ for `postgres-handler`
 - Node.js 20+ for `fintrack-front` and `deepseek-tui`
 - PostgreSQL for persistent application data
-- Redis for gateway queue state when running gateway-backed workflows
+- Redis for gateway queue state when `GATEWAY_STORE=redis` (the default); gateway also supports pure `memory` and memory + SQLite stores
 
 ## Configuration
 
@@ -71,7 +71,7 @@ Gateway:
 ```bash
 cd gateway
 go mod download
-go run ./cmd/inference-gateway
+./start.sh
 ```
 
 DeepSeek TUI runtime:
@@ -86,7 +86,7 @@ Postgres handler:
 ```bash
 cd postgres-handler
 go mod download
-go run .
+./start.sh
 ```
 
 ## Tests

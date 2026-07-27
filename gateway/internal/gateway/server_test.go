@@ -102,6 +102,9 @@ func TestPredictOnceCachedUsesPredictDateForFreshness(t *testing.T) {
 		if r.URL.Path != "/api/v1/save-predictions/mtf-direct/by-request" {
 			t.Fatalf("unexpected postgres handler path %s", r.URL.Path)
 		}
+		if got := r.URL.Query().Get("predict_date"); got != "2026-06-02" {
+			t.Fatalf("prediction cache predict_date = %q, want 2026-06-02", got)
+		}
 		_, _ = w.Write([]byte(`{
 			"code":200,
 			"message":"Success",
@@ -210,8 +213,9 @@ func TestInferenceTimeEstimatorUsesPredictionType(t *testing.T) {
 	server := &Server{timeEstimator: estimator}
 
 	nonCovEstimate, ok := server.estimateInferenceTime(models.InferenceRequest{
-		ContextLen: 1024,
-		HorizonLen: 14,
+		ContextLen:          1024,
+		HorizonLen:          14,
+		PredictionTypeValue: "mtf-lite",
 	}, "/internal/predict_for_best_sync")
 	if !ok || nonCovEstimate.EstimatedInferenceTimeSec != 15.7 {
 		t.Fatalf("expected non_cov estimate 15.7, got %#v ok=%t", nonCovEstimate, ok)
@@ -224,6 +228,81 @@ func TestInferenceTimeEstimatorUsesPredictionType(t *testing.T) {
 	}, "/internal/predict_for_best_sync")
 	if !ok || covEstimate.EstimatedInferenceTimeSec != 8.0 {
 		t.Fatalf("expected cov estimate 8.0, got %#v ok=%t", covEstimate, ok)
+	}
+}
+
+func TestNormalizeInferencePayloadDefaultsToMTFPro(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510300",
+		"stock_type": 2,
+		"years": 15,
+		"horizon_len": 7,
+		"context_len": 2048
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, normalizedRequest, err := normalizeInferencePayload(body, request, "/internal/predict_for_best_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+	if normalizedRequest.PredictionType() != "mtf-pro" {
+		t.Fatalf("expected default prediction type mtf-pro, got %q", normalizedRequest.PredictionType())
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("decode normalized body: %v", err)
+	}
+	if normalized["prediction_type"] != "mtf-pro" {
+		t.Fatalf("expected normalized body prediction_type=mtf-pro, got %#v", normalized["prediction_type"])
+	}
+}
+
+func TestNormalizeInferencePayloadUsesPythonDefaultsForBestRuntimeOptions(t *testing.T) {
+	body := []byte(`{
+		"stock_code": "510300",
+		"prediction_type": "mtf-pro",
+		"pos_json_path": "/tmp/custom-pos.json",
+		"model_path": "/tmp/custom-model",
+		"validation_chunks_target": 9,
+		"max_selection_chunks": 10,
+		"max_validation_chunks": 11,
+		"per_core_batch_size": 12,
+		"chunk_batch_size": 13,
+		"torch_compile": false,
+		"use_tdx_start_date": false
+	}`)
+
+	var request models.InferenceRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	normalizedBody, _, err := normalizeInferencePayload(body, request, "/internal/predict_for_best_sync")
+	if err != nil {
+		t.Fatalf("normalizeInferencePayload() error: %v", err)
+	}
+
+	var normalized map[string]any
+	if err := json.Unmarshal(normalizedBody, &normalized); err != nil {
+		t.Fatalf("decode normalized body: %v", err)
+	}
+	for _, field := range []string{
+		"pos_json_path",
+		"model_path",
+		"validation_chunks_target",
+		"max_selection_chunks",
+		"max_validation_chunks",
+		"per_core_batch_size",
+		"chunk_batch_size",
+		"torch_compile",
+		"use_tdx_start_date",
+	} {
+		if _, exists := normalized[field]; exists {
+			t.Fatalf("expected best payload to omit Python runtime override %q", field)
+		}
 	}
 }
 
@@ -443,8 +522,8 @@ func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T
 	if normalizedRequest.EndDate != "20260602" {
 		t.Fatalf("expected predict_date to drive end_date, got %#v", normalizedRequest.EndDate)
 	}
-	if normalizedRequest.StartDate != "20110602" {
-		t.Fatalf("expected start_date to derive from predict_date and years, got %#v", normalizedRequest.StartDate)
+	if normalizedRequest.StartDate != nil {
+		t.Fatalf("expected start_date to remain empty for predict_once, got %#v", normalizedRequest.StartDate)
 	}
 
 	var normalized map[string]any
@@ -457,8 +536,8 @@ func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T
 	if normalized["end_date"] != "20260602" {
 		t.Fatalf("expected normalized body end_date=20260602, got %#v", normalized["end_date"])
 	}
-	if normalized["start_date"] != "20110602" {
-		t.Fatalf("expected normalized body start_date=20110602, got %#v", normalized["start_date"])
+	if _, exists := normalized["start_date"]; exists {
+		t.Fatalf("expected normalized body to omit auto-injected start_date, got %#v", normalized["start_date"])
 	}
 }
 
@@ -486,8 +565,8 @@ func TestNormalizeInferencePayloadExplicitEndDateOverridesPredictDate(t *testing
 	if normalizedRequest.EndDate != "20260601" {
 		t.Fatalf("expected explicit end_date to win, got %#v", normalizedRequest.EndDate)
 	}
-	if normalizedRequest.StartDate != "20110601" {
-		t.Fatalf("expected start_date to derive from explicit end_date, got %#v", normalizedRequest.StartDate)
+	if normalizedRequest.StartDate != nil {
+		t.Fatalf("expected start_date to remain empty for predict_once, got %#v", normalizedRequest.StartDate)
 	}
 
 	var normalized map[string]any
@@ -499,6 +578,9 @@ func TestNormalizeInferencePayloadExplicitEndDateOverridesPredictDate(t *testing
 	}
 	if normalized["end_date"] != "20260601" {
 		t.Fatalf("expected normalized body end_date=20260601, got %#v", normalized["end_date"])
+	}
+	if _, exists := normalized["start_date"]; exists {
+		t.Fatalf("expected normalized body to omit auto-injected start_date, got %#v", normalized["start_date"])
 	}
 }
 
@@ -641,6 +723,46 @@ func TestEffectiveJobCovariateSignaturePrefersJobSignature(t *testing.T) {
 	}
 }
 
+func TestGatewayRequiresTokenForProtectedRoutes(t *testing.T) {
+	handler := NewServerWithOptions(nil, ServerOptions{APIToken: "gateway-secret"})
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing token to return 401, got %d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	wrongToken := httptest.NewRecorder()
+	wrongRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	wrongRequest.Header.Set("X-API-Token", "wrong-token")
+	handler.ServeHTTP(wrongToken, wrongRequest)
+	if wrongToken.Code != http.StatusUnauthorized {
+		t.Fatalf("expected wrong token to return 401, got %d body=%s", wrongToken.Code, wrongToken.Body.String())
+	}
+
+	authorized := httptest.NewRecorder()
+	authorizedRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	authorizedRequest.Header.Set("X-API-Token", "gateway-secret")
+	handler.ServeHTTP(authorized, authorizedRequest)
+	if authorized.Code != http.StatusOK {
+		t.Fatalf("expected correct X-API-Token to return 200, got %d body=%s", authorized.Code, authorized.Body.String())
+	}
+
+	legacyAuthorized := httptest.NewRecorder()
+	legacyRequest := httptest.NewRequest(http.MethodGet, "/", nil)
+	legacyRequest.Header.Set("X-Gateway-API-Token", "gateway-secret")
+	handler.ServeHTTP(legacyAuthorized, legacyRequest)
+	if legacyAuthorized.Code != http.StatusOK {
+		t.Fatalf("expected correct X-Gateway-API-Token to return 200, got %d body=%s", legacyAuthorized.Code, legacyAuthorized.Body.String())
+	}
+
+	health := httptest.NewRecorder()
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("expected health check without token to return 200, got %d body=%s", health.Code, health.Body.String())
+	}
+}
+
 func TestDeepSeekTUIProxyRequiresTokenAndStripsPrefix(t *testing.T) {
 	var sawForwarded bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -656,6 +778,9 @@ func TestDeepSeekTUIProxyRequiresTokenAndStripsPrefix(t *testing.T) {
 		}
 		if got := r.Header.Get("X-API-Key"); got != "" {
 			t.Fatalf("expected X-API-Key header to be stripped, got %q", got)
+		}
+		if got := r.Header.Get("X-API-Token"); got != "" {
+			t.Fatalf("expected X-API-Token header to be stripped, got %q", got)
 		}
 		if got := r.Header.Get("X-Gateway-API-Token"); got != "" {
 			t.Fatalf("expected X-Gateway-API-Token header to be stripped, got %q", got)
@@ -686,6 +811,7 @@ func TestDeepSeekTUIProxyRequiresTokenAndStripsPrefix(t *testing.T) {
 	authorized := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/deepseek-tui/health?x=1", nil)
 	req.Header.Set("X-Gateway-API-Token", "secret-token")
+	req.Header.Set("X-API-Token", "secret-token")
 	req.Header.Set("X-DeepSeek-API-Key", "user-deepseek-key")
 	handler.ServeHTTP(authorized, req)
 	if authorized.Code != http.StatusOK {

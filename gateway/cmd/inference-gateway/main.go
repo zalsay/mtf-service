@@ -132,13 +132,54 @@ func level1DailyToken(postgresHandlerToken string) string {
 	return getenvWithAliases([]string{"A_STOCK_DAILY_TOKEN", "LEVEL1_DAILY_TOKEN", "DAILY_STOCK_SYNC_TOKEN"}, postgresHandlerToken)
 }
 
+func newGatewayStore() (store.Store, string, error) {
+	mode := strings.ToLower(strings.TrimSpace(getenv("GATEWAY_STORE", "redis")))
+	switch mode {
+	case "redis":
+		redisAddr := getenv("REDIS_ADDR", "ai-functions-redis:6379")
+		redisPassword := os.Getenv("REDIS_PASSWORD")
+		redisDB := store.ParseRedisDB(os.Getenv("REDIS_DB"), 0)
+		redisPrefix := getenv("REDIS_PREFIX", "ai-functions")
+		return store.NewRedisStore(redisAddr, redisPassword, redisDB, redisPrefix), mode, nil
+	case "memory", "in-memory", "inmemory":
+		return store.NewMemoryStore(), "memory", nil
+	case "sqlite":
+		path := getenv("GATEWAY_SQLITE_PATH", "/data/gateway.db")
+		sqliteStore, err := store.NewSQLiteStore(path)
+		if err != nil {
+			return nil, mode, err
+		}
+		hybridStore, err := store.NewHybridStore(sqliteStore)
+		if err != nil {
+			_ = sqliteStore.Close()
+			return nil, mode, err
+		}
+		return hybridStore, mode, nil
+	case "hybrid", "memory-sqlite", "sqlite-memory":
+		path := getenv("GATEWAY_SQLITE_PATH", "/data/gateway.db")
+		sqliteStore, err := store.NewSQLiteStore(path)
+		if err != nil {
+			return nil, mode, err
+		}
+		hybridStore, err := store.NewHybridStore(sqliteStore)
+		if err != nil {
+			_ = sqliteStore.Close()
+			return nil, mode, err
+		}
+		return hybridStore, mode, nil
+	default:
+		return nil, mode, fmt.Errorf("unsupported GATEWAY_STORE=%q, want redis, memory, or sqlite", mode)
+	}
+}
+
 func main() {
 	port := getenv("SERVICE_PORT", "9010")
 	xpuURL := getenv("XPU_BACKEND_URL", "http://ai-functions-xpu:9008")
-	rocmURL := getenv("ROCM_BACKEND_URL", "http://ai-functions-rocm:9009")
+	cudaURL := strings.TrimSpace(os.Getenv("CUDA_BACKEND_URL"))
+	rocmURL := strings.TrimSpace(os.Getenv("ROCM_BACKEND_URL"))
 	cpuXregURL := strings.TrimSpace(os.Getenv("CPU_XREG_BACKEND_URL"))
 	uziURL := strings.TrimSpace(getenv("UZI_BACKEND_URL", "http://ai-functions-uzi:9011"))
-	apiToken := getenvWithAliases([]string{"MTF_SERVICE_TOKEN", "GATEWAY_API_TOKEN"}, "fintrack-dev-token")
+	apiToken := getenv("MTF_SERVICE_TOKEN", "fintrack-dev-token")
 	deepSeekTUIBackendURL := strings.TrimSpace(os.Getenv("DEEPSEEK_TUI_BACKEND_URL"))
 	deepSeekTUIProxyToken := getenvWithAliases([]string{"MTF_SERVICE_TOKEN", "DEEPSEEK_TUI_PROXY_TOKEN", "GATEWAY_API_TOKEN"}, apiToken)
 	deepSeekTUIProxyPath := getenv("DEEPSEEK_TUI_PROXY_PATH", "/deepseek-tui")
@@ -146,13 +187,24 @@ func main() {
 	inferenceTimeBenchmarkPath := getenv("INFERENCE_TIME_BENCHMARK_PATH", "/app/config/inference_time_benchmarks.json")
 	covRouteMode := getenvCovRouteMode("GATEWAY_COV_ROUTE_MODE", "xpu_split")
 	xpuConcurrency := getenvInt("XPU_CONCURRENCY", 2)
+	if cudaURL != "" && strings.TrimSpace(os.Getenv("XPU_CONCURRENCY")) == "" {
+		// A configured CUDA backend is the local main backend by default.
+		xpuConcurrency = 0
+	}
+	cudaConcurrency := getenvInt("CUDA_CONCURRENCY", 1)
+	if cudaURL == "" {
+		cudaConcurrency = 0
+	}
 	rocmConcurrency := getenvInt("ROCM_CONCURRENCY", 1)
+	if rocmURL == "" && cudaURL != "" {
+		// Do not create the historical ROCm default when CUDA is configured.
+		rocmConcurrency = 0
+	}
+	if rocmURL == "" && cudaURL == "" {
+		rocmURL = "http://ai-functions-rocm:9009"
+	}
 	cpuXregConcurrency := getenvInt("CPU_XREG_CONCURRENCY", 0)
 	uziConcurrency := getenvInt("UZI_CONCURRENCY", 10)
-	redisAddr := getenv("REDIS_ADDR", "ai-functions-redis:6379")
-	redisPassword := os.Getenv("REDIS_PASSWORD")
-	redisDB := store.ParseRedisDB(os.Getenv("REDIS_DB"), 0)
-	redisPrefix := getenv("REDIS_PREFIX", "ai-functions")
 	postgresHandlerURL := getenv("POSTGRES_HANDLER_URL", "http://ai-functions-postgres-handler:58004")
 	postgresHandlerToken := getenvWithAliases([]string{"POSTGRES_HANDLER_TOKEN", "HISTORY_SERVICE_TOKEN", "API_TOKEN"}, "fintrack-dev-token")
 	historyServiceURL := getenv("HISTORY_SERVICE_URL", getenv("AKSHARE_SERVICE_URL", postgresHandlerURL))
@@ -185,15 +237,19 @@ func main() {
 	}
 
 	client := backend.NewClient(2 * time.Hour)
-	redisStore := store.NewRedisStore(redisAddr, redisPassword, redisDB, redisPrefix)
+	jobStore, storeMode, err := newGatewayStore()
+	if err != nil {
+		log.Fatalf("configure gateway store failed: %v", err)
+	}
 	defer func() {
-		if err := redisStore.Close(); err != nil {
-			log.Printf("redis close error: %v", err)
+		if err := jobStore.Close(); err != nil {
+			log.Printf("gateway store close error: %v", err)
 		}
 	}()
-	if err := redisStore.Ping(context.Background()); err != nil {
-		log.Fatalf("redis unavailable: %v", err)
+	if err := jobStore.Ping(context.Background()); err != nil {
+		log.Fatalf("gateway store unavailable: mode=%s error=%v", storeMode, err)
 	}
+	log.Printf("gateway store: mode=%s", storeMode)
 
 	endpoints := []backend.Endpoint{
 		{
@@ -205,6 +261,17 @@ func main() {
 			SupportsDirectCov: false,
 			SupportsNonCov:    false,
 		},
+	}
+	if cudaURL != "" && cudaConcurrency > 0 {
+		endpoints = append(endpoints, backend.Endpoint{
+			Name:              "cuda",
+			Role:              models.BackendRoleMain,
+			URL:               cudaURL,
+			Capacity:          cudaConcurrency,
+			SupportsCov:       true,
+			SupportsDirectCov: true,
+			SupportsNonCov:    true,
+		})
 	}
 	if rocmURL != "" && rocmConcurrency > 0 {
 		endpoints = append(endpoints, backend.Endpoint{
@@ -237,8 +304,11 @@ func main() {
 			SupportsUZI: true,
 		})
 	}
-	scheduler := queue.NewScheduler(client, redisStore, endpoints)
+	scheduler := queue.NewScheduler(client, jobStore, endpoints)
 	log.Printf("gateway mtf-pro route mode: %s", covRouteMode)
+	if cudaURL != "" {
+		log.Printf("gateway CUDA backend: url=%s concurrency=%d", cudaURL, cudaConcurrency)
+	}
 	log.Printf("gateway uzi queue: backend=%s concurrency=%d", uziURL, uziConcurrency)
 	if deepSeekTUIBackendURL != "" {
 		log.Printf("gateway deepseek tui proxy: path=%s backend=%s token_configured=%t", deepSeekTUIProxyPath, deepSeekTUIBackendURL, deepSeekTUIProxyToken != "")
@@ -307,6 +377,7 @@ func main() {
 	server := &http.Server{
 		Addr: ":" + port,
 		Handler: gateway.NewServerWithOptions(scheduler, gateway.ServerOptions{
+			APIToken:                   apiToken,
 			DeepSeekTUIBackendURL:      deepSeekTUIBackendURL,
 			DeepSeekTUIProxyToken:      deepSeekTUIProxyToken,
 			DeepSeekTUIProxyPath:       deepSeekTUIProxyPath,

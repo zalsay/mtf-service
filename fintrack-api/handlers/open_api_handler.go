@@ -266,6 +266,11 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "unique_key is required", false)
 		return
 	}
+	predictDate, ok := optionalOpenAPIPredictDate(c)
+	if !ok {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "predict_date must be a valid date", false)
+		return
+	}
 	symbol, err := h.watchlist.GetMTFBestSymbolByUniqueKey(uniqueKey)
 	if err != nil {
 		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
@@ -278,6 +283,9 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 	if err != nil {
 		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
 		return
+	}
+	if predictDate != nil {
+		predictReq.PredictDate = predictDate
 	}
 	normalized, err := services.NormalizeMTFPredictOnceRequest(predictReq, user.MembershipLevel, userID, false)
 	if err != nil {
@@ -293,16 +301,28 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 		writeOpenAPIData(c, status, buildOpenAPIFutureFromPredictOnce(uniqueKey, body))
 		return
 	}
-	status, body, err = h.watchlist.TriggerMTFPredictOnce(normalized)
-	if err != nil {
-		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
-		return
+	message := "未找到指定日期的单次预测缓存"
+	if rawMessage, exists := body["message"]; exists && rawMessage != nil {
+		if value, ok := rawMessage.(string); ok {
+			if value = strings.TrimSpace(value); value != "" {
+				message = value
+			}
+		}
 	}
-	if data, ok := predictOnceData(body); ok {
-		writeOpenAPIData(c, status, buildOpenAPIFutureData(uniqueKey, data))
-		return
+	writeOpenAPIError(c, http.StatusNotFound, "prediction_cache_not_found", message, false)
+}
+
+func optionalOpenAPIPredictDate(c *gin.Context) (*string, bool) {
+	raw := strings.TrimSpace(c.Query("predict_date"))
+	if raw == "" {
+		return nil, true
 	}
-	writeOpenAPIData(c, status, body)
+	parsed := parseMTFChunkDate(raw)
+	if parsed.IsZero() {
+		return nil, false
+	}
+	value := parsed.Format("2006-01-02")
+	return &value, true
 }
 
 func buildOpenAPIFutureFromPredictOnce(uniqueKey string, body map[string]interface{}) interface{} {

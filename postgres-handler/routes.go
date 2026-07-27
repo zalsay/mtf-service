@@ -52,6 +52,7 @@ func RegisterRoutes(r *gin.Engine, handler *DatabaseHandler, apiToken string) {
 		// 同步 fintrack-api 路由：保存 MTF 最佳分位、验证块、查询以及回测
 		api.POST("/save-predictions/mtf-best", handler.saveMTFBestHandler)
 		api.POST("/save-predictions/mtf-best/val-chunk", handler.saveMTFValChunkHandler)
+		api.POST("/save-predictions/mtf-best/val-chunks", handler.saveMTFValidationChunksHandler)
 		api.GET("/save-predictions/mtf-best/by-unique", handler.getMTFBestByUniqueKeyHandler)
 		api.GET("/save-predictions/mtf-best/by-config", handler.getMTFBestKeysByConfigHandler)
 		api.GET("/save-predictions/mtf-best/val-chunk/latest", handler.getLatestMTFValChunkHandler)

@@ -95,35 +95,35 @@ func (r UZIAnalyzeRequest) ForceEnqueueEnabled() bool {
 }
 
 type requestKeyPayload struct {
-	StockCode             string `json:"stock_code"`
-	StockType             any    `json:"stock_type"`
-	TimeStep              int    `json:"time_step"`
-	Years                 int    `json:"years"`
-	StartDate             string `json:"start_date,omitempty"`
-	EndDate               string `json:"end_date,omitempty"`
-	HorizonLen            int    `json:"horizon_len"`
-	ContextLen            int    `json:"context_len"`
-	PredictionType        string `json:"prediction_type"`
-	CovariatePreset       string `json:"covariate_preset,omitempty"`
-	CovariateSignature    string `json:"covariate_signature,omitempty"`
-	RefreshReason         string `json:"refresh_reason,omitempty"`
+	StockCode          string `json:"stock_code"`
+	StockType          any    `json:"stock_type"`
+	TimeStep           int    `json:"time_step"`
+	Years              int    `json:"years"`
+	StartDate          string `json:"start_date,omitempty"`
+	EndDate            string `json:"end_date,omitempty"`
+	HorizonLen         int    `json:"horizon_len"`
+	ContextLen         int    `json:"context_len"`
+	PredictionType     string `json:"prediction_type"`
+	CovariatePreset    string `json:"covariate_preset,omitempty"`
+	CovariateSignature string `json:"covariate_signature,omitempty"`
+	RefreshReason      string `json:"refresh_reason,omitempty"`
 }
 
 func (r InferenceRequest) RequestKey() (string, error) {
 	_, covariatePreset := CanonicalizeCovariateRouting(r.effectiveCovariateConfig(), r.CovariatePreset)
 	payload := requestKeyPayload{
-		StockCode:             strings.TrimSpace(r.StockCode),
-		StockType:             normalizeStockType(r.StockType),
-		TimeStep:              normalizeIntValue(r.TimeStep, 0),
-		Years:                 normalizeIntValue(r.Years, 15),
-		StartDate:             normalizeDateValue(r.StartDate),
-		EndDate:               normalizeDateValue(r.EndDate),
-		HorizonLen:            normalizeIntValue(r.HorizonLen, 7),
-		ContextLen:            normalizeIntValue(r.ContextLen, 2048),
-		PredictionType:        r.PredictionType(),
-		CovariatePreset:       covariatePreset,
-		CovariateSignature:    r.CovariateSignature(),
-		RefreshReason:         strings.TrimSpace(r.RefreshReason),
+		StockCode:          strings.TrimSpace(r.StockCode),
+		StockType:          normalizeStockType(r.StockType),
+		TimeStep:           normalizeIntValue(r.TimeStep, 0),
+		Years:              normalizeIntValue(r.Years, 15),
+		StartDate:          normalizeDateValue(r.StartDate),
+		EndDate:            normalizeDateValue(r.EndDate),
+		HorizonLen:         normalizeIntValue(r.HorizonLen, 7),
+		ContextLen:         normalizeIntValue(r.ContextLen, 2048),
+		PredictionType:     r.PredictionType(),
+		CovariatePreset:    covariatePreset,
+		CovariateSignature: r.CovariateSignature(),
+		RefreshReason:      strings.TrimSpace(r.RefreshReason),
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -192,6 +192,9 @@ func CovariatePresetSupportsXPUSplit(preset string) bool {
 }
 
 func predictionTypeFromCovariateConfig(raw any) string {
+	if raw == nil {
+		return PredictionTypeMTFPro
+	}
 	if covariatesEnabled(raw) {
 		return PredictionTypeMTFPro
 	}
@@ -204,7 +207,7 @@ func NormalizePredictionType(value string) string {
 		return ""
 	case PredictionTypeMTFLite, "mtf_lite", LegacyPredictionTypeNonCov, "non-cov", "lite":
 		return PredictionTypeMTFLite
-	case PredictionTypeMTFPro, "mtf_pro", LegacyPredictionTypeCov, "pro":
+	case PredictionTypeMTFPro, "mtf_pro", LegacyPredictionTypeCov, "covariates", "pro":
 		return PredictionTypeMTFPro
 	default:
 		return strings.TrimSpace(value)

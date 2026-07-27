@@ -8,13 +8,14 @@
 - 结果持久化接口：`ai-functions-postgres-handler`
 - XPU 后端：`ai-functions-xpu`
 - ROCm 后端：`ai-functions-rocm`
-- 队列与任务持久化：`ai-functions-redis`
+- CUDA 后端：通过 `CUDA_BACKEND_URL` 配置的 TimesFM 服务
+- 队列与任务存储：默认使用 `ai-functions-redis`，也支持纯内存或内存 + SQLite
 
 统一入口负责：
 
 - 接收外部推理请求
 - 生成 `job_id`
-- 将任务写入 Redis
+- 将任务写入选定的队列存储后端
 - 按设备并发上限调度到 XPU / ROCm 后端
 - 提供任务状态查询接口
 
@@ -22,6 +23,40 @@
 
 - `xpu = 2`
 - `rocm = 1`
+
+如果 TimesFM 使用 NVIDIA CUDA，可配置：
+
+```bash
+CUDA_BACKEND_URL=http://timesfm:9008
+CUDA_CONCURRENCY=1
+XPU_CONCURRENCY=0
+ROCM_CONCURRENCY=0
+```
+
+配置 `CUDA_BACKEND_URL` 后，Gateway 会将 CUDA backend 标记为支持
+`mtf-lite`、`mtf-pro` 和 direct covariate；未显式配置 ROCm 时不会启用
+历史默认 ROCm backend。
+
+### 队列存储模式
+
+通过 `GATEWAY_STORE` 选择任务存储，默认值为 `redis`，因此现有部署行为保持不变：
+
+```bash
+# 现有 Redis 模式
+GATEWAY_STORE=redis
+REDIS_ADDR=ai-functions-redis:6379
+
+# 单进程内存模式，网关重启后任务会丢失
+GATEWAY_STORE=memory
+
+# 内存热缓存 + SQLite 持久化模式
+GATEWAY_STORE=sqlite
+GATEWAY_SQLITE_PATH=/data/gateway.db
+```
+
+Redis、内存+SQLite 和纯 memory 复用相同的任务去重、队列优先级、状态查询和恢复接口。
+SQLite 模式下内存保存热状态，写入同步落 SQLite；启动时从 SQLite 加载内存状态，因此建议将 `/data` 挂载到宿主机或命名卷。
+纯 memory 模式适合本地开发和不要求重启保留任务的单进程场景。
 
 ## 2. 端口约定
 
@@ -53,6 +88,18 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOTOOLCHAIN=local go build -o postgres-han
 ```bash
 docker compose up -d --build
 ```
+
+如果直接在宿主机运行 gateway，可使用编译并重启脚本：
+
+```bash
+cd gateway
+./start.sh
+./start.sh restart
+./start.sh status
+./start.sh logs
+```
+
+首次运行会从 `.env.example` 创建 `.env`。脚本默认使用内存热缓存 + SQLite，二进制位于 `bin/inference-gateway`，日志位于 `gateway.log`。
 
 查看服务状态：
 
@@ -133,7 +180,7 @@ curl http://127.0.0.1:59010/health
 | `years` | `number` | 否 | `15` | 历史数据年数 |
 | `horizon_len` | `number` | 否 | `7` | 预测步长 |
 | `context_len` | `number` | 否 | `2048` | 上下文长度 |
-| `prediction_type` | `string` | 否 | `mtf-lite` | `mtf-lite` 为轻量 MTF，`mtf-pro` 为市场协变量增强；兼容旧值 `mtf-lite`/`mtf-pro` |
+| `prediction_type` | `string` | 否 | `mtf-pro` | `mtf-lite` 为轻量 MTF，`mtf-pro` 为市场协变量增强；兼容别名 `pro`/`cov`/`covariates`/`mtf_pro` |
 | `user_id` | `number` | 否 | `null` | 用户 ID |
 
 示例：
@@ -259,7 +306,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
 - 地址：`http://<host>:59010/predict_once`
 
 请求体使用同一套基础字段，但语义不同：`/predict_once` 只基于已有 best 做最新单 chunk 预测，不会补跑训练 + 验证。
-可选字段 `predict_date` 用于把某一天当作本次 once 推理的“今日”，支持 `YYYYMMDD`、`YYYY-MM-DD` 等格式；未显式传 `end_date` 时，gateway 会用 `predict_date` 生成 `end_date`，并按 `years` 反推 `start_date`。如果同时传入 `end_date`，以 `end_date` 为准。
+可选字段 `predict_date` 用于把某一天当作本次 once 推理的“今日”，支持 `YYYYMMDD`、`YYYY-MM-DD` 等格式；未显式传 `end_date` 时，gateway 会用 `predict_date` 生成 `end_date`。未显式传 `start_date` 时，gateway 不会注入历史起始日期，由 Python 根据 best 的验证结束日期续跑；调用方显式传入 `start_date` 时仍会保留。
 
 ```json
 {
@@ -434,7 +481,7 @@ queued -> running -> failed
 
 补充说明：
 
-- `queued`：任务已经进入 Redis 队列，等待调度
+- `queued`：任务已经进入选定的队列存储，等待调度
 - `running`：任务已分配给某个后端，`backend` 字段会显示 `xpu` 或 `rocm`
 - `succeeded`：后端同步推理完成，`result` 中包含完整返回
 - `failed`：后端异常、参数错误、数据预处理失败或网关异常
@@ -445,14 +492,16 @@ queued -> running -> failed
 
 1. 优先占用 `xpu`
 2. `xpu` 满载后再使用 `rocm`
-3. 全部满载后，新任务进入 Redis 队列等待
+3. 全部满载后，新任务进入选定的队列存储等待
 
 当前限制：
 
 - XPU 同时最多执行 `2` 个任务
 - ROCm 同时最多执行 `1` 个任务
 
-## 7. Redis 持久化设计
+## 7. 任务存储设计
+
+### 7.1 Redis 持久化设计
 
 Redis 用于保存：
 
@@ -485,6 +534,20 @@ redis-server --appendonly yes --save 60 1000
 - `running` 任务：不会自动重放，启动时会被标记为失败
 
 这样处理是为了避免网关重启后重复提交同一条推理任务。
+
+### 7.2 内存 + SQLite 持久化设计
+
+内存用于任务查询、队列调度和 request key 的高速读写，SQLite 保存任务详情、请求去重 key 和队列顺序。每次状态变更先写 SQLite，再更新内存；文件模式启用 WAL，并在启动时：
+
+- 清理并按创建时间重新构建 queued 任务队列
+- 将网关重启前处于 running 的任务标记为 failed
+- 重建请求去重 key
+
+SQLite 使用单连接池，因而 `GATEWAY_SQLITE_PATH=:memory:` 也可以用于临时测试；如果只需要纯内存模式，使用 `GATEWAY_STORE=memory`。
+
+### 7.3 Memory 模式
+
+Memory store 不写外部服务和磁盘，所有任务、队列和去重 key 都只保存在当前进程中。进程退出后状态全部清空。
 
 ## 8. 与后端服务的关系
 
@@ -547,7 +610,7 @@ redis-server --appendonly yes --save 60 1000
 
 ### 9.4 为什么相同请求没有再次入队
 
-这是网关的 Redis 去重策略在生效。
+这是网关的存储后端去重策略在生效。
 
 以下字段加上目标接口路径相同，就会命中同一个任务：
 

@@ -23,7 +23,7 @@ type backendState struct {
 
 type Scheduler struct {
 	client   *backend.Client
-	store    *store.RedisStore
+	store    store.Store
 	mu       sync.Mutex
 	cond     *sync.Cond
 	backends []*backendState
@@ -35,14 +35,14 @@ type EnqueueResult struct {
 	QueuePosition int
 }
 
-func NewScheduler(client *backend.Client, redisStore *store.RedisStore, endpoints []backend.Endpoint) *Scheduler {
+func NewScheduler(client *backend.Client, jobStore store.Store, endpoints []backend.Endpoint) *Scheduler {
 	states := make([]*backendState, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		states = append(states, &backendState{endpoint: endpoint})
 	}
 	scheduler := &Scheduler{
 		client:   client,
-		store:    redisStore,
+		store:    jobStore,
 		backends: states,
 	}
 	scheduler.cond = sync.NewCond(&scheduler.mu)
@@ -72,7 +72,7 @@ func (s *Scheduler) Enqueue(ctx context.Context, payload []byte, request models.
 			return nil, err
 		} else if existingJobID != "" {
 			if request.ForceEnqueueEnabled() {
-				if err := s.store.DeleteRequestKey(ctx, requestKey); err != nil {
+				if _, err := s.store.DeleteRequestKeyIfMatches(ctx, requestKey, existingJobID); err != nil {
 					return nil, err
 				}
 				continue
@@ -90,7 +90,7 @@ func (s *Scheduler) Enqueue(ctx context.Context, payload []byte, request models.
 					}, nil
 				}
 			}
-			if err := s.store.DeleteRequestKey(ctx, requestKey); err != nil {
+			if _, err := s.store.DeleteRequestKeyIfMatches(ctx, requestKey, existingJobID); err != nil {
 				return nil, err
 			}
 			continue
@@ -112,17 +112,12 @@ func (s *Scheduler) Enqueue(ctx context.Context, payload []byte, request models.
 			CreatedAt:          time.Now().UTC(),
 		}
 
-		claimed, err := s.store.ClaimRequestKey(ctx, requestKey, job.ID)
+		created, err := s.store.EnqueueJobIfAbsent(ctx, job)
 		if err != nil {
 			return nil, err
 		}
-		if !claimed {
+		if !created {
 			continue
-		}
-
-		if err := s.store.EnqueueJob(ctx, job); err != nil {
-			_ = s.store.DeleteRequestKey(ctx, requestKey)
-			return nil, err
 		}
 
 		s.mu.Lock()
@@ -150,7 +145,7 @@ func (s *Scheduler) EnqueueUZI(ctx context.Context, payload []byte, request mode
 			return nil, err
 		} else if existingJobID != "" {
 			if request.ForceEnqueueEnabled() {
-				if err := s.store.DeleteRequestKey(ctx, requestKey); err != nil {
+				if _, err := s.store.DeleteRequestKeyIfMatches(ctx, requestKey, existingJobID); err != nil {
 					return nil, err
 				}
 				continue
@@ -168,7 +163,7 @@ func (s *Scheduler) EnqueueUZI(ctx context.Context, payload []byte, request mode
 					}, nil
 				}
 			}
-			if err := s.store.DeleteRequestKey(ctx, requestKey); err != nil {
+			if _, err := s.store.DeleteRequestKeyIfMatches(ctx, requestKey, existingJobID); err != nil {
 				return nil, err
 			}
 			continue
@@ -187,17 +182,12 @@ func (s *Scheduler) EnqueueUZI(ctx context.Context, payload []byte, request mode
 			CreatedAt:    time.Now().UTC(),
 		}
 
-		claimed, err := s.store.ClaimRequestKey(ctx, requestKey, job.ID)
+		created, err := s.store.EnqueueJobIfAbsent(ctx, job)
 		if err != nil {
 			return nil, err
 		}
-		if !claimed {
+		if !created {
 			continue
-		}
-
-		if err := s.store.EnqueueJob(ctx, job); err != nil {
-			_ = s.store.DeleteRequestKey(ctx, requestKey)
-			return nil, err
 		}
 
 		s.mu.Lock()
@@ -687,7 +677,7 @@ func parsePredictionStageResponse(body []byte) (string, []byte, error) {
 		if message == "" {
 			message = "stage response returned success=false"
 		}
-		return "", nil, fmt.Errorf(message)
+		return "", nil, fmt.Errorf("%s", message)
 	}
 	switch payload.Stage {
 	case "complete":

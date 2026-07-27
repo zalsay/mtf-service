@@ -12,6 +12,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - PORT=8080
+      - MTF_SERVICE_TOKEN=${MTF_SERVICE_TOKEN:-fintrack-dev-token}
       - A_STOCK_DAILY_URL=${A_STOCK_DAILY_URL:-http://a-stock-daily:8080}
       - A_STOCK_DAILY_TOKEN=${A_STOCK_DAILY_TOKEN:-fintrack-dev-token}
       - HISTORY_PROVIDER_ORDER=${HISTORY_PROVIDER_ORDER:-tickflow,daily,eastmoney,baidu}

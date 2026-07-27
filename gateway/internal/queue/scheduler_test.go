@@ -1,12 +1,99 @@
 package queue
 
 import (
+	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"ai-functions/internal/backend"
 	"ai-functions/internal/models"
+	"ai-functions/internal/store"
 )
+
+func TestEnqueueReusesJobWithMemoryStore(t *testing.T) {
+	jobStore := store.NewMemoryStore()
+	scheduler := NewScheduler(nil, jobStore, nil)
+	request := models.InferenceRequest{StockCode: "000001"}
+	payload := []byte(`{"stock_code":"000001"}`)
+
+	first, err := scheduler.Enqueue(context.Background(), payload, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("first Enqueue() error = %v", err)
+	}
+	second, err := scheduler.Enqueue(context.Background(), payload, request, "/internal/predict_once_sync")
+	if err != nil {
+		t.Fatalf("second Enqueue() error = %v", err)
+	}
+	if !second.Reused || second.Job == nil || second.Job.ID != first.Job.ID {
+		t.Fatalf("second Enqueue() = %#v, want reused first job", second)
+	}
+	if depth, err := jobStore.QueueDepth(context.Background()); err != nil || depth != 1 {
+		t.Fatalf("QueueDepth() = %d, %v; want 1", depth, err)
+	}
+}
+
+func TestEnqueueConcurrentSameRequestCreatesSingleJob(t *testing.T) {
+	jobStore := store.NewMemoryStore()
+	defer jobStore.Close()
+	scheduler := NewScheduler(nil, jobStore, nil)
+	request := models.InferenceRequest{StockCode: "000001"}
+	payload := []byte(`{"stock_code":"000001"}`)
+
+	const attempts = 64
+	start := make(chan struct{})
+	results := make(chan struct {
+		jobID  string
+		reused bool
+		err    error
+	}, attempts)
+	var waitGroup sync.WaitGroup
+	for index := 0; index < attempts; index++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			result, err := scheduler.Enqueue(context.Background(), payload, request, "/internal/predict_for_best_sync")
+			if err != nil {
+				results <- struct {
+					jobID  string
+					reused bool
+					err    error
+				}{err: err}
+				return
+			}
+			results <- struct {
+				jobID  string
+				reused bool
+				err    error
+			}{jobID: result.Job.ID, reused: result.Reused}
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(results)
+
+	jobIDs := make(map[string]struct{})
+	created := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("concurrent Enqueue() error = %v", result.err)
+		}
+		jobIDs[result.jobID] = struct{}{}
+		if !result.reused {
+			created++
+		}
+	}
+	if len(jobIDs) != 1 {
+		t.Fatalf("concurrent Enqueue() created %d distinct jobs: %v", len(jobIDs), jobIDs)
+	}
+	if created != 1 {
+		t.Fatalf("concurrent Enqueue() created %d jobs, want 1", created)
+	}
+	if depth, err := jobStore.QueueDepth(context.Background()); err != nil || depth != 1 {
+		t.Fatalf("QueueDepth() = %d, %v; want 1", depth, err)
+	}
+}
 
 func TestBackendMatchesJobForMainRole(t *testing.T) {
 	xpuEndpoint := backend.Endpoint{
@@ -378,5 +465,15 @@ func TestParsePredictionStageResponse(t *testing.T) {
 				t.Fatalf("expected payload %s, got %s", tc.wantPayload, string(payload))
 			}
 		})
+	}
+}
+
+func TestClassifyUpstreamAcceptsPythonSuccessResponse(t *testing.T) {
+	status, errMessage := classifyUpstream(
+		200,
+		[]byte(`{"success":true,"code":200,"message":"Success","data":{}}`),
+	)
+	if status != models.JobSucceeded || errMessage != "" {
+		t.Fatalf("classifyUpstream() = (%q, %q), want succeeded with no error", status, errMessage)
 	}
 }

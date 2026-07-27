@@ -44,6 +44,11 @@ func (s *Server) lookupPredictionCache(ctx context.Context, request models.Infer
 	query.Set("context_len", strconv.Itoa(intValue(request.ContextLen, 2048)))
 	query.Set("prediction_type", request.PredictionType())
 	query.Set("mtf_version", "2.5")
+	lookupDate, validDate := predictionCacheLookupDate(request.PredictDate)
+	if !validDate {
+		return http.StatusBadRequest, predictOnceCacheNotFoundBody(request.StockCode, "predict_date must be a valid date", "invalid predict_date"), nil
+	}
+	query.Set("predict_date", lookupDate.Format(predictionCacheDateLayout))
 	if signature := strings.TrimSpace(request.CovariateSignature()); signature != "" {
 		query.Set("covariate_signature", signature)
 	}
@@ -60,13 +65,7 @@ func (s *Server) lookupPredictionCache(ctx context.Context, request models.Infer
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return http.StatusBadGateway, nil, fmt.Errorf("decode postgres prediction cache data: %w", err)
 	}
-	freshAt := time.Now().UTC()
-	if predictDate := modelsNormalizeDateOrDefault(request.PredictDate, time.Time{}); predictDate != "" {
-		if parsed, err := time.ParseInLocation("20060102", predictDate, time.UTC); err == nil {
-			freshAt = parsed
-		}
-	}
-	if !isPredictionCacheFresh(payload, freshAt) {
+	if !isPredictionCacheFresh(payload, lookupDate) {
 		return http.StatusNotFound, predictOnceCacheNotFoundBody(request.StockCode, "单次预测缓存已过期", "prediction cache stale"), nil
 	}
 	payload["cache_hit"] = true
@@ -76,6 +75,20 @@ func (s *Server) lookupPredictionCache(ctx context.Context, request models.Infer
 		"message":    "单次预测缓存命中",
 		"data":       payload,
 	}, nil
+}
+
+func predictionCacheLookupDate(value any) (time.Time, bool) {
+	now := time.Now().In(shanghaiLocation)
+	raw := modelsNormalizeDateOrDefault(value, time.Time{})
+	if raw == "" {
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, shanghaiLocation), true
+	}
+	for _, layout := range []string{"20060102", "2006-01-02", time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, raw, shanghaiLocation); err == nil {
+			return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, shanghaiLocation), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func (s *Server) getPostgresHandlerData(ctx context.Context, path string, query url.Values) (int, json.RawMessage, error) {

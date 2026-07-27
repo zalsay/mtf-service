@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func buildFutureDatesKey(dates []string) string {
@@ -25,6 +26,16 @@ func buildFutureDatesKey(dates []string) string {
 		normalized = append(normalized, trimmed)
 	}
 	return strings.Join(normalized, ",")
+}
+
+func normalizePredictionDateQuery(value string) (string, error) {
+	raw := strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02", "20060102", time.RFC3339, "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			return parsed.Format("2006-01-02"), nil
+		}
+	}
+	return "", fmt.Errorf("invalid prediction date %q", value)
 }
 
 func buildMTFDirectUniqueKey(symbol string, stockType int, horizonLen int, contextLen int, futureDatesKey string) string {
@@ -62,6 +73,298 @@ func normalizedPredictionType(value string) string {
 	default:
 		return strings.TrimSpace(value)
 	}
+}
+
+type mtfValidationChunkRequest struct {
+	UniqueKey          string                 `json:"unique_key"`
+	ChunkIndex         int                    `json:"chunk_index"`
+	StartDate          string                 `json:"start_date"`
+	EndDate            string                 `json:"end_date"`
+	Symbol             string                 `json:"symbol"`
+	UserID             *int                   `json:"user_id"`
+	Predictions        map[string]interface{} `json:"predictions"`
+	Actual             []float64              `json:"actual_values"`
+	PredictedChangePct map[string]interface{} `json:"predicted_change_percent"`
+	ActualChangePct    []float64              `json:"actual_change_percent"`
+	ChangeBaseValue    *float64               `json:"change_base_value"`
+	ChangeBaseDate     string                 `json:"change_base_date"`
+	AdjustRawChunks    json.RawMessage        `json:"adjust_raw_chunks"`
+	Dates              []string               `json:"dates"`
+	PredictionType     string                 `json:"prediction_type"`
+	CovariateConfig    map[string]interface{} `json:"covariate_config"`
+	CovariateSignature string                 `json:"covariate_signature"`
+	CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
+	StockName          string                 `json:"stock_name"`
+	StockType          int                    `json:"stock_type"`
+	HorizonLen         int                    `json:"horizon_len"`
+}
+
+type mtfValidationChunksRequest struct {
+	Chunks []mtfValidationChunkRequest `json:"chunks"`
+}
+
+// resolveMTFActualValuesBatch reads all requested dates from stock_data in one
+// query. Tickflow is used only for dates absent from the local database, and
+// at most once for the whole batch.
+func (h *DatabaseHandler) resolveMTFActualValuesBatch(
+	ctx context.Context,
+	chunks []mtfValidationChunkRequest,
+) ([][]float64, string, error) {
+	if len(chunks) == 0 {
+		return nil, "", fmt.Errorf("chunks are required")
+	}
+
+	firstSymbol := normalizeStockSymbol(chunks[0].Symbol)
+	firstStockType := chunks[0].StockType
+	if firstSymbol == "" || firstStockType <= 0 {
+		return nil, "", fmt.Errorf("symbol and positive stock_type are required")
+	}
+	if len(chunks[0].Dates) == 0 {
+		return nil, "", fmt.Errorf("dates are required")
+	}
+
+	dateSet := make(map[string]struct{})
+	var minDate time.Time
+	var maxDate time.Time
+	for index, chunk := range chunks {
+		if normalizeStockSymbol(chunk.Symbol) != firstSymbol || chunk.StockType != firstStockType {
+			return nil, "", fmt.Errorf("all chunks must use the same symbol and stock_type")
+		}
+		if strings.TrimSpace(chunk.UniqueKey) == "" || chunk.ChunkIndex < 0 {
+			return nil, "", fmt.Errorf("chunk %d has invalid unique_key or chunk_index", index)
+		}
+		if len(chunk.Dates) == 0 {
+			return nil, "", fmt.Errorf("chunk %d has no dates", index)
+		}
+		for _, rawDate := range chunk.Dates {
+			dateText := strings.TrimSpace(rawDate)
+			parsed, err := time.Parse("2006-01-02", dateText)
+			if err != nil {
+				return nil, "", fmt.Errorf("chunk %d has invalid date %q", index, rawDate)
+			}
+			dateSet[dateText] = struct{}{}
+			if minDate.IsZero() || parsed.Before(minDate) {
+				minDate = parsed
+			}
+			if maxDate.IsZero() || parsed.After(maxDate) {
+				maxDate = parsed
+			}
+		}
+	}
+
+	closeByDate := make(map[string]float64, len(dateSet))
+	rows, dbErr := h.GetStockDataByDateRange(firstSymbol, firstStockType, minDate, maxDate)
+	if dbErr == nil {
+		for _, row := range rows {
+			dateText := strings.TrimSpace(row.DateStr)
+			if dateText == "" {
+				dateText = row.Datetime.Format("2006-01-02")
+			}
+			if _, wanted := dateSet[dateText]; wanted {
+				closeByDate[dateText] = row.Close
+			}
+		}
+	} else {
+		slog.Warn("stock_data lookup failed; falling back to Tickflow", "symbol", firstSymbol, "error", dbErr)
+	}
+
+	missing := make([]string, 0)
+	for dateText := range dateSet {
+		if _, ok := closeByDate[dateText]; !ok {
+			missing = append(missing, dateText)
+		}
+	}
+	provider := "stock_data"
+	if len(missing) > 0 {
+		records, _, tickflowProvider, err := h.LoadTickflowHistory(ctx, TickflowHistoryRequest{
+			Symbol:    firstSymbol,
+			StockType: firstStockType,
+			StartDate: minDate.Format("2006-01-02"),
+			EndDate:   maxDate.Format("2006-01-02"),
+			Adjust:    "none",
+		})
+		if err != nil {
+			return nil, "", fmt.Errorf("missing %d actual dates and Tickflow fallback failed: %w", len(missing), err)
+		}
+		for _, record := range records {
+			dateText := strings.TrimSpace(record.DateStr)
+			if dateText == "" {
+				dateText = strings.TrimSpace(record.TradeDate)
+			}
+			if dateText == "" && len(record.Datetime) >= len("2006-01-02") {
+				dateText = record.Datetime[:len("2006-01-02")]
+			}
+			if _, wanted := dateSet[dateText]; wanted {
+				closeByDate[dateText] = record.Close
+			}
+		}
+		provider = "stock_data+" + tickflowProvider
+	}
+
+	values := make([][]float64, len(chunks))
+	for index, chunk := range chunks {
+		values[index] = make([]float64, len(chunk.Dates))
+		for dateIndex, rawDate := range chunk.Dates {
+			dateText := strings.TrimSpace(rawDate)
+			value, ok := closeByDate[dateText]
+			if !ok {
+				return nil, "", fmt.Errorf("actual value missing for %s", dateText)
+			}
+			values[index][dateIndex] = value
+		}
+	}
+	return values, provider, nil
+}
+
+func upsertMTFValidationChunk(tx *gorm.DB, req mtfValidationChunkRequest, actualValues []float64) error {
+	if strings.TrimSpace(req.UniqueKey) == "" || req.ChunkIndex < 0 {
+		return fmt.Errorf("unique_key and non-negative chunk_index are required")
+	}
+	if strings.TrimSpace(req.StartDate) == "" || strings.TrimSpace(req.EndDate) == "" || req.Predictions == nil || len(req.Predictions) == 0 || len(req.Dates) == 0 {
+		return fmt.Errorf("missing required validation chunk fields")
+	}
+	if len(actualValues) != len(req.Dates) {
+		return fmt.Errorf("actual_values length does not match dates for chunk %d", req.ChunkIndex)
+	}
+
+	predictionsJSON, err := json.Marshal(req.Predictions)
+	if err != nil {
+		return fmt.Errorf("predictions must be JSON object: %w", err)
+	}
+	actualJSON, _ := json.Marshal(actualValues)
+	predictedChangeJSON := "{}"
+	if req.PredictedChangePct != nil {
+		value, marshalErr := json.Marshal(req.PredictedChangePct)
+		if marshalErr != nil {
+			return fmt.Errorf("predicted_change_percent must be JSON object: %w", marshalErr)
+		}
+		predictedChangeJSON = string(value)
+	}
+	actualChangeJSON := "[]"
+	if req.ActualChangePct != nil {
+		value, marshalErr := json.Marshal(req.ActualChangePct)
+		if marshalErr != nil {
+			return fmt.Errorf("actual_change_percent must be JSON array: %w", marshalErr)
+		}
+		actualChangeJSON = string(value)
+	}
+	datesJSON, _ := json.Marshal(req.Dates)
+	covConfigJSON, err := marshalOptionalJSONObject(req.CovariateConfig)
+	if err != nil {
+		return fmt.Errorf("covariate_config must be JSON object: %w", err)
+	}
+	covAnalysisJSON, err := marshalOptionalJSONObject(req.CovariateAnalysis)
+	if err != nil {
+		return fmt.Errorf("covariate_analysis must be JSON object: %w", err)
+	}
+	var changeBaseDate interface{}
+	if strings.TrimSpace(req.ChangeBaseDate) != "" {
+		changeBaseDate = req.ChangeBaseDate
+	}
+	var adjustRawChunks interface{}
+	if len(req.AdjustRawChunks) > 0 && string(req.AdjustRawChunks) != "null" {
+		adjustRawChunks = string(req.AdjustRawChunks)
+	}
+
+	return tx.Exec(`
+        INSERT INTO mtf_best_validation_chunks (
+            unique_key, chunk_index, user_id, symbol, start_date, end_date,
+            predictions, actual_values, predicted_change_percent, actual_change_percent,
+            change_base_value, change_base_date, dates, prediction_type,
+            covariate_config, covariate_signature, covariate_analysis,
+            stock_name, stock_type, adjust_raw_chunks
+        ) VALUES (
+            $1, $2, $3, $4, $5::date, $6::date,
+            $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb,
+            $11, $12::date, $13::jsonb, $14,
+            $15::jsonb, $16, $17::jsonb, $18, $19, $20::jsonb
+        )
+        ON CONFLICT (unique_key, chunk_index) DO UPDATE SET
+            user_id = COALESCE(EXCLUDED.user_id, mtf_best_validation_chunks.user_id),
+            symbol = EXCLUDED.symbol,
+            start_date = EXCLUDED.start_date,
+            end_date = EXCLUDED.end_date,
+            predictions = EXCLUDED.predictions,
+            actual_values = EXCLUDED.actual_values,
+            predicted_change_percent = EXCLUDED.predicted_change_percent,
+            actual_change_percent = EXCLUDED.actual_change_percent,
+            change_base_value = EXCLUDED.change_base_value,
+            change_base_date = EXCLUDED.change_base_date,
+            dates = EXCLUDED.dates,
+            prediction_type = EXCLUDED.prediction_type,
+            covariate_config = EXCLUDED.covariate_config,
+            covariate_signature = EXCLUDED.covariate_signature,
+            covariate_analysis = EXCLUDED.covariate_analysis,
+            stock_name = COALESCE(NULLIF(EXCLUDED.stock_name, ''), mtf_best_validation_chunks.stock_name),
+            stock_type = EXCLUDED.stock_type,
+            adjust_raw_chunks = EXCLUDED.adjust_raw_chunks,
+            updated_at = CURRENT_TIMESTAMP`,
+		req.UniqueKey, req.ChunkIndex, req.UserID, normalizeStockSymbol(req.Symbol), req.StartDate, req.EndDate,
+		string(predictionsJSON), string(actualJSON), predictedChangeJSON, actualChangeJSON,
+		req.ChangeBaseValue, changeBaseDate, string(datesJSON), normalizedPredictionType(req.PredictionType),
+		covConfigJSON, strings.TrimSpace(req.CovariateSignature), covAnalysisJSON, req.StockName, req.StockType, adjustRawChunks,
+	).Error
+}
+
+func (h *DatabaseHandler) saveMTFValidationChunksHandler(c *gin.Context) {
+	var request mtfValidationChunksRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, ApiResponse{Code: 400, Message: "Invalid JSON"})
+		return
+	}
+	if len(request.Chunks) == 0 || len(request.Chunks) > 1000 {
+		c.JSON(http.StatusBadRequest, ApiResponse{Code: 400, Message: "chunks must contain between 1 and 1000 items"})
+		return
+	}
+	uniqueKey := strings.TrimSpace(request.Chunks[0].UniqueKey)
+	for index := range request.Chunks {
+		if strings.TrimSpace(request.Chunks[index].UniqueKey) != uniqueKey {
+			c.JSON(http.StatusBadRequest, ApiResponse{Code: 400, Message: "all chunks must use the same unique_key"})
+			return
+		}
+	}
+
+	actualValues, actualSource, err := h.resolveMTFActualValuesBatch(c.Request.Context(), request.Chunks)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ApiResponse{Code: 400, Message: err.Error()})
+		return
+	}
+
+	stockName := ""
+	for _, chunk := range request.Chunks {
+		if strings.TrimSpace(chunk.StockName) != "" {
+			stockName = strings.TrimSpace(chunk.StockName)
+			break
+		}
+	}
+	if stockName == "" && request.Chunks[0].StockType == 2 {
+		if etfData, lookupErr := h.GetEtfDaily(request.Chunks[0].Symbol, 1, 0); lookupErr == nil && len(etfData) > 0 {
+			stockName = etfData[0].Name
+		}
+	}
+	for index := range request.Chunks {
+		if strings.TrimSpace(request.Chunks[index].StockName) == "" {
+			request.Chunks[index].StockName = stockName
+		}
+	}
+
+	if err := h.db.Transaction(func(tx *gorm.DB) error {
+		for index, chunk := range request.Chunks {
+			if err := upsertMTFValidationChunk(tx, chunk, actualValues[index]); err != nil {
+				return fmt.Errorf("chunk %d: %w", index, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, ApiResponse{Code: 500, Message: err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: gin.H{
+		"unique_key":           uniqueKey,
+		"chunks_saved":         len(request.Chunks),
+		"actual_values_source": actualSource,
+	}})
 }
 
 func predictionTypeUsesCovariates(value string) bool {
@@ -389,29 +692,7 @@ func (h *DatabaseHandler) saveMTFBestHandler(c *gin.Context) {
 }
 
 func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
-	var req struct {
-		UniqueKey          string                 `json:"unique_key"`
-		ChunkIndex         int                    `json:"chunk_index"`
-		StartDate          string                 `json:"start_date"`
-		EndDate            string                 `json:"end_date"`
-		Symbol             string                 `json:"symbol"`
-		UserID             *int                   `json:"user_id"`
-		Predictions        map[string]interface{} `json:"predictions"`
-		Actual             []float64              `json:"actual_values"`
-		PredictedChangePct map[string]interface{} `json:"predicted_change_percent"`
-		ActualChangePct    []float64              `json:"actual_change_percent"`
-		ChangeBaseValue    *float64               `json:"change_base_value"`
-		ChangeBaseDate     string                 `json:"change_base_date"`
-		AdjustRawChunks    json.RawMessage        `json:"adjust_raw_chunks"`
-		Dates              []string               `json:"dates"`
-		PredictionType     string                 `json:"prediction_type"`
-		CovariateConfig    map[string]interface{} `json:"covariate_config"`
-		CovariateSignature string                 `json:"covariate_signature"`
-		CovariateAnalysis  map[string]interface{} `json:"covariate_analysis"`
-		StockName          string                 `json:"stock_name"`
-		StockType          int                    `json:"stock_type"`
-		HorizonLen         int                    `json:"horizon_len"` // 预测长度，不保存
-	}
+	var req mtfValidationChunkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
 		return
@@ -468,14 +749,13 @@ func (h *DatabaseHandler) saveMTFValChunkHandler(c *gin.Context) {
 	var providerActualSource string
 	var providerActualErr error
 	if len(req.Dates) > 0 && strings.TrimSpace(req.Symbol) != "" && req.StockType > 0 {
-		providerActual, providerActualSource, providerActualErr = h.buildActualValuesForDates(
-			c.Request.Context(),
-			req.Symbol,
-			req.StockType,
-			req.StartDate,
-			req.EndDate,
-			req.Dates,
+		var resolved [][]float64
+		resolved, providerActualSource, providerActualErr = h.resolveMTFActualValuesBatch(
+			c.Request.Context(), []mtfValidationChunkRequest{req},
 		)
+		if len(resolved) > 0 {
+			providerActual = resolved[0]
+		}
 		if providerActualErr != nil {
 			slog.Error("failed to build actual_values from provider", "symbol", req.Symbol, "stock_type", req.StockType, "error", providerActualErr)
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("cannot build actual_values from provider: %v", providerActualErr)})
@@ -1395,9 +1675,18 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 		return
 	}
 	futureDatesCSV := strings.TrimSpace(c.Query("future_dates"))
+	predictDate := strings.TrimSpace(c.Query("predict_date"))
 	if symbol == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "symbol is required"})
 		return
+	}
+	if predictDate != "" {
+		normalizedDate, err := normalizePredictionDateQuery(predictDate)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "predict_date must be a valid date"})
+			return
+		}
+		predictDate = normalizedDate
 	}
 	covariateSignature := strings.TrimSpace(c.DefaultQuery("covariate_signature", ""))
 	predictionType := normalizedPredictionType(c.Query("prediction_type"))
@@ -1443,6 +1732,15 @@ func (h *DatabaseHandler) getMTFDirectByRequestHandler(c *gin.Context) {
 		futureDatesKey := buildFutureDatesKey(strings.Split(futureDatesCSV, ","))
 		selectSQL += fmt.Sprintf(` AND future_dates_key = $%d`, nextArg)
 		args = append(args, futureDatesKey)
+		nextArg++
+	}
+	if predictDate != "" {
+		selectSQL += fmt.Sprintf(` AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(future_dates) AS future_date(value)
+            WHERE future_date.value = $%d
+        )`, nextArg)
+		args = append(args, predictDate)
 		nextArg++
 	}
 	if covariateSignature != "" {

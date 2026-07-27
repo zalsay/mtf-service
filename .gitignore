@@ -109,3 +109,10 @@ postgres-handler/postgres-handler-linux-amd64
 # Private service repos live outside this public repo.
 ai-fucntions/
 ai-functions/
+
+# Gateway direct-run artifacts
+gateway/bin/
+gateway/data/
+
+# Postgres handler direct-run artifacts
+postgres-handler/bin/

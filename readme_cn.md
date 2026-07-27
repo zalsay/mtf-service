@@ -24,7 +24,7 @@ FinTrack 是一个面向金融数据跟踪、组合管理和 AI 辅助分析的�
 - `postgres-handler` 需要 Go 1.24+
 - `fintrack-front` 和 `deepseek-tui` 需要 Node.js 20+
 - PostgreSQL 用于持久化应用数据
-- Redis 用于 gateway 队列状态
+- Redis 用于 `GATEWAY_STORE=redis`（默认）的 gateway 队列状态；gateway 也支持纯 `memory` 和内存 + SQLite 存储
 
 ## 配置
 
@@ -69,7 +69,7 @@ Gateway：
 ```bash
 cd gateway
 go mod download
-go run ./cmd/inference-gateway
+./start.sh
 ```
 
 DeepSeek TUI runtime：
@@ -84,7 +84,7 @@ Postgres handler：
 ```bash
 cd postgres-handler
 go mod download
-go run .
+./start.sh
 ```
 
 ## 测试

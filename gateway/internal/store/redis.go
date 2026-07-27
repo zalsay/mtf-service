@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
+	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"ai-functions/internal/models"
@@ -21,6 +20,35 @@ type RedisStore struct {
 	backgroundQueueKey string
 	requestKeysKey     string
 }
+
+var enqueueJobIfAbsentScript = redis.NewScript(`
+local request_key = ARGV[1]
+local job_id = ARGV[2]
+local payload = ARGV[3]
+
+if request_key ~= "" then
+    local existing_job_id = redis.call("HGET", KEYS[3], request_key)
+    if existing_job_id then
+        return {0, existing_job_id}
+    end
+end
+
+redis.call("HSET", KEYS[1], job_id, payload)
+redis.call("RPUSH", KEYS[2], job_id)
+if request_key ~= "" then
+    redis.call("HSET", KEYS[3], request_key, job_id)
+end
+return {1, job_id}
+`)
+
+var deleteRequestKeyIfMatchesScript = redis.NewScript(`
+local request_key = ARGV[1]
+local job_id = ARGV[2]
+if redis.call("HGET", KEYS[1], request_key) == job_id then
+    return redis.call("HDEL", KEYS[1], request_key)
+end
+return 0
+`)
 
 func NewRedisStore(addr, password string, db int, prefix string) *RedisStore {
 	if prefix == "" {
@@ -67,19 +95,45 @@ func (s *RedisStore) EnqueueJob(ctx context.Context, job *models.Job) error {
 	return err
 }
 
-func (s *RedisStore) EnqueueJobAndBindRequestKey(ctx context.Context, job *models.Job) error {
+func (s *RedisStore) EnqueueJobIfAbsent(ctx context.Context, job *models.Job) (bool, error) {
 	payload, err := json.Marshal(job)
+	if err != nil {
+		return false, err
+	}
+	result, err := enqueueJobIfAbsentScript.Run(
+		ctx,
+		s.client,
+		[]string{s.jobsKey, s.queueKeyForJob(job), s.requestKeysKey},
+		job.RequestKey,
+		job.ID,
+		payload,
+	).Result()
+	if err != nil {
+		return false, err
+	}
+	values, ok := result.([]interface{})
+	if !ok || len(values) != 2 {
+		return false, fmt.Errorf("unexpected redis enqueue result: %#v", result)
+	}
+	created, ok := values[0].(int64)
+	if !ok {
+		return false, fmt.Errorf("unexpected redis enqueue status: %#v", values[0])
+	}
+	if _, ok := values[1].(string); !ok {
+		return false, fmt.Errorf("unexpected redis enqueue job id: %#v", values[1])
+	}
+	return created == 1, nil
+}
+
+func (s *RedisStore) EnqueueJobAndBindRequestKey(ctx context.Context, job *models.Job) error {
+	created, err := s.EnqueueJobIfAbsent(ctx, job)
 	if err != nil {
 		return err
 	}
-	pipe := s.client.TxPipeline()
-	pipe.HSet(ctx, s.jobsKey, job.ID, payload)
-	pipe.RPush(ctx, s.queueKeyForJob(job), job.ID)
-	if job.RequestKey != "" {
-		pipe.HSet(ctx, s.requestKeysKey, job.RequestKey, job.ID)
+	if !created {
+		return fmt.Errorf("request key already exists: %s", job.RequestKey)
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	return nil
 }
 
 func (s *RedisStore) queueKeyForJob(job *models.Job) string {
@@ -106,6 +160,24 @@ func (s *RedisStore) GetRequestKeyJobID(ctx context.Context, requestKey string) 
 
 func (s *RedisStore) DeleteRequestKey(ctx context.Context, requestKey string) error {
 	return s.client.HDel(ctx, s.requestKeysKey, requestKey).Err()
+}
+
+func (s *RedisStore) DeleteRequestKeyIfMatches(ctx context.Context, requestKey, jobID string) (bool, error) {
+	result, err := deleteRequestKeyIfMatchesScript.Run(
+		ctx,
+		s.client,
+		[]string{s.requestKeysKey},
+		requestKey,
+		jobID,
+	).Result()
+	if err != nil {
+		return false, err
+	}
+	deleted, ok := result.(int64)
+	if !ok {
+		return false, fmt.Errorf("unexpected redis delete result: %#v", result)
+	}
+	return deleted == 1, nil
 }
 
 func (s *RedisStore) GetJob(ctx context.Context, id string) (*models.Job, error) {
@@ -200,64 +272,13 @@ func (s *RedisStore) RecoverQueue(ctx context.Context) error {
 		return err
 	}
 
-	sort.SliceStable(jobs, func(i, j int) bool {
-		left := jobs[i].CreatedAt
-		right := jobs[j].CreatedAt
-		if left.Equal(right) {
-			return jobs[i].ID < jobs[j].ID
-		}
-		return left.Before(right)
-	})
-
-	recoverable := make([]*models.Job, 0)
-	for _, job := range jobs {
-		if job.RequestKey == "" && len(job.RequestBody) > 0 {
-			requestKey, keyErr := models.RequestKeyFromBody(job.RequestBody)
-			if keyErr == nil {
-				job.RequestKey = requestKey
-			}
-		}
-		if job.PredictionType == "" && len(job.RequestBody) > 0 {
-			var request models.InferenceRequest
-			decoder := json.NewDecoder(strings.NewReader(string(job.RequestBody)))
-			decoder.UseNumber()
-			if err := decoder.Decode(&request); err == nil {
-				job.PredictionType = request.PredictionType()
-				job.CovariateSignature = request.CovariateSignature()
-			}
-		}
-		if job.CurrentStage == "" {
-			job.CurrentStage = models.BackendRoleMain
-		}
-		if job.RequestKey != "" && job.TargetPath != "" && !strings.HasPrefix(job.RequestKey, "/internal/") {
-			job.RequestKey = job.TargetPath + ":" + job.RequestKey
-		}
-		switch job.Status {
-		case models.JobQueued:
-			job.Backend = ""
-			job.UpstreamStatus = 0
-			job.Error = ""
-			job.StartedAt = nil
-			job.FinishedAt = nil
-			recoverable = append(recoverable, job)
-		case models.JobRunning:
-			now := time.Now().UTC()
-			job.Status = models.JobFailed
-			job.Backend = ""
-			job.UpstreamStatus = 0
-			job.Error = "gateway restarted before upstream completion"
-			job.FinishedAt = &now
-			if err := s.SaveJob(ctx, job); err != nil {
-				return err
-			}
-		}
-	}
+	recoverable, normalized := normalizeRecoveredJobs(jobs)
 
 	pipe := s.client.TxPipeline()
 	pipe.Del(ctx, s.queueKey)
 	pipe.Del(ctx, s.backgroundQueueKey)
 	pipe.Del(ctx, s.requestKeysKey)
-	for _, job := range jobs {
+	for _, job := range normalized {
 		if job.RequestKey == "" {
 			continue
 		}

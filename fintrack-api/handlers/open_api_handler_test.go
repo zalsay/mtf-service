@@ -782,6 +782,9 @@ func TestOpenAPIMTFFutureUsesPredictOnceCache(t *testing.T) {
 		if received["horizon_len"] != float64(7) || received["context_len"] != float64(2048) {
 			t.Fatalf("horizon/context = %#v/%#v, want 7/2048", received["horizon_len"], received["context_len"])
 		}
+		if received["predict_date"] != "2026-06-15" {
+			t.Fatalf("predict_date = %#v, want 2026-06-15", received["predict_date"])
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"success":true,
@@ -815,7 +818,7 @@ func TestOpenAPIMTFFutureUsesPredictOnceCache(t *testing.T) {
 	router.GET("/api/open/v1/mtf/future", handler.AuthMiddleware("mtf:read"), handler.MTFFuture)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/future?unique_key=510050_best_hlen_7_clen_2048_v_2.5", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/future?unique_key=510050_best_hlen_7_clen_2048_v_2.5&predict_date=2026-06-15", nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	router.ServeHTTP(rec, req)
 
@@ -834,6 +837,61 @@ func TestOpenAPIMTFFutureUsesPredictOnceCache(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"predicted_change_percent":[-2.2,-2.08]`) {
 		t.Fatalf("expected predicted_change_percent array from predict once, body=%s", rec.Body.String())
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestOpenAPIMTFFutureCacheMissDoesNotTriggerPrediction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	apiKey := "ftk_mtf_future_cache_miss_key"
+	now := time.Now()
+	expectOpenAPIAuth(mock, apiKey, "{mtf:read}", 7, 3, now)
+	mock.ExpectQuery("SELECT symbol FROM mtf_best_predictions").
+		WithArgs("510050_best_hlen_7_clen_2048_v_2.5").
+		WillReturnRows(sqlmock.NewRows([]string{"symbol"}).AddRow("510050"))
+	expectWatchlistSymbolCheck(mock, 7, "510050", true)
+	mock.ExpectQuery("FROM mtf_best_predictions p").
+		WithArgs("510050_best_hlen_7_clen_2048_v_2.5").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"symbol", "prediction_type", "horizon_len", "context_len", "stock_type",
+			"covariate_config", "covariate_signature",
+		}).AddRow("510050", "mtf-lite", 7, 2048, 2, []byte(`{}`), ""))
+
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/predict_once_cached" {
+			t.Fatalf("gateway path = %s, want /predict_once_cached", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"message":"未找到指定日期的单次预测缓存","error":"prediction cache not found"}`))
+	}))
+	defer gateway.Close()
+
+	handler := NewOpenAPIHandler(
+		services.NewOpenAPIService(&database.DB{Conn: db}),
+		services.NewWatchlistService(&database.DB{Conn: db}, &config.Config{
+			InferenceGateway: config.InferenceGatewayConfig{BaseURL: gateway.URL, Timeout: 1},
+		}),
+		nil,
+		nil,
+		nil,
+	)
+	router := gin.New()
+	router.GET("/api/open/v1/mtf/future", handler.AuthMiddleware("mtf:read"), handler.MTFFuture)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/open/v1/mtf/future?unique_key=510050_best_hlen_7_clen_2048_v_2.5&predict_date=2026-06-15", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	router.ServeHTTP(rec, req)
+
+	assertOpenAPIErrorCode(t, rec, http.StatusNotFound, "prediction_cache_not_found")
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
 	}

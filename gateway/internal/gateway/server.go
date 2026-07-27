@@ -32,6 +32,7 @@ var shanghaiLocation = func() *time.Location {
 type Server struct {
 	scheduler            *queue.Scheduler
 	mux                  *http.ServeMux
+	apiToken             string
 	deepSeekTUIProxy     http.Handler
 	deepSeekTUIToken     string
 	deepSeekTUIPrefix    string
@@ -41,6 +42,7 @@ type Server struct {
 }
 
 type ServerOptions struct {
+	APIToken                   string
 	DeepSeekTUIBackendURL      string
 	DeepSeekTUIProxyToken      string
 	DeepSeekTUIProxyPath       string
@@ -82,6 +84,7 @@ func NewServerWithOptions(scheduler *queue.Scheduler, options ServerOptions) htt
 	server := &Server{
 		scheduler:            scheduler,
 		mux:                  http.NewServeMux(),
+		apiToken:             strings.TrimSpace(options.APIToken),
 		deepSeekTUIToken:     strings.TrimSpace(options.DeepSeekTUIProxyToken),
 		deepSeekTUIPrefix:    normalizeProxyPrefix(options.DeepSeekTUIProxyPath, "/deepseek-tui"),
 		postgresHandlerURL:   strings.TrimRight(strings.TrimSpace(options.PostgresHandlerURL), "/"),
@@ -106,6 +109,11 @@ func NewServerWithOptions(scheduler *queue.Scheduler, options ServerOptions) htt
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.apiToken != "" && r.URL.Path != "/health" && !requestTokenMatches(r, s.apiToken) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="inference-gateway"`)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
@@ -561,6 +569,7 @@ func newDeepSeekTUIProxy(rawBackendURL string, prefix string, authConfigPath str
 		req.URL.RawPath = ""
 		req.Host = target.Host
 		req.Header.Del("Authorization")
+		req.Header.Del("X-API-Token")
 		req.Header.Del("X-API-Key")
 		req.Header.Del("X-Gateway-API-Token")
 		req.Header.Del("X-DeepSeek-API-Key")
@@ -809,9 +818,16 @@ func stripProxyPrefix(path string, prefix string) string {
 }
 
 func proxyTokenMatches(r *http.Request, expected string) bool {
+	return requestTokenMatches(r, expected)
+}
+
+func requestTokenMatches(r *http.Request, expected string) bool {
 	expected = strings.TrimSpace(expected)
 	if expected == "" {
 		return true
+	}
+	if token := strings.TrimSpace(r.Header.Get("X-API-Token")); token != "" {
+		return token == expected
 	}
 	if token := strings.TrimSpace(r.Header.Get("X-API-Key")); token != "" {
 		return token == expected
@@ -890,6 +906,22 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	delete(normalized, "best_max_age_days")
 	delete(normalized, "predict_from_best_val_end")
 	delete(normalized, "chunk_until_latest")
+	if targetPath == "/internal/predict_for_best_sync" {
+		// Best training runtime options are owned by the Python service.
+		for _, field := range []string{
+			"pos_json_path",
+			"model_path",
+			"validation_chunks_target",
+			"max_selection_chunks",
+			"max_validation_chunks",
+			"per_core_batch_size",
+			"chunk_batch_size",
+			"torch_compile",
+			"use_tdx_start_date",
+		} {
+			delete(normalized, field)
+		}
+	}
 
 	covariateConfig, covariatePreset := models.CanonicalizeCovariateRouting(
 		func() any {
@@ -952,14 +984,6 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 	} else {
 		delete(normalized, "start_date")
 		request.StartDate = nil
-		if targetPath != "/internal/predict_for_best_sync" {
-			years := normalizeYears(request.Years)
-			if years > 0 && endDate != "" {
-				startDate = subtractYearsYYYYMMDD(endDate, years)
-				normalized["start_date"] = startDate
-				request.StartDate = startDate
-			}
-		}
 	}
 
 	updatedBody, err := json.Marshal(normalized)
@@ -1043,62 +1067,6 @@ func modelsNormalizeDateOrDefault(value any, fallback time.Time) string {
 		return ""
 	}
 	return fallback.Format("20060102")
-}
-
-func subtractYearsYYYYMMDD(dateStr string, years int) string {
-	parsed, err := time.ParseInLocation("20060102", dateStr, shanghaiLocation)
-	if err != nil {
-		return ""
-	}
-	result := parsed.AddDate(-years, 0, 0)
-	return result.Format("20060102")
-}
-
-func normalizeYears(value any) int {
-	switch typed := value.(type) {
-	case nil:
-		return 15
-	case json.Number:
-		if intValue, err := typed.Int64(); err == nil {
-			return int(intValue)
-		}
-		if floatValue, err := typed.Float64(); err == nil {
-			return int(floatValue)
-		}
-		return 15
-	case int:
-		return typed
-	case int8:
-		return int(typed)
-	case int16:
-		return int(typed)
-	case int32:
-		return int(typed)
-	case int64:
-		return int(typed)
-	case uint:
-		return int(typed)
-	case uint8:
-		return int(typed)
-	case uint16:
-		return int(typed)
-	case uint32:
-		return int(typed)
-	case uint64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	case float32:
-		return int(typed)
-	case string:
-		years, err := strconv.Atoi(strings.TrimSpace(typed))
-		if err == nil {
-			return years
-		}
-		return 15
-	default:
-		return 15
-	}
 }
 
 func stringValue(value any) string {

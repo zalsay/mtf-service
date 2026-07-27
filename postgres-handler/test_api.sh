@@ -3,6 +3,7 @@
 # PostgreSQL 股票数据处理服务 API 测试脚本
 
 BASE_URL="http://localhost:8080"
+MTF_SERVICE_TOKEN="${MTF_SERVICE_TOKEN:-fintrack-dev-token}"
 
 echo "=== PostgreSQL 股票数据处理服务 API 测试 ==="
 echo
@@ -105,7 +106,7 @@ echo -e "\n"
 # 4. MTF 验证分块列表查询（按chunk_index升序）
 echo "4. 查询MTF验证分块列表..."
 curl -s -G "$BASE_URL/api/v1/save-predictions/mtf-best/val-chunk/list" \
-  -H "Authorization: Bearer fintrack-dev-token" \
+  -H "Authorization: Bearer ${MTF_SERVICE_TOKEN}" \
   --data-urlencode "unique_key=sh510050_best_hlen_7_clen_2048_v_2.5" | jq '.' || echo "查询验证分块列表失败"
 echo -e "\n"
 
