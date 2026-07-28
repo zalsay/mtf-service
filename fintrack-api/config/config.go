@@ -66,14 +66,16 @@ type RedisConfig struct {
 }
 
 type InferenceGatewayConfig struct {
-	BaseURL string
-	Timeout int // seconds
+	BaseURL  string
+	APIToken string
+	Timeout  int // seconds
 }
 
 type UZIServiceConfig struct {
 	Enabled      bool
 	BaseURL      string
 	QueueBaseURL string
+	APIToken     string
 	Timeout      int // seconds
 	OpenTokenTTL int // seconds
 }
@@ -179,13 +181,15 @@ func LoadConfig() (*Config, error) {
 			DB:       getEnvAsInt("REDIS_DB", 0),
 		},
 		InferenceGateway: InferenceGatewayConfig{
-			BaseURL: getEnvWithAliases([]string{"INFERENCE_GATEWAY_URL", "PYTHON_SERVICE_URL"}, defaultInferenceGatewayURL()),
-			Timeout: getEnvAsIntWithAliases([]string{"INFERENCE_GATEWAY_TIMEOUT", "PYTHON_SERVICE_TIMEOUT"}, 30),
+			BaseURL:  getEnvWithAliases([]string{"INFERENCE_GATEWAY_URL", "PYTHON_SERVICE_URL"}, defaultInferenceGatewayURL()),
+			APIToken: getMTFServiceToken(),
+			Timeout:  getEnvAsIntWithAliases([]string{"INFERENCE_GATEWAY_TIMEOUT", "PYTHON_SERVICE_TIMEOUT"}, 30),
 		},
 		UZI: UZIServiceConfig{
 			Enabled:      getEnvAsBool("UZI_ENABLED", true),
 			BaseURL:      getEnv("UZI_SERVICE_URL", defaultUZIServiceURL()),
 			QueueBaseURL: getEnv("UZI_GATEWAY_URL", getEnvWithAliases([]string{"INFERENCE_GATEWAY_URL", "PYTHON_SERVICE_URL"}, defaultInferenceGatewayURL())),
+			APIToken:     getMTFServiceToken(),
 			Timeout:      getEnvAsInt("UZI_SERVICE_TIMEOUT", 1800),
 			OpenTokenTTL: getEnvAsInt("UZI_OPEN_TOKEN_TTL_SECONDS", 45),
 		},

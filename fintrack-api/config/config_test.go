@@ -64,6 +64,9 @@ func TestLoadConfigUsesUnifiedMTFServiceToken(t *testing.T) {
 	if cfg.MTFAgent.RuntimeToken != "shared-service-token" {
 		t.Fatalf("MTFAgent.RuntimeToken = %q", cfg.MTFAgent.RuntimeToken)
 	}
+	if cfg.InferenceGateway.APIToken != "shared-service-token" {
+		t.Fatalf("InferenceGateway.APIToken = %q", cfg.InferenceGateway.APIToken)
+	}
 }
 
 func TestLoadConfigAcceptsLegacyMTFServiceTokenAliases(t *testing.T) {

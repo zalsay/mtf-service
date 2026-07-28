@@ -177,7 +177,7 @@ func (s *WatchlistService) fetchPostgresHandlerOpenPricesByDate(symbol string, s
 	if timeout <= 0 {
 		timeout = 10
 	}
-	client := newInferenceGatewayHTTPClient(timeout)
+	client := newNoProxyHTTPClient(timeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request postgres handler stock range failed: %w", err)

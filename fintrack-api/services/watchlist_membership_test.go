@@ -1041,6 +1041,9 @@ func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
+		if got := r.Header.Get("X-API-Token"); got != "gateway-token" {
+			t.Fatalf("X-API-Token = %q, want gateway-token", got)
+		}
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
@@ -1100,8 +1103,9 @@ func TestGetMTFPredictOnceCachedQueriesInferenceGateway(t *testing.T) {
 
 	service := NewWatchlistService(nil, &config.Config{
 		InferenceGateway: config.InferenceGatewayConfig{
-			BaseURL: server.URL,
-			Timeout: 2,
+			BaseURL:  server.URL,
+			APIToken: "gateway-token",
+			Timeout:  2,
 		},
 	})
 

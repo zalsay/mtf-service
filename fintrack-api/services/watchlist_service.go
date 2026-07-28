@@ -102,13 +102,36 @@ func applyWatchlistOverflow(items []models.WatchlistItem, limit int) {
 	}
 }
 
-func newInferenceGatewayHTTPClient(timeoutSeconds int) *http.Client {
+type inferenceGatewayAuthTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t inferenceGatewayAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("X-API-Token", t.token)
+	return t.base.RoundTrip(clone)
+}
+
+func newInferenceGatewayHTTPClient(timeoutSeconds int, apiToken string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	var roundTripper http.RoundTripper = transport
+	apiToken = strings.TrimSpace(apiToken)
+	if apiToken != "" {
+		roundTripper = inferenceGatewayAuthTransport{
+			base:  roundTripper,
+			token: apiToken,
+		}
+	}
 	return &http.Client{
 		Timeout:   time.Duration(timeoutSeconds) * time.Second,
-		Transport: transport,
+		Transport: roundTripper,
 	}
+}
+
+func newNoProxyHTTPClient(timeoutSeconds int) *http.Client {
+	return newInferenceGatewayHTTPClient(timeoutSeconds, "")
 }
 
 func readGatewayJSONResponse(resp *http.Response, requestURL string, operation string) (map[string]interface{}, error) {
@@ -390,9 +413,9 @@ func (s *WatchlistService) GetMTFBestPredictOnceRequestByUniqueKey(uniqueKey str
 		HorizonLen:     &horizonLen,
 		ContextLen:     &contextLen,
 	}
-	if strings.TrimSpace(covariateSignature) != "" {
-		req.CovariateSignature = strings.TrimSpace(covariateSignature)
-	}
+	// The best-model signature describes training configuration. Direct future
+	// predictions compute their own effective signature, so do not use the
+	// training signature as the continuation cache key.
 	if len(covariateConfigRaw) > 0 && string(covariateConfigRaw) != "{}" {
 		var covariateConfig map[string]interface{}
 		if err := json.Unmarshal(covariateConfigRaw, &covariateConfig); err == nil && len(covariateConfig) > 0 {
@@ -1167,7 +1190,7 @@ func (s *WatchlistService) SyncStockData(symbol string) {
 
 	// Call inference gateway.
 	url := fmt.Sprintf("%s/api/sync-stock", s.config.InferenceGateway.BaseURL)
-	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout, s.config.InferenceGateway.APIToken)
 
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -1455,7 +1478,7 @@ func (s *WatchlistService) TriggerMTFPredict(req *models.MTFPredictRequest) (int
 		return 0, nil, fmt.Errorf("marshal predict payload: %v", err)
 	}
 	url := fmt.Sprintf("%s/predict_for_best", s.config.InferenceGateway.BaseURL)
-	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout, s.config.InferenceGateway.APIToken)
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return 0, nil, fmt.Errorf("call inference gateway predict: %v", err)
@@ -1611,7 +1634,7 @@ func (s *WatchlistService) TriggerMTFPredictOnce(req *models.MTFPredictRequest) 
 		return 0, nil, fmt.Errorf("marshal predict once payload: %v", err)
 	}
 	url := fmt.Sprintf("%s/predict_once", s.config.InferenceGateway.BaseURL)
-	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout, s.config.InferenceGateway.APIToken)
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return 0, nil, fmt.Errorf("call inference gateway predict once: %v", err)
@@ -1675,9 +1698,6 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 	if strings.TrimSpace(req.CovariateSignature) != "" {
 		payload["covariate_signature"] = strings.TrimSpace(req.CovariateSignature)
 	}
-	if req.CovariateConfig != nil {
-		payload["covariate_config"] = req.CovariateConfig
-	}
 	if req.Covariates != nil {
 		payload["covariates"] = req.Covariates
 	}
@@ -1697,7 +1717,7 @@ func (s *WatchlistService) GetMTFPredictOnceCached(req *models.MTFPredictRequest
 		return 0, nil, fmt.Errorf("marshal predict once cached payload: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s/predict_once_cached", strings.TrimRight(strings.TrimSpace(s.config.InferenceGateway.BaseURL), "/"))
-	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout, s.config.InferenceGateway.APIToken)
 	resp, err := client.Post(requestURL, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return 0, nil, fmt.Errorf("call inference gateway predict once cached: %v", err)
@@ -1868,7 +1888,7 @@ func slimPredictionCacheData(data map[string]interface{}) map[string]interface{}
 
 func (s *WatchlistService) GetMTFJobStatus(jobID string) (int, map[string]interface{}, error) {
 	url := fmt.Sprintf("%s/jobs/%s", s.config.InferenceGateway.BaseURL, jobID)
-	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.InferenceGateway.Timeout, s.config.InferenceGateway.APIToken)
 	resp, err := client.Get(url)
 	if err != nil {
 		return 0, nil, fmt.Errorf("call inference gateway job status: %v", err)

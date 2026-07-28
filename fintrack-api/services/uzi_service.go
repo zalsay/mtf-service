@@ -544,7 +544,7 @@ func (s *UZIService) fetchReportFromUZI(cleanedPath string) (*http.Response, err
 }
 
 func (s *UZIService) fetchReportFromSignedURL(reportURL string) (*http.Response, error) {
-	client := newInferenceGatewayHTTPClient(s.config.Timeout)
+	client := newNoProxyHTTPClient(s.config.Timeout)
 
 	req, err := http.NewRequest(http.MethodGet, strings.TrimSpace(reportURL), nil)
 	if err != nil {
@@ -595,7 +595,7 @@ func (s *UZIService) doQueueJSONRequest(method string, endpoint string, payload 
 }
 
 func (s *UZIService) doRawRequest(method string, endpoint string, payload []byte, contentType string) (*http.Response, string, error) {
-	client := newInferenceGatewayHTTPClient(s.config.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.Timeout, s.config.APIToken)
 	attemptErrors := make([]string, 0)
 
 	for _, baseURL := range s.baseURLCandidates() {
@@ -619,7 +619,7 @@ func (s *UZIService) doRawRequest(method string, endpoint string, payload []byte
 }
 
 func (s *UZIService) doRawQueueRequest(method string, endpoint string, payload []byte, contentType string) (*http.Response, string, error) {
-	client := newInferenceGatewayHTTPClient(s.config.Timeout)
+	client := newInferenceGatewayHTTPClient(s.config.Timeout, s.config.APIToken)
 	attemptErrors := make([]string, 0)
 
 	for _, baseURL := range s.queueBaseURLCandidates() {

@@ -212,7 +212,7 @@ func (s *AdminService) GetGatewayQueueStatus() (*models.AdminGatewayQueueStatus,
 		}, nil
 	}
 
-	client := newInferenceGatewayHTTPClient(s.gatewayTimeoutSeconds())
+	client := newInferenceGatewayHTTPClient(s.gatewayTimeoutSeconds(), s.config.InferenceGateway.APIToken)
 	attemptErrors := make([]string, 0, len(candidates))
 	for _, baseURL := range candidates {
 		requestURL := strings.TrimRight(baseURL, "/") + "/health"
