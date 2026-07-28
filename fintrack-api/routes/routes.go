@@ -293,6 +293,12 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 		openV2.GET("/auth/public-key", openAPIHandler.PublicAPIKeyV2)
 		openV2.POST("/auth/api-key", openAPIHandler.CreateAPIKeyV2)
 
+		etfV2 := openV2.Group("/etf")
+		etfV2.Use(openAPIHandler.AuthMiddlewareV2("etf:read"))
+		{
+			etfV2.GET("/hot", openAPIHandler.HotETF)
+		}
+
 		mtfV2 := openV2.Group("/mtf")
 		{
 			mtfV2.GET("/best/by-config", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFBestByConfigV2)

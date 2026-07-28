@@ -104,6 +104,7 @@ func TestSetupRouterRegistersOpenAPIRoutes(t *testing.T) {
 		"POST /api/open/v1/watchlist/bind-strategy": "",
 		"GET /api/open/v2/auth/public-key":          "",
 		"POST /api/open/v2/auth/api-key":            "",
+		"GET /api/open/v2/etf/hot":                  "",
 		"GET /api/open/v2/mtf/best/by-config":       "",
 		"GET /api/open/v2/mtf/future":               "",
 		"POST /api/open/v2/mtf/predict-once":        "",

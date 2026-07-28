@@ -26,7 +26,7 @@
 
 1. 读取 `AGENTS.md`，确认用户要求属于 MTF ETF 研究任务。
 2. 读取 `skills/mtf-etf-a-share-assistant/SKILL.md` 和 Open API 合约，确认接口和输出结构。
-3. 使用 `GET /api/open/v1/etf/hot` 获取热门 ETF 候选。
+3. 使用 `GET /api/open/v2/etf/hot` 获取热门 ETF 候选。
 4. 使用 `POST /api/open/v1/etf/quotes` 补充行情。
 5. 使用 `GET /api/open/v1/mtf/best?stock_type=2&include_validation=true` 查询已有 best 与验证分块。
 6. 对缺失或过期标的，优先考虑 `POST /api/open/v1/mtf/predict-once` 且 `prefer_cache=true`。

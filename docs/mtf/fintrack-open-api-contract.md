@@ -341,6 +341,10 @@ Scope: `mtf:read`
 
 v2 使用不依赖本地用户表的短 API key。v2 MTF 接口只支持 `mtf-pro`，`context_len` 可选 `512/1024/2048`，`horizon_len` 可选 `8/16/32/64`，默认值为 `8`；显式传入其他值返回 `400 validation_error`。
 
+#### GET `/api/open/v2/etf/hot`
+
+使用 v2 key 查询热门 ETF 雷达列表，返回结构与 v1 `etf/hot` 相同；该路由不依赖本地用户表，可直接作为 v2 MTF 工作流的候选发现源。
+
 #### GET `/api/open/v2/mtf/best/by-config`
 
 Query：`symbol` 必填；`stock_type` 可选；`horizon_len` 可选，默认 `8`；`context_len` 可选。返回指定 horizon/context 配置下的聚合结果，调用方只应使用 `mtf_pro_unique_key`。
@@ -428,7 +432,7 @@ Scope: `watchlist:write`
 
 外部 skill 的 ETF 选择 + 预测 + 策略推荐建议按以下顺序调用：
 
-1. `GET /etf/hot` 获取候选池。
+1. `GET /api/open/v2/etf/hot` 获取候选池。
 2. `POST /etf/quotes` 补行情。
 3. `GET /mtf/best?stock_type=2&include_validation=true` 查已有预测和验证。
 4. 对缺失或过期标的调用 `POST /mtf/predict-once` 或 `POST /mtf/predict-best`。
