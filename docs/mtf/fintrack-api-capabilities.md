@@ -150,7 +150,7 @@
 | --- | --- | --- | --- |
 | POST | `/api/v1/save-predictions/mtf-best` | 否 | UPSERT MTF best prediction。当前保存时统一写为公开。 |
 | GET | `/api/v1/save-predictions/mtf-best/by-unique?unique_key=` | 否 | 按 unique key 查询 best prediction。 |
-| GET | `/api/v1/save-predictions/mtf-best/by-config?symbol=&horizon_len=&context_len=` | 否 | 按配置查询最新 mtf-lite/mtf-pro unique key。 |
+| GET | `/api/v1/save-predictions/mtf-best/by-config?symbol=&horizon_len=&context_len=` | 否 | 查询最新 mtf-lite/mtf-pro unique key；`context_len` 可省略，省略时按 symbol+horizon 返回实际落库 context，并包含 `mtf_pro_context_len` / `mtf_lite_context_len`。 |
 | POST | `/api/v1/save-predictions/mtf-best/val-chunk` | 否 | UPSERT validation chunk，包括预测、实际值、日期、涨跌幅和协变量信息。 |
 | GET | `/api/v1/save-predictions/mtf-best/val-chunk/latest?unique_key=` | 否 | 查询最新 validation chunk 元信息。 |
 | POST | `/api/v1/save-predictions/backtest` | 否 | UPSERT MTF 回测结果。 |

@@ -1124,30 +1124,46 @@ func (h *DatabaseHandler) getMTFBestKeysByConfigHandler(c *gin.Context) {
 		return
 	}
 
-	contextLen, err := strconv.Atoi(strings.TrimSpace(c.Query("context_len")))
-	if err != nil || contextLen <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "valid context_len is required"})
-		return
+	contextLen := 0
+	contextLenQuery := strings.TrimSpace(c.Query("context_len"))
+	if contextLenQuery != "" {
+		contextLen, err = strconv.Atoi(contextLenQuery)
+		if err != nil || contextLen <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "context_len must be a positive integer when provided"})
+			return
+		}
+	}
+
+	stockType := 0
+	stockTypeQuery := strings.TrimSpace(c.Query("stock_type"))
+	if stockTypeQuery != "" {
+		stockType, err = strconv.Atoi(stockTypeQuery)
+		if err != nil || stockType <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "stock_type must be a positive integer when provided"})
+			return
+		}
 	}
 
 	mtfVersion := strings.TrimSpace(c.Query("mtf_version"))
 
 	rows, err := h.db.Raw(`
-        SELECT prediction_type, unique_key
-        FROM (
-            SELECT DISTINCT ON (prediction_type)
-                prediction_type,
-                unique_key,
-                updated_at,
-                id
+		SELECT prediction_type, unique_key, context_len
+		FROM (
+		    SELECT DISTINCT ON (prediction_type)
+		        prediction_type,
+		        unique_key,
+		        context_len,
+		        updated_at,
+		        id
             FROM mtf_best_predictions
-            WHERE symbol = $1
-              AND horizon_len = $2
-              AND context_len = $3
-              AND ($4 = '' OR mtf_version = $4)
+			WHERE symbol = $1
+			  AND horizon_len = $2
+			  AND ($3 = 0 OR context_len = $3)
+	              AND ($4 = '' OR mtf_version = $4)
+	              AND ($5 = 0 OR stock_type = $5)
             ORDER BY prediction_type, updated_at DESC, id DESC
         ) latest
-    `, symbol, horizonLen, contextLen, mtfVersion).Rows()
+    `, symbol, horizonLen, contextLen, mtfVersion, stockType).Rows()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1155,28 +1171,34 @@ func (h *DatabaseHandler) getMTFBestKeysByConfigHandler(c *gin.Context) {
 	defer rows.Close()
 
 	response := gin.H{
-		"symbol":              symbol,
-		"mtf_version":         mtfVersion,
-		"horizon_len":         horizonLen,
-		"context_len":         contextLen,
-		"mtf_lite_unique_key": "",
-		"mtf_pro_unique_key":  "",
+		"symbol":               symbol,
+		"mtf_version":          mtfVersion,
+		"horizon_len":          horizonLen,
+		"context_len":          contextLen,
+		"stock_type":           stockType,
+		"mtf_lite_unique_key":  "",
+		"mtf_pro_unique_key":   "",
+		"mtf_lite_context_len": 0,
+		"mtf_pro_context_len":  0,
 	}
 
 	found := 0
 	for rows.Next() {
 		var predictionType string
 		var uniqueKey string
-		if err := rows.Scan(&predictionType, &uniqueKey); err != nil {
+		var selectedContextLen int
+		if err := rows.Scan(&predictionType, &uniqueKey, &selectedContextLen); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		switch normalizedPredictionType(predictionType) {
 		case "mtf-pro":
 			response["mtf_pro_unique_key"] = uniqueKey
+			response["mtf_pro_context_len"] = selectedContextLen
 			found++
 		default:
 			response["mtf_lite_unique_key"] = uniqueKey
+			response["mtf_lite_context_len"] = selectedContextLen
 			found++
 		}
 	}
@@ -1184,6 +1206,13 @@ func (h *DatabaseHandler) getMTFBestKeysByConfigHandler(c *gin.Context) {
 	if found == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
+	}
+	if contextLen == 0 {
+		if selected, ok := response["mtf_pro_context_len"].(int); ok && selected > 0 {
+			response["context_len"] = selected
+		} else if selected, ok := response["mtf_lite_context_len"].(int); ok && selected > 0 {
+			response["context_len"] = selected
+		}
 	}
 
 	c.JSON(http.StatusOK, ApiResponse{Code: 200, Message: "Success", Data: response})

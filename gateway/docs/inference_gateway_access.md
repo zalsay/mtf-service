@@ -113,6 +113,25 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | rg 'ai-function
 curl http://127.0.0.1:59010/health
 ```
 
+### 每日热门 ETF 与上证指数预计算
+
+Gateway 默认在 `Asia/Shanghai` 每日 `00:05` 拉取热门 ETF，选择 `stock_type=2` 的 ETF，并额外预计算上证指数 `000001`（`stock_type=3`）。预计算以 `context_len=2048` 作为训练上限、默认 `horizon_len=8` 预热缓存。训练服务会依据实际可拉取的训练窗口选择最终 context，gateway 只使用这个实际 context 继续 future，不会为同一标的枚举 512、1024、2048 三个 context。目标日期取当天或下一个交易日。
+
+每个标的只查询一次 best 和包含目标日期的 future：best 缺失时先排入一次训练任务，训练成功后读取实际 context，再排入 future 单次预测；缓存已存在时不重复入队。预计算任务使用后台队列，不阻塞用户请求。
+
+可通过环境变量调整：
+
+```bash
+HOT_ETF_PRECOMPUTE_ENABLED=true
+HOT_ETF_PRECOMPUTE_TIME=00:05
+HOT_ETF_SOURCE_URL=https://ai.meetlife.top/hot-etf/latest
+HOT_ETF_PRECOMPUTE_HORIZON_LEN=8
+HOT_ETF_PRECOMPUTE_CONTEXT_LEN=2048
+HOT_ETF_PRECOMPUTE_CONCURRENCY=2
+```
+
+`HOT_ETF_PRECOMPUTE_ENABLED=false` 可关闭该后台任务；`POSTGRES_HANDLER_URL`、`POSTGRES_HANDLER_TOKEN` 和 `HISTORY_SERVICE_URL` 复用 gateway 的现有配置。
+
 示例返回：
 
 ```json

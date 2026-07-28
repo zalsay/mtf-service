@@ -4,6 +4,7 @@ go 1.22.0
 
 require (
 	github.com/redis/go-redis/v9 v9.18.0
+	golang.org/x/net v0.10.0
 	modernc.org/sqlite v1.34.4
 )
 

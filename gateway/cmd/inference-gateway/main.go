@@ -128,6 +128,17 @@ func formatDailySyncSchedules(schedules []dailySyncSchedule) string {
 	return strings.Join(parts, ",")
 }
 
+func parseHotETFContextLen(raw string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || (value != 512 && value != 1024 && value != 2048) {
+		if strings.TrimSpace(raw) != "" {
+			log.Printf("invalid HOT_ETF_PRECOMPUTE_CONTEXT_LEN=%q, fallback to 2048", raw)
+		}
+		return 2048
+	}
+	return value
+}
+
 func level1DailyToken(postgresHandlerToken string) string {
 	return getenvWithAliases([]string{"A_STOCK_DAILY_TOKEN", "LEVEL1_DAILY_TOKEN", "DAILY_STOCK_SYNC_TOKEN"}, postgresHandlerToken)
 }
@@ -216,6 +227,23 @@ func main() {
 	dailyStockSyncMaxConcurrency := getenvInt("DAILY_STOCK_SYNC_MAX_CONCURRENCY", 4)
 	dailyStockSyncLookbackDays := getenvInt("DAILY_STOCK_SYNC_LOOKBACK_DAYS", 0)
 	dailyStockSyncTimezone := getenv("DAILY_STOCK_SYNC_TIMEZONE", "Asia/Shanghai")
+	hotETFPrecomputeEnabled := getenvBool("HOT_ETF_PRECOMPUTE_ENABLED", true)
+	hotETFPrecomputeTime := getenv("HOT_ETF_PRECOMPUTE_TIME", "00:05")
+	hotETFPrecomputeSchedule, hotETFPrecomputeScheduleOK := parseDailySyncTime(hotETFPrecomputeTime)
+	if !hotETFPrecomputeScheduleOK {
+		log.Printf("invalid HOT_ETF_PRECOMPUTE_TIME=%q, fallback to 00:05", hotETFPrecomputeTime)
+		hotETFPrecomputeSchedule = dailySyncSchedule{Hour: 0, Minute: 5}
+	}
+	hotETFPrecomputeSourceURL := getenv("HOT_ETF_SOURCE_URL", "https://ai.meetlife.top/hot-etf/latest")
+	hotETFPrecomputeHorizon := getenvInt("HOT_ETF_PRECOMPUTE_HORIZON_LEN", 8)
+	if hotETFPrecomputeHorizon != 8 && hotETFPrecomputeHorizon != 16 && hotETFPrecomputeHorizon != 32 && hotETFPrecomputeHorizon != 64 {
+		log.Printf("invalid HOT_ETF_PRECOMPUTE_HORIZON_LEN=%d, fallback to 8", hotETFPrecomputeHorizon)
+		hotETFPrecomputeHorizon = 8
+	}
+	hotETFPrecomputeContextLen := parseHotETFContextLen(getenv("HOT_ETF_PRECOMPUTE_CONTEXT_LEN", "2048"))
+	hotETFPrecomputeConcurrency := getenvInt("HOT_ETF_PRECOMPUTE_CONCURRENCY", 2)
+	hotETFPrecomputeJobTimeout := time.Duration(getenvInt("HOT_ETF_PRECOMPUTE_JOB_TIMEOUT_SECONDS", 21600)) * time.Second
+	hotETFPrecomputePollInterval := time.Duration(getenvInt("HOT_ETF_PRECOMPUTE_POLL_INTERVAL_SECONDS", 10)) * time.Second
 	level1DailyURL := strings.TrimSpace(os.Getenv("A_STOCK_DAILY_URL"))
 	level1TriggerToken := level1DailyToken(postgresHandlerToken)
 	level1DailyConcurrent := getenvInt("A_STOCK_DAILY_CONCURRENT", 50)
@@ -320,6 +348,36 @@ func main() {
 		log.Fatalf("scheduler recover failed: %v", err)
 	}
 	scheduler.Start(ctx)
+
+	if hotETFPrecomputeEnabled {
+		precomputer := gateway.NewHotETFPrecomputer(scheduler, gateway.HotETFPrecomputeOptions{
+			SourceURL:       hotETFPrecomputeSourceURL,
+			PostgresBaseURL: postgresHandlerURL,
+			PostgresToken:   postgresHandlerToken,
+			HistoryBaseURL:  historyServiceURL,
+			Location:        location,
+			ScheduleHour:    hotETFPrecomputeSchedule.Hour,
+			ScheduleMinute:  hotETFPrecomputeSchedule.Minute,
+			HorizonLen:      hotETFPrecomputeHorizon,
+			ContextLen:      hotETFPrecomputeContextLen,
+			MaxConcurrency:  hotETFPrecomputeConcurrency,
+			JobTimeout:      hotETFPrecomputeJobTimeout,
+			PollInterval:    hotETFPrecomputePollInterval,
+		})
+		precomputer.Start(ctx)
+		log.Printf(
+			"hot ETF precompute enabled: source=%s schedule=%02d:%02d tz=%s requested_context=%d horizon=%d concurrency=%d",
+			hotETFPrecomputeSourceURL,
+			hotETFPrecomputeSchedule.Hour,
+			hotETFPrecomputeSchedule.Minute,
+			location.String(),
+			hotETFPrecomputeContextLen,
+			hotETFPrecomputeHorizon,
+			hotETFPrecomputeConcurrency,
+		)
+	} else {
+		log.Printf("hot ETF precompute disabled")
+	}
 
 	if dailyStockSyncEnabled {
 		schedules := dailySyncSchedules(dailyStockSyncHour, dailyStockSyncMinute, dailyStockSyncExtraTimes)
