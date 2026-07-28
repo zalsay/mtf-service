@@ -339,11 +339,11 @@ Scope: `mtf:read`
 
 ### v2 MTF Open API
 
-v2 使用不依赖本地用户表的短 API key。v2 MTF 接口只支持 `mtf-pro`，`context_len` 可选 `512/1024/2048`，`horizon_len` 固定为 `8`；未传 `horizon_len` 时服务端按 `8` 处理，显式传入其他值返回 `400 validation_error`。
+v2 使用不依赖本地用户表的短 API key。v2 MTF 接口只支持 `mtf-pro`，`context_len` 可选 `512/1024/2048`，`horizon_len` 可选 `8/16/32/64`，默认值为 `8`；显式传入其他值返回 `400 validation_error`。
 
 #### GET `/api/open/v2/mtf/best/by-config`
 
-Query：`symbol` 必填；`stock_type` 可选；`context_len` 可选。返回固定 `horizon_len=8` 下的配置聚合或指定 context 配置，调用方只应使用 `mtf_pro_unique_key`。
+Query：`symbol` 必填；`stock_type` 可选；`horizon_len` 可选，默认 `8`；`context_len` 可选。返回指定 horizon/context 配置下的聚合结果，调用方只应使用 `mtf_pro_unique_key`。
 
 #### GET `/api/open/v2/mtf/future?unique_key=...&predict_date=...`
 

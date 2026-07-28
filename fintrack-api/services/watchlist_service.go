@@ -1213,7 +1213,19 @@ type mtfMembershipTrainPolicy struct {
 	AllowedHorizonLens     map[int]struct{}
 }
 
-const MTFV2HorizonLen = 8
+const (
+	MTFV2HorizonLen     = 8
+	MTFV2HorizonLenText = "8,16,32,64"
+)
+
+func IsSupportedMTFV2HorizonLen(value int) bool {
+	switch value {
+	case 8, 16, 32, 64:
+		return true
+	default:
+		return false
+	}
+}
 
 func newIntSet(values ...int) map[int]struct{} {
 	out := make(map[int]struct{}, len(values))
@@ -1363,8 +1375,8 @@ func NormalizeMTFPredictOnceRequestV2(req *models.MTFPredictRequest) (*models.MT
 		value := MTFV2HorizonLen
 		normalized.HorizonLen = &value
 	}
-	if *normalized.HorizonLen != MTFV2HorizonLen {
-		return nil, fmt.Errorf("v2 only supports horizon_len=%d", MTFV2HorizonLen)
+	if !IsSupportedMTFV2HorizonLen(*normalized.HorizonLen) {
+		return nil, fmt.Errorf("v2 only supports horizon_len=%s", MTFV2HorizonLenText)
 	}
 	if normalized.ContextLen == nil {
 		value := 512

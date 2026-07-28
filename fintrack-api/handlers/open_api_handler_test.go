@@ -912,7 +912,7 @@ func TestOptionalV2HorizonContextDefaultsToEight(t *testing.T) {
 	}
 }
 
-func TestOptionalV2HorizonContextRejectsNonEight(t *testing.T) {
+func TestOptionalV2HorizonContextRejectsUnsupportedHorizon(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -923,6 +923,18 @@ func TestOptionalV2HorizonContextRejectsNonEight(t *testing.T) {
 		t.Fatal("expected horizon_len=7 to be rejected for v2")
 	}
 	assertOpenAPIErrorCode(t, rec, http.StatusBadRequest, "validation_error")
+}
+
+func TestOptionalV2HorizonContextAcceptsExtendedHorizon(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/open/v2/mtf/best/by-config?horizon_len=16", nil)
+
+	horizonLen, contextLen, ok := optionalV2HorizonContext(c)
+	if !ok || horizonLen == nil || *horizonLen != 16 || contextLen != nil {
+		t.Fatalf("result = %#v/%#v/%v, want horizon 16 without context", horizonLen, contextLen, ok)
+	}
 }
 
 func expectOpenAPIAuth(mock sqlmock.Sqlmock, apiKey string, scopes string, userID int, keyID int, now time.Time) {

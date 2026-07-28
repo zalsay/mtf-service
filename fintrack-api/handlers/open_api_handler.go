@@ -910,8 +910,8 @@ func optionalV2HorizonContext(c *gin.Context) (*int, *int, bool) {
 			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid horizon_len is required", false)
 			return nil, nil, false
 		}
-		if value != services.MTFV2HorizonLen {
-			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "v2 only supports horizon_len="+strconv.Itoa(services.MTFV2HorizonLen), false)
+		if !services.IsSupportedMTFV2HorizonLen(value) {
+			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "v2 only supports horizon_len="+services.MTFV2HorizonLenText, false)
 			return nil, nil, false
 		}
 		horizonLen = value
