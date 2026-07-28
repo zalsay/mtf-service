@@ -1388,7 +1388,8 @@ func NormalizeMTFPredictOnceRequestV2(req *models.MTFPredictRequest) (*models.MT
 	if normalized.StockType == nil {
 		normalized.StockType = 2
 	}
-	if normalized.EndDate == nil || strings.TrimSpace(*normalized.EndDate) == "" {
+	if (normalized.EndDate == nil || strings.TrimSpace(*normalized.EndDate) == "") &&
+		(normalized.PredictDate == nil || strings.TrimSpace(*normalized.PredictDate) == "") {
 		endDate := defaultMarketEndDate()
 		normalized.EndDate = &endDate
 	}
@@ -1398,6 +1399,45 @@ func NormalizeMTFPredictOnceRequestV2(req *models.MTFPredictRequest) (*models.MT
 		normalized.CovariateConfig = buildMarketCovariateConfig()
 	}
 	return &normalized, nil
+}
+
+func NormalizeMTFPredictBestRequestV2(req *models.MTFBestTrainRequest) (*models.MTFPredictRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+	if normalizeTrainPredictionType(req.PredictionType) != "mtf-pro" {
+		return nil, fmt.Errorf("v2 only supports prediction_type=mtf-pro")
+	}
+	if !IsSupportedMTFV2HorizonLen(req.HorizonLen) {
+		return nil, fmt.Errorf("v2 only supports horizon_len=%s", MTFV2HorizonLenText)
+	}
+	if _, ok := newIntSet(512, 1024, 2048)[req.ContextLen]; !ok {
+		return nil, fmt.Errorf("v2 does not support context_len=%d", req.ContextLen)
+	}
+	stockType := req.StockType
+	if stockType == nil {
+		stockType = 2
+	}
+	years := 15
+	if req.Years != nil && *req.Years > 0 {
+		years = *req.Years
+	}
+	endDate := defaultMarketEndDate()
+	normalized := &models.MTFPredictRequest{
+		StockCode:      req.StockCode,
+		StockType:      stockType,
+		PredictionType: "mtf-pro",
+		Years:          &years,
+		EndDate:        &endDate,
+		HorizonLen:     &req.HorizonLen,
+		ContextLen:     &req.ContextLen,
+	}
+	if predictionTypeUsesCovariates(normalized.PredictionType) {
+		preset := "market_cov_v1"
+		normalized.CovariatePreset = &preset
+		normalized.CovariateConfig = buildMarketCovariateConfig()
+	}
+	return normalized, nil
 }
 
 func normalizeMTFPredictStockType(value interface{}) int {

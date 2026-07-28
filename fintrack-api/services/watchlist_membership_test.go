@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -821,6 +822,86 @@ func TestNormalizeMTFPredictOnceRequestV2DefaultsToFixedHorizon(t *testing.T) {
 	}
 	if normalized.ContextLen == nil || *normalized.ContextLen != 512 {
 		t.Fatalf("context_len = %#v, want default 512", normalized.ContextLen)
+	}
+}
+
+func TestNormalizeMTFPredictOnceRequestV2DoesNotDefaultEndDateForPredictDate(t *testing.T) {
+	predictDate := "2026-07-24"
+	req := &models.MTFPredictRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-pro",
+		PredictDate:    &predictDate,
+	}
+
+	normalized, err := NormalizeMTFPredictOnceRequestV2(req)
+	if err != nil {
+		t.Fatalf("expected v2 request to pass, got error: %v", err)
+	}
+	if normalized.EndDate != nil && strings.TrimSpace(*normalized.EndDate) != "" {
+		t.Fatalf("end_date = %#v, want unset when predict_date is provided", normalized.EndDate)
+	}
+}
+
+func TestNormalizeMTFPredictOnceRequestV2PreservesExplicitEndDateWithPredictDate(t *testing.T) {
+	predictDate := "2026-07-24"
+	endDate := "2026-07-23"
+	req := &models.MTFPredictRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-pro",
+		PredictDate:    &predictDate,
+		EndDate:        &endDate,
+	}
+
+	normalized, err := NormalizeMTFPredictOnceRequestV2(req)
+	if err != nil {
+		t.Fatalf("expected v2 request to pass, got error: %v", err)
+	}
+	if normalized.EndDate == nil || *normalized.EndDate != endDate {
+		t.Fatalf("end_date = %#v, want explicit end_date %q", normalized.EndDate, endDate)
+	}
+}
+
+func TestNormalizeMTFPredictBestRequestV2UsesCurrentTrainingContract(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
+		StockCode:      "510300",
+		PredictionType: "mtf-pro",
+		HorizonLen:     8,
+		ContextLen:     2048,
+	}
+
+	normalized, err := NormalizeMTFPredictBestRequestV2(req)
+	if err != nil {
+		t.Fatalf("expected v2 train request to pass, got error: %v", err)
+	}
+	if normalized.PredictionType != "mtf-pro" {
+		t.Fatalf("prediction_type = %q, want mtf-pro", normalized.PredictionType)
+	}
+	if normalized.StockType != 2 {
+		t.Fatalf("stock_type = %#v, want 2", normalized.StockType)
+	}
+	if normalized.UserID != nil {
+		t.Fatalf("user_id = %#v, want unset", normalized.UserID)
+	}
+	if normalized.HorizonLen == nil || *normalized.HorizonLen != 8 {
+		t.Fatalf("horizon_len = %#v, want 8", normalized.HorizonLen)
+	}
+	if normalized.ContextLen == nil || *normalized.ContextLen != 2048 {
+		t.Fatalf("context_len = %#v, want 2048", normalized.ContextLen)
+	}
+}
+
+func TestNormalizeMTFPredictBestRequestV2RejectsUnsupportedTrainingDimensions(t *testing.T) {
+	req := &models.MTFBestTrainRequest{
+		StockCode:      "510300",
+		PredictionType: "mtf-pro",
+		HorizonLen:     7,
+		ContextLen:     2048,
+	}
+
+	if _, err := NormalizeMTFPredictBestRequestV2(req); err == nil {
+		t.Fatal("expected unsupported v2 training horizon to be rejected")
 	}
 }
 

@@ -101,6 +101,7 @@ type requestKeyPayload struct {
 	Years              int    `json:"years"`
 	StartDate          string `json:"start_date,omitempty"`
 	EndDate            string `json:"end_date,omitempty"`
+	PredictDate        string `json:"predict_date,omitempty"`
 	HorizonLen         int    `json:"horizon_len"`
 	ContextLen         int    `json:"context_len"`
 	PredictionType     string `json:"prediction_type"`
@@ -118,6 +119,7 @@ func (r InferenceRequest) RequestKey() (string, error) {
 		Years:              normalizeIntValue(r.Years, 15),
 		StartDate:          normalizeDateValue(r.StartDate),
 		EndDate:            normalizeDateValue(r.EndDate),
+		PredictDate:        normalizeDateValue(r.PredictDate),
 		HorizonLen:         normalizeIntValue(r.HorizonLen, 7),
 		ContextLen:         normalizeIntValue(r.ContextLen, 2048),
 		PredictionType:     r.PredictionType(),

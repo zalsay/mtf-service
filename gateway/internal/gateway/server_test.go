@@ -63,6 +63,7 @@ func TestPredictOnceCachedReadsOnlyPredictionCache(t *testing.T) {
 		"horizon_len":7,
 		"context_len":2048,
 		"prediction_type":"mtf-pro",
+		"predict_date":"2999-01-01",
 		"covariate_preset":"market_cov_v1",
 		"covariate_signature":"sig123"
 	}`)
@@ -141,6 +142,44 @@ func TestPredictOnceCachedUsesPredictDateForFreshness(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPredictOnceCachedRequiresPredictDateInFutureWindow(t *testing.T) {
+	handler := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("predict_date") != "2026-06-02" {
+			t.Fatalf("prediction cache predict_date = %q, want 2026-06-02", r.URL.Query().Get("predict_date"))
+		}
+		_, _ = w.Write([]byte(`{
+			"code":200,
+			"message":"Success",
+			"data":{
+				"future_dates":["2026-06-03","2026-06-04"],
+				"latest_data_date":"2026-06-01"
+			}
+		}`))
+	}))
+	defer handler.Close()
+
+	server := NewServerWithOptions(nil, ServerOptions{PostgresHandlerURL: handler.URL})
+	body := strings.NewReader(`{
+		"stock_code":"300442",
+		"stock_type":"stock",
+		"horizon_len":7,
+		"context_len":2048,
+		"prediction_type":"mtf-lite",
+		"predict_date":"2026-06-02"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/predict_once_cached", body)
+	rec := httptest.NewRecorder()
+	server.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "prediction cache not found") {
+		t.Fatalf("body = %s, want prediction cache not found", rec.Body.String())
 	}
 }
 
@@ -496,7 +535,7 @@ func TestNormalizeInferencePayloadPreservesExplicitBestSyncDates(t *testing.T) {
 	}
 }
 
-func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T) {
+func TestNormalizeInferencePayloadPreservesPredictDateAsFutureTarget(t *testing.T) {
 	body := []byte(`{
 		"stock_code": "510050",
 		"stock_type": 2,
@@ -519,8 +558,8 @@ func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T
 	if normalizedRequest.PredictDate != "20260602" {
 		t.Fatalf("expected predict_date to be normalized, got %#v", normalizedRequest.PredictDate)
 	}
-	if normalizedRequest.EndDate != "20260602" {
-		t.Fatalf("expected predict_date to drive end_date, got %#v", normalizedRequest.EndDate)
+	if normalizedRequest.EndDate != nil {
+		t.Fatalf("expected predict_date not to become end_date, got %#v", normalizedRequest.EndDate)
 	}
 	if normalizedRequest.StartDate != nil {
 		t.Fatalf("expected start_date to remain empty for predict_once, got %#v", normalizedRequest.StartDate)
@@ -533,8 +572,8 @@ func TestNormalizeInferencePayloadUsesPredictDateAsPredictOnceToday(t *testing.T
 	if normalized["predict_date"] != "20260602" {
 		t.Fatalf("expected normalized body predict_date=20260602, got %#v", normalized["predict_date"])
 	}
-	if normalized["end_date"] != "20260602" {
-		t.Fatalf("expected normalized body end_date=20260602, got %#v", normalized["end_date"])
+	if _, exists := normalized["end_date"]; exists {
+		t.Fatalf("expected normalized body to omit auto-injected end_date, got %#v", normalized["end_date"])
 	}
 	if _, exists := normalized["start_date"]; exists {
 		t.Fatalf("expected normalized body to omit auto-injected start_date, got %#v", normalized["start_date"])

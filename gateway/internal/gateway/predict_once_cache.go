@@ -65,6 +65,9 @@ func (s *Server) lookupPredictionCache(ctx context.Context, request models.Infer
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return http.StatusBadGateway, nil, fmt.Errorf("decode postgres prediction cache data: %w", err)
 	}
+	if !predictionFutureDateContains(payload["future_dates"], lookupDate) {
+		return http.StatusNotFound, predictOnceCacheNotFoundBody(request.StockCode, "单次预测缓存不包含指定 future 日期", "prediction cache not found"), nil
+	}
 	if !isPredictionCacheFresh(payload, lookupDate) {
 		return http.StatusNotFound, predictOnceCacheNotFoundBody(request.StockCode, "单次预测缓存已过期", "prediction cache stale"), nil
 	}
@@ -182,6 +185,30 @@ func latestPredictionFutureDate(value any) (time.Time, bool) {
 		}
 	}
 	return latest, !latest.IsZero()
+}
+
+func predictionFutureDateContains(value any, target time.Time) bool {
+	var rawDates []any
+	switch typed := value.(type) {
+	case []any:
+		rawDates = typed
+	case []string:
+		rawDates = make([]any, 0, len(typed))
+		for _, item := range typed {
+			rawDates = append(rawDates, item)
+		}
+	default:
+		return false
+	}
+	target = time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
+	for _, item := range rawDates {
+		dateText := strings.TrimSpace(fmt.Sprint(item))
+		parsed, err := time.ParseInLocation(predictionCacheDateLayout, dateText, time.UTC)
+		if err == nil && parsed.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func storageSymbol(value string) string {

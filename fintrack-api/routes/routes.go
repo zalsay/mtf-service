@@ -303,6 +303,8 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 		{
 			mtfV2.GET("/best/by-config", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFBestByConfigV2)
 			mtfV2.GET("/future", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFFutureV2)
+			mtfV2.POST("/train", openAPIHandler.AuthMiddlewareV2("mtf:predict"), openAPIHandler.MTFTrainV2)
+			mtfV2.GET("/jobs/:jobID", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFJobV2)
 			mtfV2.POST("/predict-once", openAPIHandler.AuthMiddlewareV2("mtf:predict"), openAPIHandler.MTFPredictOnceV2)
 		}
 	}

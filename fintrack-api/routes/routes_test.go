@@ -107,6 +107,8 @@ func TestSetupRouterRegistersOpenAPIRoutes(t *testing.T) {
 		"GET /api/open/v2/etf/hot":                  "",
 		"GET /api/open/v2/mtf/best/by-config":       "",
 		"GET /api/open/v2/mtf/future":               "",
+		"POST /api/open/v2/mtf/train":               "",
+		"GET /api/open/v2/mtf/jobs/:jobID":          "",
 		"POST /api/open/v2/mtf/predict-once":        "",
 	}
 

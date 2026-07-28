@@ -353,6 +353,14 @@ Query：`symbol` 必填；`stock_type` 可选；`horizon_len` 可选，默认 `8
 
 只查询指定日期已有的 future 缓存；缓存缺失返回 `404 prediction_cache_not_found`，不会由 cached 接口直接触发推理。
 
+#### POST `/api/open/v2/mtf/train`
+
+使用短 API key 启动指定 `mtf-pro` 配置的 best 训练，不依赖本地用户表。支持 `horizon_len=8/16/32/64`、`context_len=512/1024/2048`，返回 `job_id`；调用方必须使用同一短 key 查询 job，训练成功后再重新查询 best。
+
+#### GET `/api/open/v2/mtf/jobs/{job_id}`
+
+查询训练 job 状态。`status` 为 `queued` 或 `running` 时继续轮询，`succeeded` 后才可继续查询 best，`failed` 应停止当前标的流程。
+
 #### POST `/api/open/v2/mtf/predict-once`
 
 请求示例：
@@ -435,7 +443,7 @@ Scope: `watchlist:write`
 1. `GET /api/open/v2/etf/hot` 获取候选池。
 2. `POST /etf/quotes` 补行情。
 3. `GET /mtf/best?stock_type=2&include_validation=true` 查已有预测和验证。
-4. 对缺失或过期标的调用 `POST /mtf/predict-once` 或 `POST /mtf/predict-best`。
+4. 对缺失 best 的标的调用 `POST /api/open/v2/mtf/train`，轮询 `GET /api/open/v2/mtf/jobs/{job_id}` 至成功后重新查询 best；future 缓存缺失时再调用 `POST /api/open/v2/mtf/predict-once`。
 5. `POST /mtf/backtest` 验证策略参数。
 6. `POST /strategy/params` 保存策略。
 7. `POST /watchlist` 与 `/watchlist/bind-strategy` 更新用户工作台。

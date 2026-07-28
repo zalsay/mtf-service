@@ -961,9 +961,12 @@ func normalizeInferencePayload(body []byte, request models.InferenceRequest, tar
 
 	endDateFallback := time.Now().In(shanghaiLocation)
 	if predictDate != "" && isPredictOnceTarget(targetPath) {
-		if parsed, err := time.ParseInLocation("20060102", predictDate, shanghaiLocation); err == nil {
-			endDateFallback = parsed
-		}
+		// predict_date identifies the requested future chunk date. The Python
+		// service fetches through that date and excludes it from history when
+		// it is already present, so the generated future window can start on
+		// predict_date. Keep end_date unset unless the caller explicitly sends
+		// one; otherwise predict_date would incorrectly become the history end.
+		endDateFallback = time.Time{}
 	}
 	if targetPath == "/internal/predict_for_best_sync" {
 		endDateFallback = time.Time{}

@@ -306,7 +306,7 @@ curl -X POST http://127.0.0.1:59010/predict_for_best \
 - 地址：`http://<host>:59010/predict_once`
 
 请求体使用同一套基础字段，但语义不同：`/predict_once` 只基于已有 best 做最新单 chunk 预测，不会补跑训练 + 验证。
-可选字段 `predict_date` 用于把某一天当作本次 once 推理的“今日”，支持 `YYYYMMDD`、`YYYY-MM-DD` 等格式；未显式传 `end_date` 时，gateway 会用 `predict_date` 生成 `end_date`。未显式传 `start_date` 时，gateway 不会注入历史起始日期，由 Python 根据 best 的验证结束日期续跑；调用方显式传入 `start_date` 时仍会保留。
+可选字段 `predict_date` 用于指定本次 once 结果必须覆盖的 future chunk 日期，支持 `YYYYMMDD`、`YYYY-MM-DD` 等格式。未显式传 `end_date` 时，gateway 不会把目标日期错误地写成历史截止日；Python 会拉取到目标日期，并在目标日已有历史行情时排除该日，使生成的 `future_dates` window 从目标日开始。未显式传 `start_date` 时，gateway 不会注入历史起始日期，由 Python 根据 best 的验证结束日期续跑；调用方显式传入 `start_date` 时仍会保留。
 
 ```json
 {

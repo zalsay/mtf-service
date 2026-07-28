@@ -445,6 +445,34 @@ func (h *OpenAPIHandler) MTFFutureV2(c *gin.Context) {
 	writeOpenAPIError(c, http.StatusNotFound, "prediction_cache_not_found", message, false)
 }
 
+func (h *OpenAPIHandler) MTFTrainV2(c *gin.Context) {
+	var req models.MTFBestTrainRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
+	}
+	normalized, err := services.NormalizeMTFPredictBestRequestV2(&req)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
+	}
+	status, body, err := h.watchlist.TriggerMTFPredict(normalized)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	writeOpenAPIData(c, status, body)
+}
+
+func (h *OpenAPIHandler) MTFJobV2(c *gin.Context) {
+	status, body, err := h.watchlist.GetMTFJobStatus(c.Param("jobID"))
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	writeOpenAPIData(c, status, body)
+}
+
 func optionalOpenAPIPredictDate(c *gin.Context) (*string, bool) {
 	raw := strings.TrimSpace(c.Query("predict_date"))
 	if raw == "" {

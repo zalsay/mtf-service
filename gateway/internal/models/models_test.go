@@ -46,6 +46,34 @@ func TestRequestKeyIncludesPredictionTypeAndCovariateSignature(t *testing.T) {
 	}
 }
 
+func TestRequestKeyIncludesPredictDate(t *testing.T) {
+	first := InferenceRequest{
+		StockCode:           "510050",
+		StockType:           2,
+		HorizonLen:          8,
+		ContextLen:          2048,
+		PredictionTypeValue: "mtf-pro",
+		PredictDate:         "20260724",
+	}
+	second := first
+	second.PredictDate = "20260725"
+
+	firstKey, err := first.RequestKey()
+	if err != nil {
+		t.Fatalf("first RequestKey() error: %v", err)
+	}
+	secondKey, err := second.RequestKey()
+	if err != nil {
+		t.Fatalf("second RequestKey() error: %v", err)
+	}
+	if firstKey == secondKey {
+		t.Fatalf("expected different request keys for different predict dates, got %q", firstKey)
+	}
+	if want := `"predict_date":"20260724"`; !strings.Contains(firstKey, want) {
+		t.Fatalf("expected request key to include %s, got %s", want, firstKey)
+	}
+}
+
 func TestRequestKeyUsesExplicitMTFProPredictionTypeWithPreset(t *testing.T) {
 	request := InferenceRequest{
 		StockCode:           "300442",
