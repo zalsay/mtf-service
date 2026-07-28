@@ -210,6 +210,16 @@ func TestFinanceNewsServiceListsHotETFDetails(t *testing.T) {
 	}
 }
 
+func TestFinanceNewsServiceSupportsCurrentHotETFTableID(t *testing.T) {
+	items, err := parseHotETFHTML(hotETFTestHTMLWithID("华夏中证机器人ETF", "562500", "radar"))
+	if err != nil {
+		t.Fatalf("parseHotETFHTML error = %v", err)
+	}
+	if len(items) != 1 || items[0].Code != "562500" {
+		t.Fatalf("unexpected hot ETF items: %#v", items)
+	}
+}
+
 func TestFinanceNewsServiceUsesLocalHotETFHTMLBeforeCacheExpires(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,8 +374,12 @@ func TestFinanceNewsServiceWritesHotETFHTMLCacheAfterRemoteFetch(t *testing.T) {
 }
 
 func hotETFTestHTML(name string, code string) string {
+	return hotETFTestHTMLWithID(name, code, "radarTable")
+}
+
+func hotETFTestHTMLWithID(name string, code string, tableID string) string {
 	return `
-		<table id="radarTable">
+		<table id="` + tableID + `">
 			<tbody>
 				<tr>
 					<td><span>` + name + `</span><span>` + code + ` · 风险RPS 83</span><span>雷达优先级 77.7 · A</span></td>

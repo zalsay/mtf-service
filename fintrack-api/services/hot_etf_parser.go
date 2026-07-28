@@ -23,6 +23,9 @@ func parseHotETFHTML(body string) ([]HotETFItem, error) {
 	}
 	table := findElementByID(doc, "radarTable")
 	if table == nil {
+		table = findElementByID(doc, "radar")
+	}
+	if table == nil {
 		return nil, fmt.Errorf("provider_error: hot ETF table not found")
 	}
 	rows := collectTableRows(table)
