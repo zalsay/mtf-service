@@ -1620,9 +1620,14 @@ func (h *DatabaseHandler) saveMTFDirectHandler(c *gin.Context) {
 	            $15::jsonb, $16::jsonb, $17, $18::date, $19::jsonb,
 	            $20::jsonb, $21, $22::jsonb, $23, $24
 	        )
-        ON CONFLICT (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature) DO UPDATE SET
-            unique_key = EXCLUDED.unique_key,
+        ON CONFLICT (unique_key) DO UPDATE SET
+            symbol = EXCLUDED.symbol,
+            stock_type = EXCLUDED.stock_type,
             mtf_version = EXCLUDED.mtf_version,
+            context_len = EXCLUDED.context_len,
+            horizon_len = EXCLUDED.horizon_len,
+            future_dates_key = EXCLUDED.future_dates_key,
+            future_dates = EXCLUDED.future_dates,
             request_end_date = EXCLUDED.request_end_date,
             latest_data_date = EXCLUDED.latest_data_date,
             latest_close = EXCLUDED.latest_close,

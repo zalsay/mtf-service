@@ -496,8 +496,7 @@ func (h *DatabaseHandler) initializeDatabase() error {
         short_name TEXT,
         user_id INTEGER,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT uq_mtf_direct_prediction_key UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_symbol ON mtf_direct_predictions(symbol);
     CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_lookup ON mtf_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature);
@@ -515,17 +514,40 @@ func (h *DatabaseHandler) initializeDatabase() error {
 	_ = h.db.Exec(`UPDATE mtf_direct_predictions SET covariate_signature = '' WHERE covariate_signature IS NULL`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET DEFAULT ''`).Error
 	_ = h.db.Exec(`ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET NOT NULL`).Error
-	_ = h.db.Exec(`DO $$ BEGIN
-        IF EXISTS (
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'uq_mtf_direct_prediction_key'
+	if err := h.db.Exec(`DO $$
+DECLARE
+    constraint_name TEXT;
+BEGIN
+    FOR constraint_name IN
+        SELECT c.conname
+        FROM pg_constraint c
+        WHERE c.conrelid = 'mtf_direct_predictions'::regclass
+          AND c.contype = 'u'
+          AND pg_get_constraintdef(c.oid) LIKE
+              'UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)%'
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE mtf_direct_predictions DROP CONSTRAINT %I',
+            constraint_name
+        );
+    END LOOP;
+END $$;`).Error; err != nil {
+		return fmt.Errorf("failed to remove legacy mtf_direct_predictions composite constraints: %v", err)
+	}
+	if err := h.db.Exec(`DO $$ BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = 'mtf_direct_predictions'::regclass
+              AND contype = 'u'
+              AND pg_get_constraintdef(oid) LIKE 'UNIQUE (unique_key)%'
         ) THEN
-            ALTER TABLE mtf_direct_predictions DROP CONSTRAINT uq_mtf_direct_prediction_key;
+            ALTER TABLE mtf_direct_predictions
+            ADD CONSTRAINT uq_mtf_direct_predictions_unique_key UNIQUE (unique_key);
         END IF;
-        ALTER TABLE mtf_direct_predictions
-        ADD CONSTRAINT uq_mtf_direct_prediction_key
-        UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature);
-    END $$;`).Error
+    END $$;`).Error; err != nil {
+		return fmt.Errorf("failed to ensure mtf_direct_predictions unique_key constraint: %v", err)
+	}
 	_ = h.db.Exec(`CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_lookup_cov ON mtf_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)`).Error
 	if err := h.db.AutoMigrate(&EtfDailyData{}, &IndexInfo{}, &IndexDailyData{}, &StockCommentDaily{}, &MTFForecast{}); err != nil {
 		log.Printf("AutoMigrate warning: %v", err)

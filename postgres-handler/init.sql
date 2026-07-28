@@ -91,6 +91,8 @@ BEGIN
 END $$;
 
 DO $$
+DECLARE
+    constraint_name TEXT;
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'mtf_best_predictions') THEN
         EXECUTE 'ALTER TABLE mtf_best_predictions ADD COLUMN IF NOT EXISTS prediction_type TEXT NOT NULL DEFAULT ''mtf-lite''';
@@ -124,15 +126,29 @@ BEGIN
         EXECUTE 'UPDATE mtf_direct_predictions SET covariate_signature = '''' WHERE covariate_signature IS NULL';
         EXECUTE 'ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET DEFAULT ''''';
         EXECUTE 'ALTER TABLE mtf_direct_predictions ALTER COLUMN covariate_signature SET NOT NULL';
-        IF EXISTS (
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'uq_mtf_direct_prediction_key'
+        FOR constraint_name IN
+            SELECT c.conname
+            FROM pg_constraint c
+            WHERE c.conrelid = 'mtf_direct_predictions'::regclass
+              AND c.contype = 'u'
+              AND pg_get_constraintdef(c.oid) LIKE
+                  'UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)%'
+        LOOP
+            EXECUTE format(
+                'ALTER TABLE mtf_direct_predictions DROP CONSTRAINT %I',
+                constraint_name
+            );
+        END LOOP;
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conrelid = 'mtf_direct_predictions'::regclass
+              AND contype = 'u'
+              AND pg_get_constraintdef(oid) LIKE 'UNIQUE (unique_key)%'
         ) THEN
-            EXECUTE 'ALTER TABLE mtf_direct_predictions DROP CONSTRAINT uq_mtf_direct_prediction_key';
+            EXECUTE 'ALTER TABLE mtf_direct_predictions
+                     ADD CONSTRAINT uq_mtf_direct_predictions_unique_key UNIQUE (unique_key)';
         END IF;
-        EXECUTE 'ALTER TABLE mtf_direct_predictions
-                 ADD CONSTRAINT uq_mtf_direct_prediction_key
-                 UNIQUE (symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)';
         EXECUTE 'CREATE INDEX IF NOT EXISTS idx_mtf_direct_predictions_lookup_cov
                  ON mtf_direct_predictions(symbol, stock_type, horizon_len, context_len, future_dates_key, covariate_signature)';
     END IF;
