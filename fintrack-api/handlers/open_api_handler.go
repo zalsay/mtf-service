@@ -318,7 +318,7 @@ func (h *OpenAPIHandler) MTFBestByConfigV2(c *gin.Context) {
 		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "symbol is required", false)
 		return
 	}
-	horizonLen, contextLen, ok := optionalHorizonContext(c)
+	horizonLen, contextLen, ok := optionalV2HorizonContext(c)
 	if !ok {
 		return
 	}
@@ -899,6 +899,35 @@ func optionalHorizonContext(c *gin.Context) (*int, *int, bool) {
 		contextLen = &value
 	}
 	return horizonLen, contextLen, true
+}
+
+func optionalV2HorizonContext(c *gin.Context) (*int, *int, bool) {
+	horizonRaw := strings.TrimSpace(c.Query("horizon_len"))
+	horizonLen := services.MTFV2HorizonLen
+	if horizonRaw != "" {
+		value, err := strconv.Atoi(horizonRaw)
+		if err != nil || value <= 0 {
+			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid horizon_len is required", false)
+			return nil, nil, false
+		}
+		if value != services.MTFV2HorizonLen {
+			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "v2 only supports horizon_len="+strconv.Itoa(services.MTFV2HorizonLen), false)
+			return nil, nil, false
+		}
+		horizonLen = value
+	}
+
+	contextRaw := strings.TrimSpace(c.Query("context_len"))
+	var contextLen *int
+	if contextRaw != "" {
+		value, err := strconv.Atoi(contextRaw)
+		if err != nil || value <= 0 {
+			writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "valid context_len is required", false)
+			return nil, nil, false
+		}
+		contextLen = &value
+	}
+	return &horizonLen, contextLen, true
 }
 
 func optionalPositiveIntQuery(c *gin.Context, name string) (int, bool) {

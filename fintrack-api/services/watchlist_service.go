@@ -1213,6 +1213,8 @@ type mtfMembershipTrainPolicy struct {
 	AllowedHorizonLens     map[int]struct{}
 }
 
+const MTFV2HorizonLen = 8
+
 func newIntSet(values ...int) map[int]struct{} {
 	out := make(map[int]struct{}, len(values))
 	for _, value := range values {
@@ -1358,11 +1360,11 @@ func NormalizeMTFPredictOnceRequestV2(req *models.MTFPredictRequest) (*models.MT
 	normalized.ForceEnqueue = nil
 	normalized.ForceRequeue = nil
 	if normalized.HorizonLen == nil {
-		value := 7
+		value := MTFV2HorizonLen
 		normalized.HorizonLen = &value
 	}
-	if _, ok := newIntSet(7, 14, 28)[*normalized.HorizonLen]; !ok {
-		return nil, fmt.Errorf("v2 does not support horizon_len=%d", *normalized.HorizonLen)
+	if *normalized.HorizonLen != MTFV2HorizonLen {
+		return nil, fmt.Errorf("v2 only supports horizon_len=%d", MTFV2HorizonLen)
 	}
 	if normalized.ContextLen == nil {
 		value := 512

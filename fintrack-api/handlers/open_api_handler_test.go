@@ -897,6 +897,34 @@ func TestOpenAPIMTFFutureCacheMissDoesNotTriggerPrediction(t *testing.T) {
 	}
 }
 
+func TestOptionalV2HorizonContextDefaultsToEight(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/open/v2/mtf/best/by-config?context_len=2048", nil)
+
+	horizonLen, contextLen, ok := optionalV2HorizonContext(c)
+	if !ok || horizonLen == nil || contextLen == nil {
+		t.Fatalf("result = %#v/%#v/%v, want default horizon and context", horizonLen, contextLen, ok)
+	}
+	if *horizonLen != services.MTFV2HorizonLen || *contextLen != 2048 {
+		t.Fatalf("horizon/context = %d/%d, want %d/2048", *horizonLen, *contextLen, services.MTFV2HorizonLen)
+	}
+}
+
+func TestOptionalV2HorizonContextRejectsNonEight(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/open/v2/mtf/best/by-config?horizon_len=7", nil)
+
+	_, _, ok := optionalV2HorizonContext(c)
+	if ok {
+		t.Fatal("expected horizon_len=7 to be rejected for v2")
+	}
+	assertOpenAPIErrorCode(t, rec, http.StatusBadRequest, "validation_error")
+}
+
 func expectOpenAPIAuth(mock sqlmock.Sqlmock, apiKey string, scopes string, userID int, keyID int, now time.Time) {
 	mock.ExpectQuery("SELECT k.id, k.owner_user_id, k.scopes, k.status, k.expires_at").
 		WithArgs(services.HashOpenAPIKey(apiKey)).

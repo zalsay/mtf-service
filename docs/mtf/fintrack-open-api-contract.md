@@ -337,6 +337,36 @@ Scope: `mtf:read`
 
 语义：查询 MTF 推理 job 状态。
 
+### v2 MTF Open API
+
+v2 使用不依赖本地用户表的短 API key。v2 MTF 接口只支持 `mtf-pro`，`context_len` 可选 `512/1024/2048`，`horizon_len` 固定为 `8`；未传 `horizon_len` 时服务端按 `8` 处理，显式传入其他值返回 `400 validation_error`。
+
+#### GET `/api/open/v2/mtf/best/by-config`
+
+Query：`symbol` 必填；`stock_type` 可选；`context_len` 可选。返回固定 `horizon_len=8` 下的配置聚合或指定 context 配置，调用方只应使用 `mtf_pro_unique_key`。
+
+#### GET `/api/open/v2/mtf/future?unique_key=...&predict_date=...`
+
+只查询指定日期已有的 future 缓存；缓存缺失返回 `404 prediction_cache_not_found`，不会由 cached 接口直接触发推理。
+
+#### POST `/api/open/v2/mtf/predict-once`
+
+请求示例：
+
+```json
+{
+  "stock_code": "510300",
+  "stock_type": 2,
+  "prediction_type": "mtf-pro",
+  "horizon_len": 8,
+  "context_len": 2048,
+  "predict_date": "2026-07-28",
+  "prefer_cache": true
+}
+```
+
+`prefer_cache=true` 时先查询缓存，缓存缺失后才触发单次预测；`predict_date` 用于指定目标 future chunk 日期。
+
 ## 8. Strategy Open API
 
 ### GET `/api/open/v1/strategy/list`

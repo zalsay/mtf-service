@@ -805,6 +805,41 @@ func TestNormalizeMTFPredictOnceRequestTemporarilyAllowsAnyHorizon(t *testing.T)
 	}
 }
 
+func TestNormalizeMTFPredictOnceRequestV2DefaultsToFixedHorizon(t *testing.T) {
+	req := &models.MTFPredictRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-pro",
+	}
+
+	normalized, err := NormalizeMTFPredictOnceRequestV2(req)
+	if err != nil {
+		t.Fatalf("expected v2 request to pass, got error: %v", err)
+	}
+	if normalized.HorizonLen == nil || *normalized.HorizonLen != MTFV2HorizonLen {
+		t.Fatalf("horizon_len = %#v, want %d", normalized.HorizonLen, MTFV2HorizonLen)
+	}
+	if normalized.ContextLen == nil || *normalized.ContextLen != 512 {
+		t.Fatalf("context_len = %#v, want default 512", normalized.ContextLen)
+	}
+}
+
+func TestNormalizeMTFPredictOnceRequestV2RejectsNonEightHorizon(t *testing.T) {
+	horizonLen := 7
+	req := &models.MTFPredictRequest{
+		StockCode:      "510300",
+		StockType:      2,
+		PredictionType: "mtf-pro",
+		HorizonLen:     &horizonLen,
+	}
+
+	if _, err := NormalizeMTFPredictOnceRequestV2(req); err == nil {
+		t.Fatal("expected v2 horizon_len=7 to be rejected")
+	} else if err.Error() != "v2 only supports horizon_len=8" {
+		t.Fatalf("error = %q, want fixed horizon validation", err.Error())
+	}
+}
+
 func TestTriggerMTFPredictOnceSendsForceRequeueAlias(t *testing.T) {
 	original := chinaNowFunc
 	chinaNowFunc = func() time.Time {
