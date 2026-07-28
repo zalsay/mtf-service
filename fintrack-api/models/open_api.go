@@ -43,6 +43,33 @@ type OpenAPIKeyRecord struct {
 	ExpiresAt *time.Time
 }
 
+type OpenAPIV2KeyCreateRequest struct {
+	EncryptedPayload string `json:"encrypted_payload" binding:"required"`
+}
+
+type OpenAPIV2KeyCreateResponse struct {
+	APIKey         string `json:"api_key"`
+	ServerName     string `json:"server_name"`
+	ExternalUserID string `json:"user_id"`
+	Timestamp      int64  `json:"timestamp"`
+}
+
+type OpenAPIV2PublicKeyResponse struct {
+	Algorithm       string `json:"algorithm"`
+	PublicKey       string `json:"public_key"`
+	CiphertextBytes int    `json:"ciphertext_bytes"`
+	APIKeyLength    int    `json:"api_key_length"`
+}
+
+type OpenAPIV2KeyRecord struct {
+	ID             int
+	ServerName     string
+	ExternalUserID string
+	Scopes         []string
+	Status         string
+	ExpiresAt      *time.Time
+}
+
 type OpenAPIMTFPredictOnceRequest struct {
 	MTFPredictRequest
 	PreferCache bool `json:"prefer_cache,omitempty"`

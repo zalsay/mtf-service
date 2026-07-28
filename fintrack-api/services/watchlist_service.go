@@ -376,7 +376,7 @@ func (s *WatchlistService) GetMTFBestPredictOnceRequestByUniqueKey(uniqueKey str
 	if err != nil {
 		return nil, fmt.Errorf("failed to get mtf best predict once request: %v", err)
 	}
-	if stockType != 1 && stockType != 2 {
+	if stockType <= 0 {
 		stockType = inferLookupStockTypes(symbol)[0]
 	}
 	years := 15
@@ -1318,6 +1318,48 @@ func NormalizeMTFPredictOnceRequest(req *models.MTFPredictRequest, membershipLev
 		normalized.ForceRequeue = &force
 	}
 
+	return &normalized, nil
+}
+
+func NormalizeMTFPredictOnceRequestV2(req *models.MTFPredictRequest) (*models.MTFPredictRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("request is required")
+	}
+	predictionType := normalizeTrainPredictionType(req.PredictionType)
+	if predictionType != "mtf-pro" {
+		return nil, fmt.Errorf("v2 only supports prediction_type=mtf-pro")
+	}
+	normalized := *req
+	normalized.PredictionType = "mtf-pro"
+	normalized.UserID = nil
+	normalized.ForceEnqueue = nil
+	normalized.ForceRequeue = nil
+	if normalized.HorizonLen == nil {
+		value := 7
+		normalized.HorizonLen = &value
+	}
+	if _, ok := newIntSet(7, 14, 28)[*normalized.HorizonLen]; !ok {
+		return nil, fmt.Errorf("v2 does not support horizon_len=%d", *normalized.HorizonLen)
+	}
+	if normalized.ContextLen == nil {
+		value := 512
+		normalized.ContextLen = &value
+	}
+	if _, ok := newIntSet(512, 1024, 2048)[*normalized.ContextLen]; !ok {
+		return nil, fmt.Errorf("v2 does not support context_len=%d", *normalized.ContextLen)
+	}
+	if normalized.StockType == nil {
+		normalized.StockType = 2
+	}
+	if normalized.EndDate == nil || strings.TrimSpace(*normalized.EndDate) == "" {
+		endDate := defaultMarketEndDate()
+		normalized.EndDate = &endDate
+	}
+	if predictionTypeUsesCovariates(normalized.PredictionType) && normalized.CovariateConfig == nil {
+		preset := "market_cov_v1"
+		normalized.CovariatePreset = &preset
+		normalized.CovariateConfig = buildMarketCovariateConfig()
+	}
 	return &normalized, nil
 }
 

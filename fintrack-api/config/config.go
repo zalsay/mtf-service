@@ -23,6 +23,7 @@ type Config struct {
 	DSABridge        DSABridgeConfig
 	MTFAgent         MTFAgentConfig
 	AlipayService    AlipayServiceConfig
+	OpenAPIV2        OpenAPIV2Config
 }
 
 type DatabaseConfig struct {
@@ -133,6 +134,12 @@ type AlipayServiceConfig struct {
 	Timeout      int
 }
 
+type OpenAPIV2Config struct {
+	PrivateKey     string
+	PrivateKeyFile string
+	TimestampSkew  int // seconds
+}
+
 func LoadConfig() (*Config, error) {
 	// 尝试加载.env文件
 	godotenv.Load()
@@ -231,6 +238,11 @@ func LoadConfig() (*Config, error) {
 			MerchantID:   getEnv("ALIPAY_MERCHANT_ID", "dev-merchant"),
 			MerchantName: getEnv("ALIPAY_MERCHANT_NAME", "FinTrack"),
 			Timeout:      getEnvAsInt("ALIPAY_SERVICE_TIMEOUT", 10),
+		},
+		OpenAPIV2: OpenAPIV2Config{
+			PrivateKey:     getEnv("MTF_V2_API_PRIVATE_KEY", ""),
+			PrivateKeyFile: getEnv("MTF_V2_API_PRIVATE_KEY_FILE", ""),
+			TimestampSkew:  getEnvAsInt("MTF_V2_API_TIMESTAMP_SKEW_SECONDS", 300),
 		},
 	}
 

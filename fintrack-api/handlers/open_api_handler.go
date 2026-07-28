@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -48,6 +49,40 @@ func (h *OpenAPIHandler) CreateAPIKey(c *gin.Context) {
 			return
 		}
 		writeOpenAPIError(c, http.StatusInternalServerError, "create_api_key_failed", err.Error(), false)
+		return
+	}
+	writeOpenAPIData(c, http.StatusOK, response)
+}
+
+func (h *OpenAPIHandler) PublicAPIKeyV2(c *gin.Context) {
+	response, err := h.openAPIService.PublicV2Key()
+	if err != nil {
+		if errors.Is(err, services.ErrOpenAPIV2PrivateKeyUnavailable) {
+			writeOpenAPIError(c, http.StatusServiceUnavailable, "v2_public_key_unavailable", "v2 API private key is not configured", true)
+			return
+		}
+		writeOpenAPIError(c, http.StatusInternalServerError, "v2_public_key_failed", err.Error(), false)
+		return
+	}
+	writeOpenAPIData(c, http.StatusOK, response)
+}
+
+func (h *OpenAPIHandler) CreateAPIKeyV2(c *gin.Context) {
+	var req models.OpenAPIV2KeyCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
+	}
+	response, err := h.openAPIService.CreateV2Key(c.Request.Context(), req.EncryptedPayload)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrOpenAPIV2PrivateKeyUnavailable):
+			writeOpenAPIError(c, http.StatusServiceUnavailable, "v2_key_unavailable", "v2 API private key is not configured", true)
+		case errors.Is(err, services.ErrOpenAPIV2InvalidPayload), errors.Is(err, services.ErrOpenAPIV2TimestampExpired):
+			writeOpenAPIError(c, http.StatusBadRequest, "invalid_encrypted_payload", "encrypted payload is invalid or expired", false)
+		default:
+			writeOpenAPIError(c, http.StatusInternalServerError, "create_v2_api_key_failed", err.Error(), false)
+		}
 		return
 	}
 	writeOpenAPIData(c, http.StatusOK, response)
@@ -132,6 +167,30 @@ func (h *OpenAPIHandler) AuthMiddleware(requiredScopes ...string) gin.HandlerFun
 		c.Set("is_admin", false)
 		c.Set("user", user)
 		c.Set("open_api_key_id", record.ID)
+		c.Next()
+	}
+}
+
+func (h *OpenAPIHandler) AuthMiddlewareV2(requiredScopes ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := openAPIBearerToken(c.GetHeader("Authorization"))
+		record, err := h.openAPIService.ValidateV2Key(c.Request.Context(), token)
+		if err != nil {
+			status, code := openAPIAuthError(err)
+			writeOpenAPIError(c, status, code, err.Error(), false)
+			c.Abort()
+			return
+		}
+		for _, scope := range requiredScopes {
+			if !services.HasOpenAPIScope(record.Scopes, scope) {
+				writeOpenAPIError(c, http.StatusForbidden, "scope_denied", "scope "+scope+" is required", false)
+				c.Abort()
+				return
+			}
+		}
+		c.Set("v2_server_name", record.ServerName)
+		c.Set("v2_external_user_id", record.ExternalUserID)
+		c.Set("open_api_v2_key_id", record.ID)
 		c.Next()
 	}
 }
@@ -254,6 +313,36 @@ func (h *OpenAPIHandler) MTFBestByConfig(c *gin.Context) {
 	writeOpenAPIData(c, http.StatusOK, item)
 }
 
+func (h *OpenAPIHandler) MTFBestByConfigV2(c *gin.Context) {
+	if strings.TrimSpace(c.Query("symbol")) == "" {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "symbol is required", false)
+		return
+	}
+	horizonLen, contextLen, ok := optionalHorizonContext(c)
+	if !ok {
+		return
+	}
+	if horizonLen == nil || contextLen == nil {
+		stockType, ok := optionalPositiveIntQuery(c, "stock_type")
+		if !ok {
+			return
+		}
+		result, err := h.watchlist.ListMTFBestUniqueKeysBySymbolConfig(c.Query("symbol"), stockType, horizonLen, contextLen, "")
+		if err != nil {
+			writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
+			return
+		}
+		writeOpenAPIData(c, http.StatusOK, result)
+		return
+	}
+	item, err := h.watchlist.GetMTFBestUniqueKeysByConfig(c.Query("symbol"), *horizonLen, *contextLen, "")
+	if err != nil {
+		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
+		return
+	}
+	writeOpenAPIData(c, http.StatusOK, item)
+}
+
 func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 	user, ok := openAPIUser(c)
 	if !ok {
@@ -290,6 +379,50 @@ func (h *OpenAPIHandler) MTFFuture(c *gin.Context) {
 	normalized, err := services.NormalizeMTFPredictOnceRequest(predictReq, user.MembershipLevel, userID, false)
 	if err != nil {
 		writeOpenAPIError(c, http.StatusForbidden, "validation_error", err.Error(), false)
+		return
+	}
+	status, body, err := h.watchlist.GetMTFPredictOnceCached(normalized)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	if status != http.StatusNotFound {
+		writeOpenAPIData(c, status, buildOpenAPIFutureFromPredictOnce(uniqueKey, body))
+		return
+	}
+	message := "未找到指定日期的单次预测缓存"
+	if rawMessage, exists := body["message"]; exists && rawMessage != nil {
+		if value, ok := rawMessage.(string); ok {
+			if value = strings.TrimSpace(value); value != "" {
+				message = value
+			}
+		}
+	}
+	writeOpenAPIError(c, http.StatusNotFound, "prediction_cache_not_found", message, false)
+}
+
+func (h *OpenAPIHandler) MTFFutureV2(c *gin.Context) {
+	uniqueKey := strings.TrimSpace(c.Query("unique_key"))
+	if uniqueKey == "" {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "unique_key is required", false)
+		return
+	}
+	predictDate, ok := optionalOpenAPIPredictDate(c)
+	if !ok {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", "predict_date must be a valid date", false)
+		return
+	}
+	predictReq, err := h.watchlist.GetMTFBestPredictOnceRequestByUniqueKey(uniqueKey)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusNotFound, "not_found", err.Error(), false)
+		return
+	}
+	if predictDate != nil {
+		predictReq.PredictDate = predictDate
+	}
+	normalized, err := services.NormalizeMTFPredictOnceRequestV2(predictReq)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
 		return
 	}
 	status, body, err := h.watchlist.GetMTFPredictOnceCached(normalized)
@@ -369,6 +502,36 @@ func (h *OpenAPIHandler) MTFPredictOnce(c *gin.Context) {
 	}
 	if normalized.StockType == nil {
 		normalized.StockType = 2
+	}
+	if req.PreferCache {
+		status, body, err := h.watchlist.GetMTFPredictOnceCached(normalized)
+		if err != nil {
+			writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+			return
+		}
+		if status != http.StatusNotFound {
+			writeOpenAPIData(c, status, body)
+			return
+		}
+	}
+	status, body, err := h.watchlist.TriggerMTFPredictOnce(normalized)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadGateway, "upstream_unavailable", err.Error(), true)
+		return
+	}
+	writeOpenAPIData(c, status, body)
+}
+
+func (h *OpenAPIHandler) MTFPredictOnceV2(c *gin.Context) {
+	var req models.OpenAPIMTFPredictOnceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
+	}
+	normalized, err := services.NormalizeMTFPredictOnceRequestV2(&req.MTFPredictRequest)
+	if err != nil {
+		writeOpenAPIError(c, http.StatusBadRequest, "validation_error", err.Error(), false)
+		return
 	}
 	if req.PreferCache {
 		status, body, err := h.watchlist.GetMTFPredictOnceCached(normalized)

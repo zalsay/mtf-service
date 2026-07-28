@@ -64,7 +64,12 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 	adminService := services.NewAdminService(db, cfg)
 	mtfAgentService := services.NewMTFAgentService(db, cfg)
 	financeNewsService := services.NewFinanceNewsService(nil)
-	openAPIService := services.NewOpenAPIService(db)
+	openAPIService := services.NewOpenAPIServiceWithV2PrivateKey(
+		db,
+		cfg.OpenAPIV2.PrivateKey,
+		cfg.OpenAPIV2.PrivateKeyFile,
+		cfg.OpenAPIV2.TimestampSkew,
+	)
 	apiKeyTempTokenStore := services.NewAPIKeyTempTokenStore(cfg.Redis)
 
 	// 初始化处理器
@@ -281,6 +286,19 @@ func SetupRouter(cfg *config.Config, db *database.DB) *gin.Engine {
 			openWatchlist.POST("/bind-strategy", openAPIHandler.AuthMiddleware("watchlist:write", "strategy:read"), openAPIHandler.BindWatchlistStrategy)
 		}
 
+	}
+
+	openV2 := router.Group("/api/open/v2")
+	{
+		openV2.GET("/auth/public-key", openAPIHandler.PublicAPIKeyV2)
+		openV2.POST("/auth/api-key", openAPIHandler.CreateAPIKeyV2)
+
+		mtfV2 := openV2.Group("/mtf")
+		{
+			mtfV2.GET("/best/by-config", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFBestByConfigV2)
+			mtfV2.GET("/future", openAPIHandler.AuthMiddlewareV2("mtf:read"), openAPIHandler.MTFFutureV2)
+			mtfV2.POST("/predict-once", openAPIHandler.AuthMiddlewareV2("mtf:predict"), openAPIHandler.MTFPredictOnceV2)
+		}
 	}
 
 	return router
